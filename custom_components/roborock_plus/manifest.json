@@ -5,6 +5,10 @@
     "@kaattz"
   ],
   "config_flow": true,
+  "dependencies": [
+    "frontend",
+    "panel_custom"
+  ],
   "dhcp": [
     {
       "macaddress": "249E7D*"

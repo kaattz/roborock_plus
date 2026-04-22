@@ -24,6 +24,7 @@ from homeassistant.exceptions import (
     ServiceNotSupported,
     ServiceValidationError,
 )
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import DOMAIN
@@ -39,6 +40,8 @@ from .entity import (
     RoborockCoordinatedEntityV1,
 )
 from .resume_logic import select_resume_command, select_start_or_resume_command
+from .safe_zone import DEFAULT_DOCK_X, DEFAULT_DOCK_Y, SafeZone, suggest_safe_zone
+from .safe_zone_store import get_safe_zone_store
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -353,6 +356,103 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
             "y": robot_position.y,
         }
 
+    async def get_dock_position(self) -> ServiceResponse:
+        """Get the fixed dock reference position."""
+        return {"x": DEFAULT_DOCK_X, "y": DEFAULT_DOCK_Y}
+
+    async def get_safe_zone(self) -> ServiceResponse:
+        """Get the currently configured safe zone."""
+        if stored := await get_safe_zone_store(self.hass).async_get(self.coordinator.duid):
+            return {"configured": True, **stored.zone.as_dict()}
+        return {"configured": False}
+
+    async def get_safe_zone_suggestion(
+        self,
+        cabinet_direction: str,
+        safe_distance_front: int,
+        safe_half_width: int,
+        close_margin: int,
+    ) -> ServiceResponse:
+        """Get a suggested safe zone from dock-relative geometry."""
+        zone = suggest_safe_zone(
+            dock_x=DEFAULT_DOCK_X,
+            dock_y=DEFAULT_DOCK_Y,
+            cabinet_direction=cabinet_direction,
+            safe_distance_front=safe_distance_front,
+            safe_half_width=safe_half_width,
+            close_margin=close_margin,
+        )
+        return {"dock_x": DEFAULT_DOCK_X, "dock_y": DEFAULT_DOCK_Y, **zone.as_dict()}
+
+    async def get_safe_zone_editor_context(self) -> ServiceResponse:
+        """Get all frontend editor context in one response."""
+        map_content_trait = self.coordinator.properties_api.map_content
+        try:
+            await map_content_trait.refresh()
+        except RoborockException as err:
+            _LOGGER.debug("Failed to refresh map content: %s", err)
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="map_failure",
+            ) from err
+
+        current_map = self._home_trait.current_map_data
+        if current_map is None:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="map_failure",
+            )
+
+        entity_registry = er.async_get(self.hass)
+        image_entity_id = entity_registry.async_get_entity_id(
+            "image",
+            DOMAIN,
+            f"{self.coordinator.duid_slug}_map_{current_map.name or f'Map {current_map.map_flag}'}",
+        )
+
+        current_position = None
+        calibration = None
+        image_meta = None
+        if map_content_trait.map_data is not None:
+            if map_content_trait.map_data.vacuum_position is not None:
+                current_position = {
+                    "x": map_content_trait.map_data.vacuum_position.x,
+                    "y": map_content_trait.map_data.vacuum_position.y,
+                }
+            calibration = map_content_trait.map_data.calibration()
+            if map_content_trait.map_data.image is not None:
+                image_meta = map_content_trait.map_data.image.as_dict()
+
+        stored_zone = await get_safe_zone_store(self.hass).async_get(self.coordinator.duid)
+        return {
+            "vacuum_entity_id": self.entity_id,
+            "image_entity_id": image_entity_id,
+            "dock_position": {"x": DEFAULT_DOCK_X, "y": DEFAULT_DOCK_Y},
+            "current_position": current_position,
+            "safe_zone": None if stored_zone is None else stored_zone.zone.as_dict(),
+            "current_map": {
+                "flag": current_map.map_flag,
+                "name": current_map.name or f"Map {current_map.map_flag}",
+            },
+            "image_meta": image_meta,
+            "calibration": calibration,
+        }
+
+    async def async_set_safe_zone(
+        self,
+        min_x: int,
+        max_x: int,
+        min_y: int,
+        max_y: int,
+    ) -> None:
+        """Save a manual safe zone."""
+        zone = SafeZone(min_x=min_x, max_x=max_x, min_y=min_y, max_y=max_y)
+        await get_safe_zone_store(self.hass).async_set(self.coordinator.duid, zone)
+
+    async def async_clear_safe_zone(self) -> None:
+        """Clear the saved safe zone."""
+        await get_safe_zone_store(self.hass).async_clear(self.coordinator.duid)
+
 
 class RoborockQ7Vacuum(RoborockCoordinatedEntityB01Q7, StateVacuumEntity):
     """General Representation of a Roborock vacuum."""
@@ -513,6 +613,42 @@ class RoborockQ7Vacuum(RoborockCoordinatedEntityB01Q7, StateVacuumEntity):
     async def get_vacuum_current_position(self) -> ServiceResponse:
         """Get the current position of the vacuum from the map."""
         raise ServiceNotSupported(DOMAIN, "get_vacuum_current_position", self.entity_id)
+
+    async def get_dock_position(self) -> ServiceResponse:
+        """Get the dock position."""
+        raise ServiceNotSupported(DOMAIN, "get_dock_position", self.entity_id)
+
+    async def get_safe_zone(self) -> ServiceResponse:
+        """Get the safe zone."""
+        raise ServiceNotSupported(DOMAIN, "get_safe_zone", self.entity_id)
+
+    async def get_safe_zone_suggestion(
+        self,
+        cabinet_direction: str,
+        safe_distance_front: int,
+        safe_half_width: int,
+        close_margin: int,
+    ) -> ServiceResponse:
+        """Get a safe-zone suggestion."""
+        raise ServiceNotSupported(DOMAIN, "get_safe_zone_suggestion", self.entity_id)
+
+    async def get_safe_zone_editor_context(self) -> ServiceResponse:
+        """Get the safe-zone editor context."""
+        raise ServiceNotSupported(DOMAIN, "get_safe_zone_editor_context", self.entity_id)
+
+    async def async_set_safe_zone(
+        self,
+        min_x: int,
+        max_x: int,
+        min_y: int,
+        max_y: int,
+    ) -> None:
+        """Set the safe zone."""
+        raise ServiceNotSupported(DOMAIN, "set_safe_zone", self.entity_id)
+
+    async def async_clear_safe_zone(self) -> None:
+        """Clear the safe zone."""
+        raise ServiceNotSupported(DOMAIN, "clear_safe_zone", self.entity_id)
 
     async def async_set_vacuum_goto_position(self, x: int, y: int) -> None:
         """Set the vacuum to go to a specific position."""
@@ -696,6 +832,42 @@ class RoborockQ10Vacuum(RoborockCoordinatedEntityB01Q10, StateVacuumEntity):
     async def get_vacuum_current_position(self) -> ServiceResponse:
         """Get the current position of the vacuum from the map."""
         raise ServiceNotSupported(DOMAIN, "get_vacuum_current_position", self.entity_id)
+
+    async def get_dock_position(self) -> ServiceResponse:
+        """Get the dock position."""
+        raise ServiceNotSupported(DOMAIN, "get_dock_position", self.entity_id)
+
+    async def get_safe_zone(self) -> ServiceResponse:
+        """Get the safe zone."""
+        raise ServiceNotSupported(DOMAIN, "get_safe_zone", self.entity_id)
+
+    async def get_safe_zone_suggestion(
+        self,
+        cabinet_direction: str,
+        safe_distance_front: int,
+        safe_half_width: int,
+        close_margin: int,
+    ) -> ServiceResponse:
+        """Get a safe-zone suggestion."""
+        raise ServiceNotSupported(DOMAIN, "get_safe_zone_suggestion", self.entity_id)
+
+    async def get_safe_zone_editor_context(self) -> ServiceResponse:
+        """Get the safe-zone editor context."""
+        raise ServiceNotSupported(DOMAIN, "get_safe_zone_editor_context", self.entity_id)
+
+    async def async_set_safe_zone(
+        self,
+        min_x: int,
+        max_x: int,
+        min_y: int,
+        max_y: int,
+    ) -> None:
+        """Set the safe zone."""
+        raise ServiceNotSupported(DOMAIN, "set_safe_zone", self.entity_id)
+
+    async def async_clear_safe_zone(self) -> None:
+        """Clear the safe zone."""
+        raise ServiceNotSupported(DOMAIN, "clear_safe_zone", self.entity_id)
 
     async def async_set_vacuum_goto_position(self, x: int, y: int) -> None:
         """Set the vacuum to go to a specific position."""

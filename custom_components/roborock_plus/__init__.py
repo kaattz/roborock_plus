@@ -51,6 +51,7 @@ from .coordinator import (
     RoborockWetDryVacUpdateCoordinator,
 )
 from .models import get_device_info
+from .panel import async_setup_panel
 from .roborock_storage import CacheStore, async_cleanup_map_storage
 from .services import async_setup_services
 
@@ -63,6 +64,7 @@ _LOGGER = logging.getLogger(__name__)
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the component."""
     async_setup_services(hass)
+    await async_setup_panel(hass)
     return True
 
 

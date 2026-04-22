@@ -14,7 +14,8 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntityDescription,
 )
 from homeassistant.const import ATTR_BATTERY_CHARGING, EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.typing import StateType
 
@@ -26,6 +27,8 @@ from .coordinator import (
 )
 from .entity import RoborockCoordinatedEntityA01, RoborockCoordinatedEntityV1
 from .models import DeviceState
+from .safe_zone import point_in_safe_zone
+from .safe_zone_store import DISPATCH_SAFE_ZONE_UPDATED, get_safe_zone_store
 
 PARALLEL_UPDATES = 0
 
@@ -175,6 +178,13 @@ async def async_setup_entry(
         for description in ZEO_BINARY_SENSOR_DESCRIPTIONS
         if description.data_protocol in coordinator.request_protocols
     )
+    entities.extend(
+        [
+            RoborockHasSafeZoneBinarySensorEntity(coordinator),
+            RoborockInSafeZoneBinarySensorEntity(coordinator),
+        ]
+        for coordinator in config_entry.runtime_data.v1
+    )
     async_add_entities(entities)
 
 
@@ -223,3 +233,70 @@ class RoborockBinarySensorEntityA01(RoborockCoordinatedEntityA01, BinarySensorEn
         """Return the value reported by the sensor."""
         value = self.coordinator.data[self.entity_description.data_protocol]
         return self.entity_description.value_fn(value)
+
+
+class RoborockSafeZoneBinarySensorBase(RoborockCoordinatedEntityV1, BinarySensorEntity):
+    """Base entity for safe-zone binary sensors."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    async def async_added_to_hass(self) -> None:
+        """Load store state and subscribe to changes."""
+        await super().async_added_to_hass()
+        await get_safe_zone_store(self.hass).async_load()
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                f"{DISPATCH_SAFE_ZONE_UPDATED}_{self.coordinator.duid}",
+                self._handle_safe_zone_update,
+            )
+        )
+
+    @callback
+    def _handle_safe_zone_update(self) -> None:
+        """Update state after the safe zone changes."""
+        self.async_write_ha_state()
+
+
+class RoborockHasSafeZoneBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
+    """Whether a safe zone is configured."""
+
+    _attr_translation_key = "has_safe_zone"
+
+    def __init__(self, coordinator: RoborockDataUpdateCoordinator) -> None:
+        """Initialize the entity."""
+        super().__init__(f"has_safe_zone_{coordinator.duid_slug}", coordinator)
+
+    @property
+    def is_on(self) -> bool:
+        """Return True if a safe zone exists."""
+        return (
+            get_safe_zone_store(self.hass).get_loaded(self.coordinator.duid) is not None
+        )
+
+
+class RoborockInSafeZoneBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
+    """Whether the robot is inside the configured safe zone."""
+
+    _attr_translation_key = "in_safe_zone"
+
+    def __init__(self, coordinator: RoborockDataUpdateCoordinator) -> None:
+        """Initialize the entity."""
+        super().__init__(f"in_safe_zone_{coordinator.duid_slug}", coordinator)
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return True if the robot position is inside the configured safe zone."""
+        if (
+            (stored := get_safe_zone_store(self.hass).get_loaded(self.coordinator.duid))
+            is None
+        ):
+            return False
+        map_content_trait = self.coordinator.properties_api.map_content
+        if (
+            map_content_trait.map_data is None
+            or map_content_trait.map_data.vacuum_position is None
+        ):
+            return None
+        position = map_content_trait.map_data.vacuum_position
+        return point_in_safe_zone(position.x, position.y, stored.zone)

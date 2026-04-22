@@ -81,6 +81,12 @@
       },
       "water_shortage": {
         "name": "Water shortage"
+      },
+      "has_safe_zone": {
+        "name": "Safe zone configured"
+      },
+      "in_safe_zone": {
+        "name": "In safe zone"
       }
     },
     "button": {
@@ -786,6 +792,66 @@
     "resume_task": {
       "name": "Resume task",
       "description": "Resumes the current paused cleaning or docking task."
+    },
+    "get_dock_position": {
+      "name": "Get dock position",
+      "description": "Retrieves the dock reference position used by Roborock Plus."
+    },
+    "get_safe_zone": {
+      "name": "Get safe zone",
+      "description": "Retrieves the saved safe zone for the selected vacuum."
+    },
+    "get_safe_zone_suggestion": {
+      "name": "Get safe zone suggestion",
+      "description": "Calculates a suggested safe zone from the dock position and cabinet direction.",
+      "fields": {
+        "cabinet_direction": {
+          "name": "Cabinet direction",
+          "description": "Direction the vacuum exits the cabinet: north, south, east, or west."
+        },
+        "safe_distance_front": {
+          "name": "Safe distance front",
+          "description": "Distance in map units from the dock before the door may close."
+        },
+        "safe_half_width": {
+          "name": "Safe half width",
+          "description": "Half width of the safe corridor in map units."
+        },
+        "close_margin": {
+          "name": "Close margin",
+          "description": "Extra conservative margin in map units."
+        }
+      }
+    },
+    "set_safe_zone": {
+      "name": "Set safe zone",
+      "description": "Saves a manual safe zone rectangle for the selected vacuum.",
+      "fields": {
+        "min_x": {
+          "name": "Min X",
+          "description": "Minimum X coordinate of the safe zone."
+        },
+        "max_x": {
+          "name": "Max X",
+          "description": "Maximum X coordinate of the safe zone."
+        },
+        "min_y": {
+          "name": "Min Y",
+          "description": "Minimum Y coordinate of the safe zone."
+        },
+        "max_y": {
+          "name": "Max Y",
+          "description": "Maximum Y coordinate of the safe zone."
+        }
+      }
+    },
+    "clear_safe_zone": {
+      "name": "Clear safe zone",
+      "description": "Removes the saved safe zone for the selected vacuum."
+    },
+    "get_safe_zone_editor_context": {
+      "name": "Get safe zone editor context",
+      "description": "Retrieves map image, calibration, current position, and saved safe zone for the editor."
     }
   }
 }

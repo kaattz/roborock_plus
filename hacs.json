@@ -1,0 +1,9 @@
+{
+  "name": "Roborock Plus",
+  "content_in_root": false,
+  "domains": [
+    "roborock_plus"
+  ],
+  "homeassistant": "2026.1.0",
+  "render_readme": true
+}

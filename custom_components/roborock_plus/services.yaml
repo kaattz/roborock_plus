@@ -1,0 +1,41 @@
+get_maps:
+  name: Get maps
+  description: Retrieves the map and room information of your device.
+  target:
+    entity:
+      integration: roborock_plus
+      domain: vacuum
+set_vacuum_goto_position:
+  name: Go to position
+  description: Sends the vacuum to a specific position.
+  target:
+    entity:
+      integration: roborock_plus
+      domain: vacuum
+  fields:
+    x:
+      example: 27500
+      required: true
+      selector:
+        text:
+          type: number
+    y:
+      example: 32000
+      required: true
+      selector:
+        text:
+          type: number
+get_vacuum_current_position:
+  name: Get current position
+  description: Retrieves the current position of the vacuum.
+  target:
+    entity:
+      integration: roborock_plus
+      domain: vacuum
+resume_task:
+  name: Resume task
+  description: Resumes the current paused cleaning or docking task.
+  target:
+    entity:
+      integration: roborock_plus
+      domain: vacuum

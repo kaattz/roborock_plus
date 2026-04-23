@@ -1,0 +1,159 @@
+{
+  "title": "Roborock Plus",
+  "entity": {
+    "binary_sensor": {
+      "clean_box_empty": { "name": "清水箱" },
+      "clean_fluid_empty": { "name": "清洁液" },
+      "detergent_empty": { "name": "洗涤剂" },
+      "dirty_box_full": { "name": "污水箱" },
+      "in_cleaning": { "name": "正在清扫" },
+      "mop_attached": { "name": "附有拖把" },
+      "mop_drying_status": { "name": "拖布烘干" },
+      "softener_empty": { "name": "柔顺剂" },
+      "water_box_attached": { "name": "附有水箱" },
+      "water_shortage": { "name": "缺水" },
+      "has_safe_zone": { "name": "已配置安全区" },
+      "in_safe_zone": { "name": "位于安全区" }
+    },
+    "button": {
+      "empty_dustbin": { "name": "倒垃圾盒" },
+      "pause": { "name": "暂停" },
+      "reset_air_filter_consumable": { "name": "重置滤网耗材" },
+      "reset_main_brush_consumable": { "name": "重置主刷耗材" },
+      "reset_sensor_consumable": { "name": "重置传感器耗材" },
+      "reset_side_brush_consumable": { "name": "重置边刷耗材" },
+      "shutdown": { "name": "关机" },
+      "start": { "name": "启动" }
+    },
+    "number": {
+      "volume": { "name": "音量" }
+    },
+    "select": {
+      "cleaning_mode": {
+        "name": "清扫模式",
+        "state": {
+          "mop": "仅拖地",
+          "vac_and_mop": "扫拖一体",
+          "vacuum": "仅扫地"
+        }
+      },
+      "detergent_type": { "name": "洗涤剂类型" },
+      "drying_mode": { "name": "烘干模式" },
+      "dust_collection_mode": { "name": "集尘模式" },
+      "mode": { "name": "运行模式" },
+      "mop_intensity": {
+        "name": "拖地强度",
+        "state": {
+          "custom": "自定义",
+          "custom_water_flow": "自定义水量",
+          "extreme": "极强",
+          "high": "高",
+          "intense": "强力",
+          "low": "低",
+          "max": "最大",
+          "medium": "中",
+          "mild": "轻柔",
+          "min": "最小",
+          "moderate": "适中",
+          "off": "关闭",
+          "slight": "轻度",
+          "smart_mode": "智能",
+          "standard": "标准",
+          "vac_followed_by_mop": "先扫后拖"
+        }
+      },
+      "mop_mode": {
+        "name": "拖地模式",
+        "state": {
+          "custom": "自定义",
+          "deep": "深度",
+          "deep_plus": "深度+",
+          "fast": "快速",
+          "smart_mode": "智能",
+          "standard": "标准"
+        }
+      },
+      "program": { "name": "洗涤程序" },
+      "rinse_times": { "name": "漂洗次数" },
+      "selected_map": { "name": "所选地图" },
+      "softener_type": { "name": "柔顺剂类型" },
+      "spin_level": { "name": "脱水档位" },
+      "temperature": { "name": "水温" },
+      "water_flow": { "name": "水流量" }
+    },
+    "sensor": {
+      "a01_error": { "name": "错误" },
+      "a01_status": { "name": "状态" },
+      "brush_remaining": { "name": "滚刷剩余时间" },
+      "clean_percent": { "name": "清扫进度" },
+      "cleaning_area": { "name": "清洁区域" },
+      "cleaning_brush_time_left": { "name": "维护刷剩余时间" },
+      "cleaning_time": { "name": "清扫时间" },
+      "countdown": { "name": "倒计时" },
+      "current_room": { "name": "当前房间" },
+      "dock_error": { "name": "基站错误" },
+      "filter_life": { "name": "滤网使用时间" },
+      "filter_time_left": { "name": "滤网剩余时间" },
+      "last_clean_end": { "name": "上次清扫结束" },
+      "last_clean_start": { "name": "上次清扫开始" },
+      "main_brush_life": { "name": "主刷使用时间" },
+      "main_brush_time_left": { "name": "主刷剩余时间" },
+      "mop_drying_remaining_time": { "name": "拖布烘干剩余时间" },
+      "mop_life_time_left": { "name": "拖布剩余时间" },
+      "q7_status": { "name": "状态" },
+      "sensor_life": { "name": "传感器使用时间" },
+      "sensor_time_left": { "name": "传感器剩余时间" },
+      "side_brush_life": { "name": "边刷使用时间" },
+      "side_brush_time_left": { "name": "边刷剩余时间" },
+      "status": { "name": "状态" },
+      "strainer_time_left": { "name": "滤水器剩余时间" },
+      "times_after_clean": { "name": "清洗后次数" },
+      "total_cleaning_area": { "name": "总清洁区域" },
+      "total_cleaning_count": { "name": "总清洁次数" },
+      "total_cleaning_time": { "name": "总清扫时间" },
+      "vacuum_error": { "name": "吸尘出错" },
+      "washing_left": { "name": "剩余洗涤时间" },
+      "zeo_error": { "name": "错误" },
+      "zeo_state": { "name": "状态" }
+    },
+    "switch": {
+      "child_lock": { "name": "童锁" },
+      "dnd_switch": { "name": "勿扰模式" },
+      "off_peak_switch": { "name": "错峰充电" },
+      "sound_setting": { "name": "声音设置" },
+      "status_indicator": { "name": "状态指示灯" }
+    },
+    "time": {
+      "dnd_end_time": { "name": "勿扰结束" },
+      "dnd_start_time": { "name": "勿扰开始" },
+      "off_peak_end": { "name": "错峰结束" },
+      "off_peak_start": { "name": "错峰开始" }
+    }
+  },
+  "services": {
+    "resume_task": {
+      "name": "恢复任务",
+      "description": "恢复当前暂停的清扫或回充任务。"
+    },
+    "get_dock_position": {
+      "name": "获取基站坐标",
+      "description": "获取 Roborock Plus 使用的基站参考坐标。"
+    },
+    "get_safe_zone": {
+      "name": "获取安全区",
+      "description": "获取所选扫地机已保存的安全区。"
+    },
+    "set_safe_zone": {
+      "name": "设置安全区",
+      "description": "保存所选扫地机的手动画框安全区。"
+    },
+    "clear_safe_zone": {
+      "name": "清空安全区",
+      "description": "删除所选扫地机已保存的安全区。"
+    },
+    "get_safe_zone_editor_context": {
+      "name": "获取安全区编辑上下文",
+      "description": "获取编辑器需要的地图、当前位置和安全区信息。"
+    }
+  }
+}

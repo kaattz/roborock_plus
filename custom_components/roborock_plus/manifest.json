@@ -27,11 +27,12 @@
     "roborock"
   ],
   "issue_tracker": "https://github.com/kaattz/roborock_plus/issues",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "quality_scale": "silver",
   "requirements": [
     "python-roborock==5.5.1",
     "vacuum-map-parser-roborock==0.1.4"
   ]
 }
+
 

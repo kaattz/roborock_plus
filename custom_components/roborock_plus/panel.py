@@ -15,10 +15,13 @@ PANEL_FRONTEND_URL_PATH = "roborock-plus-zones"
 PANEL_WEBCOMPONENT_NAME = "roborock-plus-safe-zone-editor"
 PANEL_MODULE_FILENAME = "roborock-plus-safe-zone-editor.js"
 PANEL_STATIC_URL = f"/api/{DOMAIN}/{PANEL_MODULE_FILENAME}"
+DATA_PANEL_REGISTERED = f"{DOMAIN}_panel_registered"
 
 
 async def async_setup_panel(hass: HomeAssistant) -> None:
     """Register static assets and the custom panel."""
+    if hass.data.get(DATA_PANEL_REGISTERED):
+        return
     await hass.http.async_register_static_paths(
         [
             StaticPathConfig(
@@ -43,3 +46,4 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
         require_admin=True,
         config_panel_domain=DOMAIN,
     )
+    hass.data[DATA_PANEL_REGISTERED] = True

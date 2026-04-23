@@ -3,12 +3,13 @@ class RoborockPlusSafeZoneEditor extends HTMLElement {
     super();
     this.attachShadow({ mode: "open" });
     this._hass = null;
+    this._vacuumEntities = [];
     this._vacuumEntityId = "";
     this._context = null;
     this._suggestion = null;
     this._draftRect = null;
     this._dragStart = null;
-    this._imgRect = null;
+    this._loadedSources = false;
     this._params = {
       cabinet_direction: "east",
       safe_distance_front: 2500,
@@ -19,6 +20,10 @@ class RoborockPlusSafeZoneEditor extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    if (!this._loadedSources) {
+      this._loadedSources = true;
+      this._loadEntitySources();
+    }
     this._render();
   }
 
@@ -33,11 +38,22 @@ class RoborockPlusSafeZoneEditor extends HTMLElement {
     });
   }
 
-  _vacuumEntities() {
-    if (!this._hass) return [];
-    return Object.keys(this._hass.states).filter((entityId) =>
-      entityId.startsWith("vacuum.")
-    );
+  async _loadEntitySources() {
+    if (!this._hass) return;
+    const sources = await this._hass.callWS({ type: "entity/source" });
+    this._vacuumEntities = Object.entries(sources)
+      .filter(
+        ([entityId, source]) =>
+          entityId.startsWith("vacuum.") && source.domain === "roborock_plus"
+      )
+      .map(([entityId]) => entityId)
+      .sort();
+    if (!this._vacuumEntityId && this._vacuumEntities.length > 0) {
+      this._vacuumEntityId = this._vacuumEntities[0];
+      await this._loadContext();
+      return;
+    }
+    this._render();
   }
 
   _currentImageUrl() {
@@ -77,7 +93,7 @@ class RoborockPlusSafeZoneEditor extends HTMLElement {
   }
 
   _zoneToDisplayRect(zone) {
-    if (!zone || !this._imgRect) return null;
+    if (!zone) return null;
     const p1 = this._mapToImage({ x: zone.min_x, y: zone.min_y });
     const p2 = this._mapToImage({ x: zone.max_x, y: zone.max_y });
     if (!p1 || !p2) return null;
@@ -110,18 +126,21 @@ class RoborockPlusSafeZoneEditor extends HTMLElement {
       this._params
     );
     this._suggestion = result.response;
+    this._draftRect = this._zoneToDisplayRect(this._suggestion);
     this._render();
   }
 
   async _saveDraft() {
-    if (!this._vacuumEntityId || !this._draftRect) return;
+    if (!this._vacuumEntityId) return;
+    const rect = this._draftRect || this._zoneToDisplayRect(this._suggestion);
+    if (!rect) return;
     const p1 = this._imageToMap({
-      x: this._draftRect.x,
-      y: this._draftRect.y,
+      x: rect.x,
+      y: rect.y,
     });
     const p2 = this._imageToMap({
-      x: this._draftRect.x + this._draftRect.width,
-      y: this._draftRect.y + this._draftRect.height,
+      x: rect.x + rect.width,
+      y: rect.y + rect.height,
     });
     if (!p1 || !p2) return;
     await this._hass.callService("roborock_plus", "set_safe_zone", {
@@ -142,22 +161,31 @@ class RoborockPlusSafeZoneEditor extends HTMLElement {
     await this._loadContext();
   }
 
-  _pointerToLocal(event) {
+  _pointerToViewBox(event) {
     const svg = this.shadowRoot.getElementById("editor-svg");
     const rect = svg.getBoundingClientRect();
-    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    const width = this._context?.image_meta?.width || rect.width || 1;
+    const height = this._context?.image_meta?.height || rect.height || 1;
+    return {
+      x: ((event.clientX - rect.left) / rect.width) * width,
+      y: ((event.clientY - rect.top) / rect.height) * height,
+    };
   }
 
   _onPointerDown(event) {
-    this._imgRect = event.currentTarget.getBoundingClientRect();
-    this._dragStart = this._pointerToLocal(event);
-    this._draftRect = { x: this._dragStart.x, y: this._dragStart.y, width: 0, height: 0 };
+    this._dragStart = this._pointerToViewBox(event);
+    this._draftRect = {
+      x: this._dragStart.x,
+      y: this._dragStart.y,
+      width: 0,
+      height: 0,
+    };
     this._render();
   }
 
   _onPointerMove(event) {
     if (!this._dragStart) return;
-    const point = this._pointerToLocal(event);
+    const point = this._pointerToViewBox(event);
     this._draftRect = {
       x: Math.min(this._dragStart.x, point.x),
       y: Math.min(this._dragStart.y, point.y),
@@ -198,7 +226,7 @@ class RoborockPlusSafeZoneEditor extends HTMLElement {
             <label>Vacuum entity</label>
             <select id="vacuum-select">
               <option value="">请选择</option>
-              ${this._vacuumEntities()
+              ${this._vacuumEntities
                 .map(
                   (entityId) =>
                     `<option value="${entityId}" ${entityId === this._vacuumEntityId ? "selected" : ""}>${entityId}</option>`
@@ -243,6 +271,9 @@ class RoborockPlusSafeZoneEditor extends HTMLElement {
 
     this.shadowRoot.getElementById("vacuum-select")?.addEventListener("change", (ev) => {
       this._vacuumEntityId = ev.target.value;
+      this._context = null;
+      this._suggestion = null;
+      this._draftRect = null;
     });
     this.shadowRoot.getElementById("direction")?.addEventListener("change", (ev) => {
       this._params.cabinet_direction = ev.target.value;
@@ -271,7 +302,9 @@ class RoborockPlusSafeZoneEditor extends HTMLElement {
   }
 }
 
-customElements.define(
-  "roborock-plus-safe-zone-editor",
-  RoborockPlusSafeZoneEditor
-);
+if (!customElements.get("roborock-plus-safe-zone-editor")) {
+  customElements.define(
+    "roborock-plus-safe-zone-editor",
+    RoborockPlusSafeZoneEditor
+  );
+}

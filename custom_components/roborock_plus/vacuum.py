@@ -26,6 +26,7 @@ from homeassistant.exceptions import (
 )
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.util import slugify
 
 from .const import DOMAIN
 from .coordinator import (
@@ -386,6 +387,14 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
 
     async def get_safe_zone_editor_context(self) -> ServiceResponse:
         """Get all frontend editor context in one response."""
+        try:
+            await self._home_trait.refresh()
+        except RoborockException as err:
+            _LOGGER.debug("Failed to refresh home data: %s", err)
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="map_failure",
+            ) from err
         map_content_trait = self.coordinator.properties_api.map_content
         try:
             await map_content_trait.refresh()
@@ -404,11 +413,37 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
             )
 
         entity_registry = er.async_get(self.hass)
+        current_map_name = current_map.name or f"Map {current_map.map_flag}"
+        expected_unique_id = f"{self.coordinator.duid_slug}_map_{current_map_name}"
         image_entity_id = entity_registry.async_get_entity_id(
-            "image",
-            DOMAIN,
-            f"{self.coordinator.duid_slug}_map_{current_map.name or f'Map {current_map.map_flag}'}",
+            "image", DOMAIN, expected_unique_id
         )
+        image_entries = []
+        if image_entity_id is None:
+            image_entries = [
+                entry
+                for entry in er.async_entries_for_config_entry(
+                    entity_registry, self.coordinator.config_entry.entry_id
+                )
+                if entry.domain == "image"
+                and entry.unique_id.startswith(f"{self.coordinator.duid_slug}_map_")
+            ]
+            current_map_slug = slugify(current_map_name)
+            for entry in image_entries:
+                if entry.entity_id.endswith(current_map_slug):
+                    image_entity_id = entry.entity_id
+                    break
+                if entry.original_name and slugify(entry.original_name) == current_map_slug:
+                    image_entity_id = entry.entity_id
+                    break
+            if image_entity_id is None and len(image_entries) == 1:
+                image_entity_id = image_entries[0].entity_id
+
+        image_url = None
+        if image_entity_id is not None and (
+            image_state := self.hass.states.get(image_entity_id)
+        ) is not None:
+            image_url = image_state.attributes.get("entity_picture")
 
         current_position = None
         calibration = None
@@ -427,6 +462,8 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
         return {
             "vacuum_entity_id": self.entity_id,
             "image_entity_id": image_entity_id,
+            "image_entity_ids": [entry.entity_id for entry in image_entries],
+            "image_url": image_url,
             "dock_position": {"x": DEFAULT_DOCK_X, "y": DEFAULT_DOCK_Y},
             "current_position": current_position,
             "safe_zone": None if stored_zone is None else stored_zone.zone.as_dict(),

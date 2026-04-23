@@ -10,6 +10,7 @@ class RoborockPlusSafeZoneEditor extends HTMLElement {
     this._draftRect = null;
     this._dragStart = null;
     this._loadedSources = false;
+    this._error = "";
     this._params = {
       cabinet_direction: "east",
       safe_distance_front: 2500,
@@ -57,7 +58,9 @@ class RoborockPlusSafeZoneEditor extends HTMLElement {
   }
 
   _currentImageUrl() {
-    if (!this._hass || !this._context?.image_entity_id) return null;
+    if (!this._hass || !this._context) return null;
+    if (this._context.image_url) return this._context.image_url;
+    if (!this._context.image_entity_id) return null;
     const state = this._hass.states[this._context.image_entity_id];
     return state?.attributes?.entity_picture || null;
   }
@@ -109,11 +112,22 @@ class RoborockPlusSafeZoneEditor extends HTMLElement {
 
   async _loadContext() {
     if (!this._vacuumEntityId) return;
-    const result = await this._callService("roborock_plus", "get_safe_zone_editor_context", {
-      entity_id: this._vacuumEntityId,
-    });
-    this._context = result.response;
-    this._draftRect = null;
+    try {
+      const result = await this._callService(
+        "roborock_plus",
+        "get_safe_zone_editor_context",
+        {
+          entity_id: this._vacuumEntityId,
+        }
+      );
+      this._context = result.response;
+      this._draftRect = null;
+      this._error = this._currentImageUrl()
+        ? ""
+        : "已加载上下文，但没有找到当前地图图像实体。";
+    } catch (err) {
+      this._error = err?.message || String(err);
+    }
     this._render();
   }
 
@@ -252,6 +266,7 @@ class RoborockPlusSafeZoneEditor extends HTMLElement {
             <button id="clear-zone">清空安全区</button>
           </div>
           <div class="hint">先加载地图，再生成建议框，最后可手动拖拽框选后保存。</div>
+          ${this._error ? `<div class="hint" style="color:#ff6b6b;">${this._error}</div>` : ""}
         </div>
         ${
           imageUrl

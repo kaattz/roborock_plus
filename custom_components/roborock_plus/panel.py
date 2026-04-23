@@ -13,7 +13,7 @@ from .const import DOMAIN
 
 PANEL_FRONTEND_URL_PATH = "roborock-plus-zones"
 PANEL_WEBCOMPONENT_NAME = "roborock-plus-safe-zone-editor"
-PANEL_MODULE_FILENAME = "roborock-plus-safe-zone-editor.js"
+PANEL_MODULE_FILENAME = "roborock-plus-safe-zone-editor-v2.js"
 PANEL_STATIC_URL = f"/api/{DOMAIN}/{PANEL_MODULE_FILENAME}"
 DATA_PANEL_REGISTERED = f"{DOMAIN}_panel_registered"
 

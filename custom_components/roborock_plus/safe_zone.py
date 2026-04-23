@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Literal
 
 CabinetDirection = Literal["north", "south", "east", "west"]
@@ -20,6 +20,25 @@ class SafeZone:
     min_y: int
     max_y: int
 
+    def as_dict(self) -> dict[str, int]:
+        """Convert the safe zone to a serializable mapping."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, int]) -> "SafeZone":
+        """Build a safe zone from stored data."""
+        return cls(
+            min_x=int(data["min_x"]),
+            max_x=int(data["max_x"]),
+            min_y=int(data["min_y"]),
+            max_y=int(data["max_y"]),
+        )
+
+
+def _trigger_depth(safe_distance_front: int, safe_half_width: int, close_margin: int) -> int:
+    """Return the forward depth of the suggested trigger box."""
+    return min(safe_distance_front, max(safe_half_width, close_margin * 2))
+
 
 def suggest_safe_zone(
     *,
@@ -30,12 +49,17 @@ def suggest_safe_zone(
     safe_half_width: int,
     close_margin: int,
 ) -> SafeZone:
-    """Calculate a conservative rectangular safe zone."""
+    """Calculate a small trigger box near the dock exit."""
+    trigger_depth = _trigger_depth(
+        safe_distance_front=safe_distance_front,
+        safe_half_width=safe_half_width,
+        close_margin=close_margin,
+    )
     if cabinet_direction == "north":
         return SafeZone(
             min_x=dock_x - safe_half_width,
             max_x=dock_x + safe_half_width,
-            min_y=dock_y - safe_distance_front - close_margin,
+            min_y=dock_y - trigger_depth - close_margin,
             max_y=dock_y - close_margin,
         )
     if cabinet_direction == "south":
@@ -43,11 +67,11 @@ def suggest_safe_zone(
             min_x=dock_x - safe_half_width,
             max_x=dock_x + safe_half_width,
             min_y=dock_y + close_margin,
-            max_y=dock_y + safe_distance_front + close_margin,
+            max_y=dock_y + trigger_depth + close_margin,
         )
     if cabinet_direction == "west":
         return SafeZone(
-            min_x=dock_x - safe_distance_front - close_margin,
+            min_x=dock_x - trigger_depth - close_margin,
             max_x=dock_x - close_margin,
             min_y=dock_y - safe_half_width,
             max_y=dock_y + safe_half_width,
@@ -55,7 +79,7 @@ def suggest_safe_zone(
     if cabinet_direction == "east":
         return SafeZone(
             min_x=dock_x + close_margin,
-            max_x=dock_x + safe_distance_front + close_margin,
+            max_x=dock_x + trigger_depth + close_margin,
             min_y=dock_y - safe_half_width,
             max_y=dock_y + safe_half_width,
         )

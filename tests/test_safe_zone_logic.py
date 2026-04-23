@@ -34,7 +34,7 @@ def test_suggest_safe_zone_east() -> None:
     )
     assert zone == SafeZone(
         min_x=25800,
-        max_x=28300,
+        max_x=27000,
         min_y=24300,
         max_y=26700,
     )
@@ -52,7 +52,7 @@ def test_suggest_safe_zone_north() -> None:
     assert zone == SafeZone(
         min_x=24300,
         max_x=26700,
-        min_y=22700,
+        min_y=24000,
         max_y=25200,
     )
 

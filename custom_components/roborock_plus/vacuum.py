@@ -11,6 +11,7 @@ from roborock.data.b01_q10.b01_q10_code_mappings import (
 )
 from roborock.exceptions import RoborockException
 from roborock.roborock_typing import RoborockCommand
+from vacuum_map_parser_base.map_data import Point
 
 from homeassistant.components.vacuum import (
     Segment,
@@ -45,6 +46,18 @@ from .safe_zone import DEFAULT_DOCK_X, DEFAULT_DOCK_Y, SafeZone, suggest_safe_zo
 from .safe_zone_store import get_safe_zone_store
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _safe_zone_to_display_rect(zone: SafeZone, image_meta: Any) -> dict[str, float]:
+    """Convert a map-coordinate safe zone into image display coordinates."""
+    top_left = Point(zone.min_x, zone.min_y).to_img(image_meta.dimensions)
+    bottom_right = Point(zone.max_x, zone.max_y).to_img(image_meta.dimensions)
+    return {
+        "x": min(top_left.x, bottom_right.x),
+        "y": min(top_left.y, bottom_right.y),
+        "width": abs(bottom_right.x - top_left.x),
+        "height": abs(bottom_right.y - top_left.y),
+    }
 
 STATE_CODE_TO_STATE = {
     RoborockStateCode.starting: VacuumActivity.IDLE,  # "Starting"
@@ -383,7 +396,48 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
             safe_half_width=safe_half_width,
             close_margin=close_margin,
         )
-        return {"dock_x": DEFAULT_DOCK_X, "dock_y": DEFAULT_DOCK_Y, **zone.as_dict()}
+        result: dict[str, Any] = {
+            "dock_x": DEFAULT_DOCK_X,
+            "dock_y": DEFAULT_DOCK_Y,
+            **zone.as_dict(),
+        }
+        map_content_trait = self.coordinator.properties_api.map_content
+        try:
+            await map_content_trait.refresh()
+        except RoborockException as err:
+            _LOGGER.debug(
+                "Safe-zone suggestion map refresh failed for %s: %s",
+                self.entity_id,
+                err,
+            )
+            return result
+        if (
+            map_content_trait.map_data is not None
+            and map_content_trait.map_data.image is not None
+        ):
+            result["display_rect"] = _safe_zone_to_display_rect(
+                zone, map_content_trait.map_data.image
+            )
+            result["debug"] = {
+                "has_map_data": True,
+                "has_image": True,
+                "image_meta": map_content_trait.map_data.image.as_dict(),
+                "calibration_points": map_content_trait.map_data.calibration(),
+            }
+        else:
+            result["debug"] = {
+                "has_map_data": map_content_trait.map_data is not None,
+                "has_image": (
+                    map_content_trait.map_data is not None
+                    and map_content_trait.map_data.image is not None
+                ),
+            }
+        _LOGGER.debug(
+            "Safe-zone suggestion for %s: %s",
+            self.entity_id,
+            result,
+        )
+        return result
 
     async def get_safe_zone_editor_context(self) -> ServiceResponse:
         """Get all frontend editor context in one response."""
@@ -414,6 +468,9 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
 
         entity_registry = er.async_get(self.hass)
         current_map_name = current_map.name or f"Map {current_map.map_flag}"
+        current_map_slug = slugify(current_map_name)
+        vacuum_object_id = self.entity_id.split(".", maxsplit=1)[1]
+        vacuum_entry = entity_registry.async_get(self.entity_id)
         expected_unique_id = f"{self.coordinator.duid_slug}_map_{current_map_name}"
         image_entity_id = entity_registry.async_get_entity_id(
             "image", DOMAIN, expected_unique_id
@@ -428,7 +485,6 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
                 if entry.domain == "image"
                 and entry.unique_id.startswith(f"{self.coordinator.duid_slug}_map_")
             ]
-            current_map_slug = slugify(current_map_name)
             for entry in image_entries:
                 if entry.entity_id.endswith(current_map_slug):
                     image_entity_id = entry.entity_id
@@ -438,6 +494,57 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
                     break
             if image_entity_id is None and len(image_entries) == 1:
                 image_entity_id = image_entries[0].entity_id
+
+        if image_entity_id is None and vacuum_entry and vacuum_entry.device_id:
+            device_image_entries = [
+                entry
+                for entry in entity_registry.entities.values()
+                if entry.domain == "image" and entry.device_id == vacuum_entry.device_id
+            ]
+            image_entries.extend(
+                entry for entry in device_image_entries if entry not in image_entries
+            )
+            for entry in device_image_entries:
+                if entry.entity_id.endswith(current_map_slug):
+                    image_entity_id = entry.entity_id
+                    break
+                if entry.original_name and current_map_slug in slugify(entry.original_name):
+                    image_entity_id = entry.entity_id
+                    break
+            if image_entity_id is None and len(device_image_entries) == 1:
+                image_entity_id = device_image_entries[0].entity_id
+
+        all_image_state_ids: list[str] = []
+        if image_entity_id is None:
+            all_image_entries = [
+                entry
+                for entry in entity_registry.entities.values()
+                if entry.domain == "image"
+                and vacuum_object_id in entry.entity_id
+            ]
+            image_entries.extend(
+                entry for entry in all_image_entries if entry not in image_entries
+            )
+            for entry in all_image_entries:
+                if entry.entity_id.endswith(current_map_slug):
+                    image_entity_id = entry.entity_id
+                    break
+                if entry.original_name and current_map_slug in slugify(entry.original_name):
+                    image_entity_id = entry.entity_id
+                    break
+
+        if image_entity_id is None:
+            all_image_state_ids = sorted(
+                entity_id
+                for entity_id in self.hass.states.async_entity_ids("image")
+                if vacuum_object_id in entity_id
+            )
+            for entity_id in all_image_state_ids:
+                if entity_id.endswith(current_map_slug):
+                    image_entity_id = entity_id
+                    break
+            if image_entity_id is None and len(all_image_state_ids) == 1:
+                image_entity_id = all_image_state_ids[0]
 
         image_url = None
         if image_entity_id is not None and (
@@ -459,10 +566,15 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
                 image_meta = map_content_trait.map_data.image.as_dict()
 
         stored_zone = await get_safe_zone_store(self.hass).async_get(self.coordinator.duid)
-        return {
+        result = {
             "vacuum_entity_id": self.entity_id,
             "image_entity_id": image_entity_id,
-            "image_entity_ids": [entry.entity_id for entry in image_entries],
+            "image_entity_ids": sorted(
+                {
+                    *(entry.entity_id for entry in image_entries),
+                    *all_image_state_ids,
+                }
+            ),
             "image_url": image_url,
             "dock_position": {"x": DEFAULT_DOCK_X, "y": DEFAULT_DOCK_Y},
             "current_position": current_position,
@@ -474,6 +586,8 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
             "image_meta": image_meta,
             "calibration": calibration,
         }
+        _LOGGER.debug("Safe-zone editor context for %s: %s", self.entity_id, result)
+        return result
 
     async def async_set_safe_zone(
         self,

@@ -83,10 +83,13 @@
         "name": "Water shortage"
       },
       "has_safe_zone": {
-        "name": "Safe zone configured"
+        "name": "Danger zone configured"
       },
       "in_safe_zone": {
-        "name": "In safe zone"
+        "name": "In danger zone"
+      },
+      "clear_of_garage": {
+        "name": "Clear of garage"
       }
     },
     "button": {
@@ -798,8 +801,8 @@
       "description": "Retrieves the dock reference position used by Roborock Plus."
     },
     "get_safe_zone": {
-      "name": "Get safe zone",
-      "description": "Retrieves the saved safe zone for the selected vacuum."
+      "name": "Get danger zone",
+      "description": "Retrieves the saved danger zone for the selected vacuum."
     },
     "get_safe_zone_suggestion": {
       "name": "Get safe zone suggestion",
@@ -824,8 +827,8 @@
       }
     },
     "set_safe_zone": {
-      "name": "Set safe zone",
-      "description": "Saves a manual safe zone rectangle for the selected vacuum.",
+      "name": "Set danger zone",
+      "description": "Saves a manual danger zone rectangle for the selected vacuum.",
       "fields": {
         "min_x": {
           "name": "Min X",
@@ -846,12 +849,12 @@
       }
     },
     "clear_safe_zone": {
-      "name": "Clear safe zone",
-      "description": "Removes the saved safe zone for the selected vacuum."
+      "name": "Clear danger zone",
+      "description": "Removes the saved danger zone for the selected vacuum."
     },
     "get_safe_zone_editor_context": {
-      "name": "Get safe zone editor context",
-      "description": "Retrieves map image, calibration, current position, and saved safe zone for the editor."
+      "name": "Get danger zone editor context",
+      "description": "Retrieves map image, calibration, current position, and saved danger zone for the editor."
     }
   }
 }

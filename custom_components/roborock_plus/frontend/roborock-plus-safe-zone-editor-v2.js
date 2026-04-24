@@ -283,7 +283,7 @@ class RoborockPlusSafeZoneEditor extends HTMLElement {
       this._persistImageEntity(this._vacuumEntityId, this._imageEntityId);
     }
     this._error = "";
-    this._notice = "安全区已保存。";
+    this._notice = "危险区已保存。";
     await this._loadContext();
   }
 
@@ -293,7 +293,7 @@ class RoborockPlusSafeZoneEditor extends HTMLElement {
       entity_id: this._vacuumEntityId,
     });
     this._error = "";
-    this._notice = "安全区已清空。";
+    this._notice = "危险区已清空。";
     await this._loadContext();
   }
 
@@ -383,7 +383,7 @@ class RoborockPlusSafeZoneEditor extends HTMLElement {
         ? `<span class="chip">当前位置：x=${this._context.current_position.x}, y=${this._context.current_position.y}</span>`
         : "",
       this._context?.safe_zone
-        ? `<span class="chip chip-info">安全区：x=${this._context.safe_zone.min_x}..${this._context.safe_zone.max_x}, y=${this._context.safe_zone.min_y}..${this._context.safe_zone.max_y}</span>`
+        ? `<span class="chip chip-info">危险区：x=${this._context.safe_zone.min_x}..${this._context.safe_zone.max_x}, y=${this._context.safe_zone.min_y}..${this._context.safe_zone.max_y}</span>`
         : "",
       this._error
         ? `<span class="chip chip-danger">${this._error}</span>`
@@ -601,7 +601,7 @@ class RoborockPlusSafeZoneEditor extends HTMLElement {
               <button id="clear-zone" class="btn-danger">清空</button>
             </div>
           </div>
-          <div class="helper">先加载地图，再直接拖拽框选。绿色框是当前已保存安全区，橙色框是当前草稿。</div>
+          <div class="helper">先加载地图，再直接拖拽框选柜门会碰到扫地机的危险区。红色框是已保存危险区，橙色框是当前草稿。</div>
           ${statusChips ? `<div class="status-row">${statusChips}</div>` : ""}
         </div>
         ${
@@ -612,7 +612,7 @@ class RoborockPlusSafeZoneEditor extends HTMLElement {
                   <svg id="editor-svg" viewBox="0 0 ${this._canvasWidth()} ${this._canvasHeight()}">
                   ${
                     savedRect
-                      ? `<rect x="${savedRect.x}" y="${savedRect.y}" width="${savedRect.width}" height="${savedRect.height}" fill="rgba(0,255,0,0.15)" stroke="#00cc66" stroke-width="3"></rect>`
+                      ? `<rect x="${savedRect.x}" y="${savedRect.y}" width="${savedRect.width}" height="${savedRect.height}" fill="rgba(239,68,68,0.16)" stroke="#ef4444" stroke-width="3"></rect>`
                       : ""
                   }
                   ${

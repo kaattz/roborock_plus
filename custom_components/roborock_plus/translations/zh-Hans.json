@@ -12,8 +12,9 @@
       "softener_empty": { "name": "柔顺剂" },
       "water_box_attached": { "name": "附有水箱" },
       "water_shortage": { "name": "缺水" },
-      "has_safe_zone": { "name": "已配置安全区" },
-      "in_safe_zone": { "name": "位于安全区" }
+      "has_safe_zone": { "name": "已配置危险区" },
+      "in_safe_zone": { "name": "位于危险区" },
+      "clear_of_garage": { "name": "已离开柜门危险区" }
     },
     "button": {
       "empty_dustbin": { "name": "倒垃圾盒" },
@@ -39,7 +40,15 @@
       },
       "detergent_type": { "name": "洗涤剂类型" },
       "drying_mode": { "name": "烘干模式" },
-      "dust_collection_mode": { "name": "集尘模式" },
+      "dust_collection_mode": {
+        "name": "集尘模式",
+        "state": {
+          "balanced": "均衡",
+          "light": "轻柔",
+          "max": "最大",
+          "smart": "智能"
+        }
+      },
       "mode": { "name": "运行模式" },
       "mop_intensity": {
         "name": "拖地强度",
@@ -140,20 +149,20 @@
       "description": "获取 Roborock Plus 使用的基站参考坐标。"
     },
     "get_safe_zone": {
-      "name": "获取安全区",
-      "description": "获取所选扫地机已保存的安全区。"
+      "name": "获取危险区",
+      "description": "获取所选扫地机已保存的危险区。"
     },
     "set_safe_zone": {
-      "name": "设置安全区",
-      "description": "保存所选扫地机的手动画框安全区。"
+      "name": "设置危险区",
+      "description": "保存所选扫地机的手动画框危险区。"
     },
     "clear_safe_zone": {
-      "name": "清空安全区",
-      "description": "删除所选扫地机已保存的安全区。"
+      "name": "清空危险区",
+      "description": "删除所选扫地机已保存的危险区。"
     },
     "get_safe_zone_editor_context": {
-      "name": "获取安全区编辑上下文",
-      "description": "获取编辑器需要的地图、当前位置和安全区信息。"
+      "name": "获取危险区编辑上下文",
+      "description": "获取编辑器需要的地图、当前位置和危险区信息。"
     }
   }
 }

@@ -40,22 +40,22 @@ get_dock_position:
       integration: roborock_plus
       domain: vacuum
 get_safe_zone:
-  name: Get safe zone
-  description: Retrieves the saved safe zone for the selected vacuum.
+  name: Get danger zone
+  description: Retrieves the saved danger zone for the selected vacuum.
   target:
     entity:
       integration: roborock_plus
       domain: vacuum
 get_safe_zone_editor_context:
-  name: Get safe zone editor context
-  description: Retrieves map image, calibration, current position, and saved safe zone for the editor.
+  name: Get danger zone editor context
+  description: Retrieves map image, calibration, current position, and saved danger zone for the editor.
   target:
     entity:
       integration: roborock_plus
       domain: vacuum
 get_safe_zone_suggestion:
-  name: Get safe zone suggestion
-  description: Calculates a suggested safe zone from the dock position and cabinet direction.
+  name: Get danger zone suggestion
+  description: Calculates a suggested danger zone from the dock position and cabinet direction.
   target:
     entity:
       integration: roborock_plus
@@ -74,14 +74,14 @@ get_safe_zone_suggestion:
             - west
     safe_distance_front:
       name: Safe distance front
-      description: Distance in map units from the dock before the door may close.
+      description: Distance in map units from the dock used to calculate the danger zone.
       required: true
       selector:
         text:
           type: number
     safe_half_width:
       name: Safe half width
-      description: Half width of the safe corridor in map units.
+      description: Half width of the danger zone in map units.
       required: true
       selector:
         text:
@@ -101,8 +101,8 @@ resume_task:
       integration: roborock_plus
       domain: vacuum
 set_safe_zone:
-  name: Set safe zone
-  description: Saves a manual safe zone rectangle for the selected vacuum.
+  name: Set danger zone
+  description: Saves a manual danger zone rectangle for the selected vacuum.
   target:
     entity:
       integration: roborock_plus
@@ -133,8 +133,8 @@ set_safe_zone:
         text:
           type: number
 clear_safe_zone:
-  name: Clear safe zone
-  description: Removes the saved safe zone for the selected vacuum.
+  name: Clear danger zone
+  description: Removes the saved danger zone for the selected vacuum.
   target:
     entity:
       integration: roborock_plus

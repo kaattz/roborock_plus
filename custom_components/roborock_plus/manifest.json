@@ -27,7 +27,7 @@
     "roborock"
   ],
   "issue_tracker": "https://github.com/kaattz/roborock_plus/issues",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "quality_scale": "silver",
   "requirements": [
     "python-roborock==5.5.1",

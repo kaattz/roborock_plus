@@ -27,7 +27,8 @@ from .coordinator import (
 )
 from .entity import RoborockCoordinatedEntityA01, RoborockCoordinatedEntityV1
 from .models import DeviceState
-from .safe_zone import point_in_safe_zone
+from .safe_zone_entities import build_safe_zone_entities
+from .safe_zone import point_clear_of_garage, point_in_safe_zone
 from .safe_zone_store import DISPATCH_SAFE_ZONE_UPDATED, get_safe_zone_store
 
 PARALLEL_UPDATES = 0
@@ -179,11 +180,12 @@ async def async_setup_entry(
         if description.data_protocol in coordinator.request_protocols
     )
     entities.extend(
-        [
-            RoborockHasSafeZoneBinarySensorEntity(coordinator),
-            RoborockInSafeZoneBinarySensorEntity(coordinator),
-        ]
-        for coordinator in config_entry.runtime_data.v1
+        build_safe_zone_entities(
+            config_entry.runtime_data.v1,
+            RoborockHasSafeZoneBinarySensorEntity,
+            RoborockInSafeZoneBinarySensorEntity,
+            RoborockClearOfGarageBinarySensorEntity,
+        )
     )
     async_add_entities(entities)
 
@@ -300,3 +302,30 @@ class RoborockInSafeZoneBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
             return None
         position = map_content_trait.map_data.vacuum_position
         return point_in_safe_zone(position.x, position.y, stored.zone)
+
+
+class RoborockClearOfGarageBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
+    """Whether the robot is outside the configured garage danger zone."""
+
+    _attr_translation_key = "clear_of_garage"
+
+    def __init__(self, coordinator: RoborockDataUpdateCoordinator) -> None:
+        """Initialize the entity."""
+        super().__init__(f"clear_of_garage_{coordinator.duid_slug}", coordinator)
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return True if the robot position is outside the danger zone."""
+        if (
+            (stored := get_safe_zone_store(self.hass).get_loaded(self.coordinator.duid))
+            is None
+        ):
+            return False
+        map_content_trait = self.coordinator.properties_api.map_content
+        if (
+            map_content_trait.map_data is None
+            or map_content_trait.map_data.vacuum_position is None
+        ):
+            return None
+        position = map_content_trait.map_data.vacuum_position
+        return point_clear_of_garage(position.x, position.y, stored.zone)

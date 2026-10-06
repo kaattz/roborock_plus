@@ -41,7 +41,13 @@ from .entity import (
     RoborockCoordinatedEntityB01Q10,
     RoborockCoordinatedEntityV1,
 )
-from .resume_logic import select_resume_command, select_start_or_resume_command
+from .garage_guard import async_guard_garage_open, should_guard_clean_command
+from .resume_logic import (
+    select_resume_command,
+    select_resume_command_for_clean_command,
+    select_resume_command_from_status,
+    select_start_or_resume_command,
+)
 from .safe_zone import DEFAULT_DOCK_X, DEFAULT_DOCK_Y, SafeZone, suggest_safe_zone
 from .safe_zone_store import get_safe_zone_store
 
@@ -222,7 +228,10 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
         command = select_start_or_resume_command(
             in_returning=None if self.coordinator.data is None else self._status_trait.in_returning,
             in_cleaning=None if self.coordinator.data is None else self._status_trait.in_cleaning,
+            state=None if self.coordinator.data is None else self._status_trait.state,
+            fallback_command=self.coordinator.last_resume_command,
         )
+        await self._async_guard_clean_command(command)
         await self.send(command)
 
     async def async_resume_task(self) -> None:
@@ -230,6 +239,8 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
         command = select_resume_command(
             in_returning=None if self.coordinator.data is None else self._status_trait.in_returning,
             in_cleaning=None if self.coordinator.data is None else self._status_trait.in_cleaning,
+            state=None if self.coordinator.data is None else self._status_trait.state,
+            fallback_command=self.coordinator.last_resume_command,
         )
         if command is None:
             raise ServiceValidationError(
@@ -237,9 +248,17 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
                 translation_key="resume_not_available",
             )
         await self.send(command)
+        self.coordinator.last_resume_command = None
 
     async def async_pause(self) -> None:
         """Pause the vacuum."""
+        resume_command = select_resume_command_from_status(
+            state=None if self.coordinator.data is None else self._status_trait.state,
+            in_returning=None if self.coordinator.data is None else self._status_trait.in_returning,
+            in_cleaning=None if self.coordinator.data is None else self._status_trait.in_cleaning,
+        )
+        if resume_command is not None:
+            self.coordinator.last_resume_command = resume_command
         await self.send(RoborockCommand.APP_PAUSE)
 
     async def async_stop(self, **kwargs: Any) -> None:
@@ -311,6 +330,7 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
         if not current_map_segments:
             return
 
+        await self._async_guard_clean_command(RoborockCommand.APP_SEGMENT_CLEAN)
         await self.send(
             RoborockCommand.APP_SEGMENT_CLEAN,
             [{"segments": current_map_segments}],
@@ -323,7 +343,18 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
         **kwargs: Any,
     ) -> None:
         """Send a command to a vacuum cleaner."""
+        await self._async_guard_clean_command(command)
         await self.send(command, params)
+
+    async def _async_guard_clean_command(
+        self,
+        command: RoborockCommand | str,
+    ) -> None:
+        """Open the garage door before HA-initiated clean commands."""
+        if should_guard_clean_command(command):
+            if resume_command := select_resume_command_for_clean_command(command):
+                self.coordinator.last_resume_command = resume_command
+            await async_guard_garage_open(self.hass, self.coordinator.config_entry.options)
 
     async def get_maps(self) -> ServiceResponse:
         """Get map information such as map id and room ids."""
@@ -345,22 +376,21 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
         }
 
     async def get_vacuum_current_position(self) -> ServiceResponse:
-        """Get the current position of the vacuum from the map."""
+        """Get the current position of the vacuum from the map.
+
+        The device can refuse or time out on a map read while it is busy, so
+        fall back to the position the coordinator last sampled rather than
+        failing outright. `stale` reports which of the two answered.
+        """
         map_content_trait = self.coordinator.properties_api.map_content
-        try:
-            await map_content_trait.refresh()
-        except RoborockException as err:
-            _LOGGER.debug("Failed to refresh map content: %s", err)
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="map_failure",
-            ) from err
-        if map_content_trait.map_data is None:
+        refreshed = await self._async_try_refresh_map_content(map_content_trait)
+        map_data = map_content_trait.map_data
+        if map_data is None:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="map_failure",
             )
-        if (robot_position := map_content_trait.map_data.vacuum_position) is None:
+        if (robot_position := map_data.vacuum_position) is None:
             raise HomeAssistantError(
                 translation_domain=DOMAIN, translation_key="position_not_found"
             )
@@ -368,7 +398,21 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
         return {
             "x": robot_position.x,
             "y": robot_position.y,
+            "stale": not refreshed,
         }
+
+    async def _async_try_refresh_map_content(self, map_content_trait: Any) -> bool:
+        """Refresh the map content, keeping cached data if the device refuses.
+
+        The vacuum rejects or times out on map reads while it is busy, so a
+        failed read is not an error the caller has to surface.
+        """
+        try:
+            await map_content_trait.refresh()
+        except (RoborockException, ValueError) as err:
+            _LOGGER.debug("Keeping cached map content: %s", err)
+            return False
+        return True
 
     async def get_dock_position(self) -> ServiceResponse:
         """Get the fixed dock reference position."""
@@ -404,7 +448,7 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
         map_content_trait = self.coordinator.properties_api.map_content
         try:
             await map_content_trait.refresh()
-        except RoborockException as err:
+        except (RoborockException, ValueError) as err:
             _LOGGER.debug(
                 "Safe-zone suggestion map refresh failed for %s: %s",
                 self.entity_id,
@@ -440,24 +484,21 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
         return result
 
     async def get_safe_zone_editor_context(self) -> ServiceResponse:
-        """Get all frontend editor context in one response."""
+        """Get all frontend editor context in one response.
+
+        The map/home reads below are best-effort: the device refuses or times
+        out on map requests while it is busy (for example mid-clean), and the
+        editor is far more useful with the last known map than with a 500. Only
+        a completely unknown map is treated as an error.
+        """
         try:
             await self._home_trait.refresh()
-        except RoborockException as err:
-            _LOGGER.debug("Failed to refresh home data: %s", err)
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="map_failure",
-            ) from err
+        except (RoborockException, ValueError) as err:
+            _LOGGER.debug(
+                "Falling back to cached home data for %s: %s", self.entity_id, err
+            )
         map_content_trait = self.coordinator.properties_api.map_content
-        try:
-            await map_content_trait.refresh()
-        except RoborockException as err:
-            _LOGGER.debug("Failed to refresh map content: %s", err)
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="map_failure",
-            ) from err
+        await self._async_try_refresh_map_content(map_content_trait)
 
         current_map = self._home_trait.current_map_data
         if current_map is None:

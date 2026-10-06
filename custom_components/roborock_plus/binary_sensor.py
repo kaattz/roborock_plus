@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from roborock.data import CleanFluidStatus, RoborockStateCode
 from roborock.roborock_message import RoborockZeoProtocol
@@ -30,6 +31,7 @@ from .models import DeviceState
 from .safe_zone_entities import build_safe_zone_entities
 from .safe_zone import point_clear_of_garage, point_in_safe_zone
 from .safe_zone_store import DISPATCH_SAFE_ZONE_UPDATED, get_safe_zone_store
+from .v1_task_state import is_v1_task_active
 
 PARALLEL_UPDATES = 0
 
@@ -117,6 +119,17 @@ BINARY_SENSOR_DESCRIPTIONS = [
         device_class=BinarySensorDeviceClass.RUNNING,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda data: data.status.in_cleaning,
+    ),
+    RoborockBinarySensorDescription(
+        key="task_active",
+        translation_key="task_active",
+        device_class=BinarySensorDeviceClass.RUNNING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda data: is_v1_task_active(
+            state=data.status.state,
+            in_cleaning=data.status.in_cleaning,
+            in_returning=data.status.in_returning,
+        ),
     ),
     RoborockBinarySensorDescription(
         key=ATTR_BATTERY_CHARGING,
@@ -294,13 +307,9 @@ class RoborockInSafeZoneBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
             is None
         ):
             return False
-        map_content_trait = self.coordinator.properties_api.map_content
-        if (
-            map_content_trait.map_data is None
-            or map_content_trait.map_data.vacuum_position is None
-        ):
+        position = _fresh_vacuum_position(self.coordinator)
+        if position is None:
             return None
-        position = map_content_trait.map_data.vacuum_position
         return point_in_safe_zone(position.x, position.y, stored.zone)
 
 
@@ -315,17 +324,34 @@ class RoborockClearOfGarageBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
 
     @property
     def is_on(self) -> bool | None:
-        """Return True if the robot position is outside the danger zone."""
+        """Return True if the robot position is outside the danger zone.
+
+        Reports unknown when the position is missing, or too old to act on
+        while a task is running. This is a safety interlock: a stale "clear of
+        garage" reading must never be used to conclude that closing the door is
+        safe.
+        """
         if (
             (stored := get_safe_zone_store(self.hass).get_loaded(self.coordinator.duid))
             is None
         ):
             return False
-        map_content_trait = self.coordinator.properties_api.map_content
-        if (
-            map_content_trait.map_data is None
-            or map_content_trait.map_data.vacuum_position is None
-        ):
+        position = _fresh_vacuum_position(self.coordinator)
+        if position is None:
             return None
-        position = map_content_trait.map_data.vacuum_position
         return point_clear_of_garage(position.x, position.y, stored.zone)
+
+
+def _fresh_vacuum_position(
+    coordinator: RoborockDataUpdateCoordinator,
+) -> Any | None:
+    """Return the vacuum position, or None when it is missing or untrusted."""
+    if not coordinator.is_map_position_fresh():
+        return None
+    map_content_trait = coordinator.properties_api.map_content
+    if (
+        map_content_trait.map_data is None
+        or map_content_trait.map_data.vacuum_position is None
+    ):
+        return None
+    return map_content_trait.map_data.vacuum_position

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import logging
@@ -43,10 +44,19 @@ from .const import (
     Q10_UPDATE_INTERVAL,
     V1_CLOUD_IN_CLEANING_INTERVAL,
     V1_CLOUD_NOT_CLEANING_INTERVAL,
-    V1_LOCAL_IN_CLEANING_INTERVAL,
     V1_LOCAL_NOT_CLEANING_INTERVAL,
 )
 from .models import DeviceState, get_device_info
+from .v1_diagnostics import install_v1_raw_message_diagnostics
+from .v1_map_position import (
+    is_v1_map_position_fresh,
+    should_refresh_v1_map_position,
+)
+from .v1_status_polling import (
+    get_v1_local_status_poll_interval,
+    should_refresh_full_v1_data,
+)
+from .v1_task_state import is_v1_task_active
 
 SCAN_INTERVAL = timedelta(seconds=30)
 
@@ -102,10 +112,13 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
             config_entry=config_entry,
             name=DOMAIN,
             # Assume we can use the local api.
-            update_interval=V1_LOCAL_NOT_CLEANING_INTERVAL,
+            update_interval=get_v1_local_status_poll_interval(config_entry.options),
         )
         self._device = device
         self.properties_api = properties_api
+        self._local_status_poll_interval = get_v1_local_status_poll_interval(
+            config_entry.options
+        )
         self.device_info = get_device_info(device)
         if mac := properties_api.network_info.mac:
             self.device_info[ATTR_CONNECTIONS] = {
@@ -115,10 +128,28 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
         # Keep track of last attempt to refresh maps/rooms to know when to try again.
         self._last_home_update_attempt: datetime
         self.last_home_update: datetime | None = None
+        # Tracks when the vacuum map position was last sampled, so safe-zone
+        # entities can reject a position that is too old to act on.
+        self._last_map_position_attempt: datetime | None = None
+        self.last_map_position_update: datetime | None = None
+        self._map_position_task: asyncio.Task[None] | None = None
         # Tracks the last successful update to control when we report failure
         # to the base class. This is reset on successful data update.
         self._last_update_success_time: datetime | None = None
+        self._last_full_update_success_time: datetime | None = None
         self._has_connected_locally: bool = False
+        self.last_resume_command: str | None = None
+        self._remove_v1_diagnostics_ready_callback = None
+        self._setup_v1_raw_message_diagnostics()
+
+    def _setup_v1_raw_message_diagnostics(self) -> None:
+        """Install raw V1 message logging when the device channel is ready."""
+        install_v1_raw_message_diagnostics(self._device)
+        add_ready_callback = getattr(self._device, "add_ready_callback", None)
+        if callable(add_ready_callback):
+            self._remove_v1_diagnostics_ready_callback = add_ready_callback(
+                install_v1_raw_message_diagnostics
+            )
 
     @cached_property
     def dock_device_info(self) -> DeviceInfo:
@@ -184,6 +215,10 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
             ) from ex
         else:
             self.last_home_update = dt_util.utcnow()
+            # A full home refresh also refreshes the current map content, which
+            # carries the vacuum position used by the safe-zone entities.
+            self.last_map_position_update = dt_util.utcnow()
+            self._last_map_position_attempt = dt_util.utcnow()
 
     async def _verify_api(self) -> None:
         """Verify that the api is reachable."""
@@ -229,12 +264,22 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
         )
         _LOGGER.debug("Updated device properties")
 
+    async def _update_status(self) -> None:
+        """Update only the status trait used by vacuum/status/running entities."""
+        await _refresh_traits([self.properties_api.status])
+        _LOGGER.debug("Updated device status")
+
     async def _async_update_data(self) -> DeviceState | None:
         """Update data via library."""
         await self._verify_api()
+        update_time = dt_util.utcnow()
         try:
             # Update device props and standard api information
-            await self._update_device_prop()
+            if self._should_refresh_full_data(update_time):
+                await self._update_device_prop()
+                self._last_full_update_success_time = update_time
+            else:
+                await self._update_status()
         except UpdateFailed:
             if self._should_suppress_update_failure():
                 _LOGGER.debug(
@@ -251,19 +296,14 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
             and (dt_util.utcnow() - self._last_home_update_attempt)
             > IMAGE_CACHE_INTERVAL
         ) or self.last_update_state != new_status.state_name:
-            self._last_home_update_attempt = dt_util.utcnow()
-            try:
-                await self.update_map()
-            except HomeAssistantError as err:
-                _LOGGER.debug("Failed to update map: %s", err)
+            await self._async_update_map_if_due()
 
-        if self.properties_api.status.in_cleaning:
-            if self._device.is_local_connected:
-                self.update_interval = V1_LOCAL_IN_CLEANING_INTERVAL
-            else:
-                self.update_interval = V1_CLOUD_IN_CLEANING_INTERVAL
-        elif self._device.is_local_connected:
-            self.update_interval = V1_LOCAL_NOT_CLEANING_INTERVAL
+        self._schedule_map_position_update(new_status)
+
+        if self._device.is_local_connected:
+            self.update_interval = self._local_status_poll_interval
+        elif self.properties_api.status.in_cleaning:
+            self.update_interval = V1_CLOUD_IN_CLEANING_INTERVAL
         else:
             self.update_interval = V1_CLOUD_NOT_CLEANING_INTERVAL
         self.last_update_state = self.properties_api.status.state_name
@@ -274,6 +314,81 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
             dnd_timer=self.properties_api.dnd,
             consumable=self.properties_api.consumables,
             clean_summary=self.properties_api.clean_summary,
+        )
+
+    def _should_refresh_full_data(self, update_time: datetime) -> bool:
+        """Return whether this poll should refresh all V1 traits."""
+        if not self._device.is_local_connected:
+            return True
+        return should_refresh_full_v1_data(
+            now=update_time,
+            last_full_update=self._last_full_update_success_time,
+            full_update_interval=V1_LOCAL_NOT_CLEANING_INTERVAL,
+        )
+
+    async def _async_update_map_if_due(self) -> None:
+        """Refresh the full home/map data and record the attempt."""
+        self._last_home_update_attempt = dt_util.utcnow()
+        try:
+            await self.update_map()
+        except HomeAssistantError as err:
+            _LOGGER.debug("Failed to update map: %s", err)
+
+    def _schedule_map_position_update(self, status: Any) -> None:
+        """Sample the vacuum position in the background when it is due.
+
+        The safe-zone entities decide whether it is safe to close the garage
+        door from the vacuum's position, which is only carried in the map
+        content. That content is otherwise refreshed only on a full map update,
+        which is skipped while the device is busy cleaning -- exactly when the
+        position matters most.
+
+        The read runs as a background task so a slow (or timing out) map RPC
+        cannot delay the fast status poll that the same automations rely on.
+        """
+        if not should_refresh_v1_map_position(
+            now=dt_util.utcnow(),
+            last_attempt=self._last_map_position_attempt,
+            task_active=is_v1_task_active(
+                state=status.state,
+                in_cleaning=status.in_cleaning,
+                in_returning=status.in_returning,
+            ),
+            is_local_connected=self._device.is_local_connected,
+        ):
+            return
+        if self._map_position_task is not None and not self._map_position_task.done():
+            return
+
+        self._last_map_position_attempt = dt_util.utcnow()
+        self._map_position_task = self.config_entry.async_create_background_task(
+            self.hass,
+            self._async_update_map_position(),
+            name=f"{DOMAIN}_map_position_{self.duid_slug}",
+        )
+
+    async def _async_update_map_position(self) -> None:
+        """Read the map content so the vacuum position is current."""
+        try:
+            await self.properties_api.map_content.refresh()
+        except (RoborockException, ValueError) as err:
+            # A failed sample leaves the previous position in place; the age
+            # check in `is_map_position_fresh` stops trusting it in time.
+            _LOGGER.debug("Failed to refresh map position: %s", err)
+        else:
+            self.last_map_position_update = dt_util.utcnow()
+
+    def is_map_position_fresh(self) -> bool:
+        """Return whether the last sampled vacuum position may be trusted."""
+        status = self.properties_api.status
+        return is_v1_map_position_fresh(
+            now=dt_util.utcnow(),
+            position_time=self.last_map_position_update,
+            task_active=is_v1_task_active(
+                state=status.state,
+                in_cleaning=status.in_cleaning,
+                in_returning=status.in_returning,
+            ),
         )
 
     def _should_suppress_update_failure(self) -> bool:

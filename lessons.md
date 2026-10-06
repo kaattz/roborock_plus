@@ -1,0 +1,17 @@
+- 2026-04-23: 用户明确说不要建议框时，直接删掉建议框入口，不要继续优化建议算法或展示。
+- 2026-04-23: 当用户用实体总数证明“自动生成实体根本不存在”时，优先怀疑平台注册代码，而不是继续猜实体 ID。
+- 2026-04-25: 用户说 vacuum/sensor/running 三个实体轮询时，按共享 status 数据源设计状态专用轮询，不要把全量协调器轮询整体加快。
+- 2026-04-25: Home Assistant 集成页里 options flow 入口可能是配置条目右侧的齿轮按钮，不一定在三点菜单里。用户截图纠正后要按当前 UI 指引。
+- 2026-04-25: panel_custom 的 config_panel_domain 会占用集成齿轮入口；如果还需要 options flow，就不要给危险区面板设置 config_panel_domain。
+- 2026-04-25: options flow 新增单个运行参数时，不要提交后跳到旧的 drawables 步骤；单参数应一页保存关闭，避免用户二次提交。
+- 2026-04-25: 如果 options flow 已有地图绘制选项，再新增轮询参数时应合并到同一个选项页面；否则旧地图绘制选项会没有入口或需要二次提交。
+- 2026-04-26: running 表示设备当前正在动作，不表示任务仍存在；柜门自动化需要 task_active 这类任务语义实体，pause 状态也应视为任务仍在。
+- 2026-04-27: 用户实测 Roborock V1 只有 status=cleaning 时 APP_PAUSE 才进入可恢复 paused；其他状态下 pause 会停止/取消任务，自动化必须先判断原始 status。
+- 2026-04-27: Roborock V1 pause 后 binary_sensor running 会变 off，因为它映射 in_cleaning；不能用 running 判断任务是否还存在，resume 需要保留 pause 前任务上下文。
+- 2026-04-27: 危险区只能表示位置，不能表示扫地机回基站意图；不能用进入危险区替代 returning_home 触发，否则会在普通清扫靠近柜门时误触发。
+- 2026-04-27: Roborock HA 发起清扫后可能先进入 washing_the_mop，并不会立刻出 dock；柜门开门逻辑不能只绑定清扫命令发送，应绑定实际出 dock/returning 阶段。
+- 2026-04-27: 用户的全屋清洁入口是 button.press 清洁例程（如 button.vacuum_sweeping_and_mopping_simultaneously），不是 vacuum.start；分析柜门保护时必须先区分 service 入口。
+- 2026-04-27: 用户指出 roborock_plus 已设计为拦截清扫入口时，不能把 button.press 例程入口排除在外；若没开门，应优先查 routine button 是否走到 async_guard_garage_open。
+- 2026-04-27: 用户实测中途回洗拖布/充电 returning 状态 pause 后用 app_charge 恢复会取消任务并清零进度；APK 里恢复按钮对应 app_resume，app_charge 只对应回充按钮。
+- 2026-04-27: 官方 roborock 集成有 Manual(custom) 区域可手填服务器 URL（用于 local_roborock_server 这类自建服务）；roborock_plus fork 时漏了这个分支，只加 "custom" 到选项列表会拼出 customiot.roborock.com，必须单独加 async_step_custom_url 分支。
+- 2026-04-27: 安全区实体（clear_of_garage / in_safe_zone）读的是 map_content 里的真空坐标，而地图只在 IMAGE_CACHE_INTERVAL(30s) 或 status 变化时刷新，且 update_map() 先调 discover_home() 会在 cleaning 时抛 RoborockDeviceBusy；实测该实体在 2026-09-20 至 10-03 约 13 天内只变过一次，且那次翻转正好与 status 变化同时发生。修法是后台任务按 10s（任务活跃时）单独采样 map_content，并对任务活跃期间的旧样本判定为 unknown 以失败安全。

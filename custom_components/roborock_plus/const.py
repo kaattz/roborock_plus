@@ -14,7 +14,17 @@ CONF_SHOW_BACKGROUND = "show_background"
 CONF_SHOW_WALLS = "show_walls"
 CONF_SHOW_ROOMS = "show_rooms"
 CONF_REGION = "region"
-REGION_OPTIONS = ["auto", "us", "eu", "ru", "cn"]
+CONF_ROBOROCK_SERVER_URL = "roborock_server_url"
+REGION_AUTO = "auto"
+REGION_CUSTOM = "custom"
+REGION_OPTIONS = [
+    REGION_AUTO,
+    "us",
+    "eu",
+    "ru",
+    "cn",
+    REGION_CUSTOM,
+]
 
 # Option Flow steps
 DRAWABLES = "drawables"

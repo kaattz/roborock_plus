@@ -32,6 +32,7 @@ from .entity import (
     RoborockEntity,
     RoborockEntityV1,
 )
+from .garage_guard import async_guard_garage_open
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -222,6 +223,10 @@ class RoborockRoutineButtonEntity(RoborockEntity, ButtonEntity):
 
     async def async_press(self, **kwargs: Any) -> None:
         """Press the button."""
+        await async_guard_garage_open(
+            self.hass,
+            self._coordinator.config_entry.options,
+        )
         await self._coordinator.execute_routines(self._routine_id)
 
 

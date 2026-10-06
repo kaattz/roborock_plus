@@ -10,7 +10,9 @@
       "invalid_email": "There is no account associated with the email you entered, please try again.",
       "invalid_email_format": "There is an issue with the formatting of your email - please try again.",
       "invalid_email_or_region": "Either there is no account associated with the email you entered, or there is no account in the selected region.",
+      "invalid_url_format": "The URL must start with http:// or https:// and include a valid host.",
       "too_frequent_code_requests": "You have attempted to request too many codes. Try again later.",
+      "garage_guard_missing_config": "Select a garage door cover, or disable garage door guard.",
       "unknown": "Unknown error.",
       "unknown_roborock": "There was an unknown Roborock exception - please check your logs.",
       "unknown_url": "There was an issue determining the correct URL for your Roborock account - please check your logs."
@@ -25,6 +27,15 @@
         },
         "description": "Type the verification code sent to your email"
       },
+      "custom_url": {
+        "data": {
+          "roborock_server_url": "Roborock server URL"
+        },
+        "data_description": {
+          "roborock_server_url": "The URL of the Roborock server. Use this for a self-hosted server such as Roborock Local Server."
+        },
+        "description": "Enter the Roborock server URL to connect to."
+      },
       "reauth_confirm": {
         "description": "The Roborock Plus integration needs to re-authenticate your account",
         "title": "Reauthenticate"
@@ -35,7 +46,7 @@
           "username": "Email"
         },
         "data_description": {
-          "region": "The server region your Roborock account is registered in when setting up the app. Auto is recommended unless you are having issues.",
+          "region": "The server region your Roborock account is registered in when setting up the app. Auto is recommended unless you are having issues. Select Manual to point Roborock Plus at a self-hosted server instead.",
           "username": "The email address used to sign in to the Roborock app."
         },
         "description": "Enter your Roborock email address for Roborock Plus."
@@ -62,6 +73,9 @@
       },
       "in_cleaning": {
         "name": "Cleaning"
+      },
+      "task_active": {
+        "name": "Task active"
       },
       "mop_attached": {
         "name": "Mop attached"
@@ -652,6 +666,12 @@
     "command_failed": {
       "message": "Error while calling {command}"
     },
+    "garage_guard_cover_not_found": {
+      "message": "Garage door cover {entity_id} was not found."
+    },
+    "garage_guard_open_timeout": {
+      "message": "Garage door cover {entity_id} did not reach 95% before the timeout."
+    },
     "home_data_fail": {
       "message": "Failed to get Roborock home data"
     },
@@ -713,6 +733,8 @@
         "data": {
           "charger": "Charger",
           "cleaned_area": "Cleaned area",
+          "garage_door_entity_id": "Garage door cover",
+          "garage_guard_enabled": "Garage door guard",
           "goto_path": "Go-to path",
           "ignored_obstacles": "Ignored obstacles",
           "ignored_obstacles_with_photo": "Ignored obstacles with photo",
@@ -728,6 +750,7 @@
           "show_background": "Show background",
           "show_rooms": "Show rooms",
           "show_walls": "Show walls",
+          "v1_local_status_poll_interval": "Local status polling interval",
           "vacuum_position": "Vacuum position",
           "virtual_walls": "Virtual walls",
           "zones": "Zones"
@@ -735,6 +758,8 @@
         "data_description": {
           "charger": "Show the charger on the map.",
           "cleaned_area": "Show the area cleaned on the map.",
+          "garage_door_entity_id": "The cover entity for the vacuum cabinet door. The door is considered open when current_position is 95 or higher.",
+          "garage_guard_enabled": "Before HA-initiated clean commands, open the cabinet door and wait until it is fully open.",
           "goto_path": "Show the go-to path on the map.",
           "ignored_obstacles": "Show ignored obstacles on the map.",
           "ignored_obstacles_with_photo": "Show ignored obstacles with photos on the map.",
@@ -750,11 +775,16 @@
           "show_background": "Add a background to the map.",
           "show_rooms": "Show the rooms on the map.",
           "show_walls": "Show the walls on the map.",
+          "v1_local_status_poll_interval": "Enter a value from 1 to 60 seconds. This only refreshes vacuum state, status sensor, and cleaning binary sensor.",
           "vacuum_position": "Show the vacuum position on the map.",
           "virtual_walls": "Show virtual walls on the map.",
           "zones": "Show zones on the map."
         },
-        "description": "Specify which features to draw on the map."
+        "description": "Configure local status polling, garage door guard, and map drawing options.\n\nCurrent status polling interval: {current_interval} seconds.\n\nGarage door guard only affects clean commands started from Home Assistant.",
+        "error": {
+          "garage_guard_missing_config": "Select a garage door cover, or disable garage door guard."
+        },
+        "title": "Roborock Plus options"
       }
     }
   },
@@ -763,6 +793,7 @@
       "options": {
         "auto": "Auto",
         "cn": "CN",
+        "custom": "Manual",
         "eu": "EU",
         "ru": "RU",
         "us": "US"

@@ -1,5 +1,27 @@
 {
   "title": "Roborock Plus",
+  "config": {
+    "error": {
+      "garage_guard_missing_config": "请选择柜门实体，或者关闭柜门保护。",
+      "invalid_url_format": "URL 必须以 http:// 或 https:// 开头，并且包含有效的主机名。"
+    },
+    "step": {
+      "custom_url": {
+        "data": {
+          "roborock_server_url": "Roborock 服务器地址"
+        },
+        "data_description": {
+          "roborock_server_url": "Roborock 服务器的 URL。自建服务器（例如 Roborock Local Server）请填这里。"
+        },
+        "description": "请输入要连接的 Roborock 服务器地址。"
+      },
+      "user": {
+        "data_description": {
+          "region": "你的 Roborock 账号在 App 中注册的服务器区域。除非遇到问题，否则推荐 Auto。选择 Manual 可以把 Roborock Plus 指向自建服务器。"
+        }
+      }
+    }
+  },
   "entity": {
     "binary_sensor": {
       "clean_box_empty": { "name": "清水箱" },
@@ -7,6 +29,7 @@
       "detergent_empty": { "name": "洗涤剂" },
       "dirty_box_full": { "name": "污水箱" },
       "in_cleaning": { "name": "正在清扫" },
+      "task_active": { "name": "任务进行中" },
       "mop_attached": { "name": "附有拖把" },
       "mop_drying_status": { "name": "拖布烘干" },
       "softener_empty": { "name": "柔顺剂" },
@@ -137,6 +160,47 @@
       "dnd_start_time": { "name": "勿扰开始" },
       "off_peak_end": { "name": "错峰结束" },
       "off_peak_start": { "name": "错峰开始" }
+    }
+  },
+  "exceptions": {
+    "garage_guard_cover_not_found": {
+      "message": "没有找到柜门实体 {entity_id}。"
+    },
+    "garage_guard_open_timeout": {
+      "message": "柜门实体 {entity_id} 超时后仍未打开到 95%。"
+    }
+  },
+  "options": {
+    "step": {
+      "drawables": {
+        "data": {
+          "garage_door_entity_id": "柜门实体",
+          "garage_guard_enabled": "柜门保护",
+          "v1_local_status_poll_interval": "本地状态轮询间隔"
+        },
+        "data_description": {
+          "garage_door_entity_id": "扫地机柜门的 cover 实体。current_position 大于等于 95 时认为门已完全打开。",
+          "garage_guard_enabled": "HA 发起清扫命令前，先打开柜门并等待门完全打开。",
+          "v1_local_status_poll_interval": "请输入 1 到 60 秒。这里只刷新扫地机状态、状态传感器、正在清扫传感器。"
+        },
+        "description": "配置本地状态轮询、柜门保护和地图绘制选项。\n\n当前状态轮询间隔：{current_interval} 秒。\n\n柜门保护只影响从 Home Assistant 发起的清扫命令。",
+        "error": {
+          "garage_guard_missing_config": "请选择柜门实体，或者关闭柜门保护。"
+        },
+        "title": "Roborock Plus 选项"
+      }
+    }
+  },
+  "selector": {
+    "region": {
+      "options": {
+        "auto": "自动",
+        "cn": "中国",
+        "custom": "手动",
+        "eu": "欧洲",
+        "ru": "俄罗斯",
+        "us": "美国"
+      }
     }
   },
   "services": {

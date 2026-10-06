@@ -30,9 +30,17 @@ from homeassistant.core import callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+    EntitySelector,
+    EntitySelectorConfig,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
 )
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 
@@ -41,6 +49,7 @@ from .const import (
     CONF_BASE_URL,
     CONF_ENTRY_CODE,
     CONF_REGION,
+    CONF_ROBOROCK_SERVER_URL,
     CONF_SHOW_BACKGROUND,
     CONF_SHOW_ROOMS,
     CONF_SHOW_WALLS,
@@ -48,7 +57,20 @@ from .const import (
     DEFAULT_DRAWABLES,
     DOMAIN,
     DRAWABLES,
+    REGION_AUTO,
+    REGION_CUSTOM,
     REGION_OPTIONS,
+)
+from .garage_guard import (
+    CONF_GARAGE_DOOR_ENTITY_ID,
+    CONF_GARAGE_GUARD_ENABLED,
+)
+from .server_url import is_valid_server_url, normalize_server_url
+from .v1_status_polling import (
+    CONF_V1_LOCAL_STATUS_POLL_INTERVAL,
+    DEFAULT_V1_LOCAL_STATUS_POLL_INTERVAL,
+    MAX_V1_LOCAL_STATUS_POLL_INTERVAL,
+    MIN_V1_LOCAL_STATUS_POLL_INTERVAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -76,8 +98,10 @@ class RoborockFlowHandler(ConfigFlow, domain=DOMAIN):
             region = user_input[CONF_REGION]
             self._username = username
             _LOGGER.debug("Requesting code for Roborock account")
+            if region == REGION_CUSTOM:
+                return await self.async_step_custom_url()
             base_url = None
-            if region != "auto":
+            if region != REGION_AUTO:
                 base_url = f"https://{region}iot.roborock.com"
             self._client = RoborockApiClient(
                 username,
@@ -93,13 +117,55 @@ class RoborockFlowHandler(ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_USERNAME): str,
-                    vol.Required(CONF_REGION, default="auto"): SelectSelector(
+                    vol.Required(CONF_REGION, default=REGION_AUTO): SelectSelector(
                         SelectSelectorConfig(
                             options=REGION_OPTIONS,
                             mode=SelectSelectorMode.DROPDOWN,
                             translation_key="region",
                         )
                     ),
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_custom_url(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle custom server URL entry.
+
+        Used for self-hosted Roborock servers such as Roborock Local Server,
+        where the account is served from a user-provided base URL rather than
+        one of the fixed regional cloud endpoints.
+        """
+        errors: dict[str, str] = {}
+        assert self._username
+        if user_input is not None:
+            url = user_input[CONF_ROBOROCK_SERVER_URL]
+            if not is_valid_server_url(url):
+                errors[CONF_ROBOROCK_SERVER_URL] = "invalid_url_format"
+            else:
+                self._client = RoborockApiClient(
+                    self._username,
+                    base_url=normalize_server_url(url),
+                    session=async_get_clientsession(self.hass),
+                )
+                errors = await self._request_code()
+                if not errors:
+                    return await self.async_step_code()
+
+        return self.async_show_form(
+            step_id="custom_url",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_ROBOROCK_SERVER_URL,
+                        default=(
+                            user_input[CONF_ROBOROCK_SERVER_URL]
+                            if user_input is not None
+                            else "https://usiot.roborock.com"
+                        ),
+                    ): TextSelector(TextSelectorConfig(type=TextSelectorType.URL)),
                 }
             ),
             errors=errors,
@@ -240,19 +306,64 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Manage the options."""
-        return await self.async_step_drawables()
+        return await self.async_step_drawables(user_input)
 
     async def async_step_drawables(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Manage the map object drawable options."""
+        """Manage status polling and map drawable options."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            self.options[CONF_SHOW_BACKGROUND] = user_input.pop(CONF_SHOW_BACKGROUND)
-            self.options[CONF_SHOW_ROOMS] = user_input.pop(CONF_SHOW_ROOMS)
-            self.options[CONF_SHOW_WALLS] = user_input.pop(CONF_SHOW_WALLS)
-            self.options.setdefault(DRAWABLES, {}).update(user_input)
-            return self.async_create_entry(title="", data=self.options)
-        data_schema = {}
+            self.options[CONF_V1_LOCAL_STATUS_POLL_INTERVAL] = int(
+                user_input.pop(CONF_V1_LOCAL_STATUS_POLL_INTERVAL)
+            )
+            self.options[CONF_GARAGE_GUARD_ENABLED] = bool(
+                user_input.pop(CONF_GARAGE_GUARD_ENABLED)
+            )
+            self.options[CONF_GARAGE_DOOR_ENTITY_ID] = user_input.pop(
+                CONF_GARAGE_DOOR_ENTITY_ID, ""
+            )
+            if self.options[CONF_GARAGE_GUARD_ENABLED] and (
+                not self.options[CONF_GARAGE_DOOR_ENTITY_ID]
+            ):
+                errors["base"] = "garage_guard_missing_config"
+            else:
+                self.options[CONF_SHOW_BACKGROUND] = user_input.pop(CONF_SHOW_BACKGROUND)
+                self.options[CONF_SHOW_ROOMS] = user_input.pop(CONF_SHOW_ROOMS)
+                self.options[CONF_SHOW_WALLS] = user_input.pop(CONF_SHOW_WALLS)
+                self.options.setdefault(DRAWABLES, {}).update(user_input)
+                return self.async_create_entry(title="", data=self.options)
+
+        current_interval = self.options.get(
+            CONF_V1_LOCAL_STATUS_POLL_INTERVAL,
+            DEFAULT_V1_LOCAL_STATUS_POLL_INTERVAL,
+        )
+        data_schema = {
+            vol.Required(
+                CONF_V1_LOCAL_STATUS_POLL_INTERVAL,
+                default=current_interval,
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_V1_LOCAL_STATUS_POLL_INTERVAL,
+                    max=MAX_V1_LOCAL_STATUS_POLL_INTERVAL,
+                    step=1,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="s",
+                ),
+            )
+        }
+        data_schema[
+            vol.Required(
+                CONF_GARAGE_GUARD_ENABLED,
+                default=self.options.get(CONF_GARAGE_GUARD_ENABLED, False),
+            )
+        ] = bool
+        data_schema[
+            vol.Optional(
+                CONF_GARAGE_DOOR_ENTITY_ID,
+                default=self.options.get(CONF_GARAGE_DOOR_ENTITY_ID, ""),
+            )
+        ] = EntitySelector(EntitySelectorConfig(domain="cover"))
         for drawable, default_value in DEFAULT_DRAWABLES.items():
             data_schema[
                 vol.Required(
@@ -283,4 +394,6 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
         return self.async_show_form(
             step_id=DRAWABLES,
             data_schema=vol.Schema(data_schema),
+            errors=errors,
+            description_placeholders={"current_interval": str(current_interval)},
         )

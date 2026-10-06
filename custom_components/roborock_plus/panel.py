@@ -44,6 +44,5 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
         sidebar_title="Roborock Plus Zones",
         sidebar_icon="mdi:vector-rectangle",
         require_admin=True,
-        config_panel_domain=DOMAIN,
     )
     hass.data[DATA_PANEL_REGISTERED] = True

@@ -26,6 +26,7 @@ def _load(name: str, path: Path):
 
 SERVER_URL = _load("rp_server_url_under_test", COMPONENT_DIR / "server_url.py")
 is_valid_server_url = SERVER_URL.is_valid_server_url
+is_official_cloud_url = SERVER_URL.is_official_cloud_url
 normalize_server_url = SERVER_URL.normalize_server_url
 
 REGION_OPTIONS = [
@@ -87,6 +88,46 @@ def test_normalize_server_url_trims_whitespace() -> None:
     assert normalize_server_url("  https://api-rr.example.com:555 ") == (
         "https://api-rr.example.com:555"
     )
+
+
+def test_official_cloud_urls_are_recognised() -> None:
+    """These are the URLs the polling cadence must stay conservative for."""
+    for url in (
+        "https://usiot.roborock.com",
+        "https://euiot.roborock.com",
+        "https://cniot.roborock.com",
+        "https://ruiot.roborock.com",
+        "https://api-us.roborock.com",
+        "https://ROBOROCK.COM",
+        "https://roborock.com",
+    ):
+        assert is_official_cloud_url(url), url
+
+
+def test_self_hosted_urls_are_not_treated_as_official() -> None:
+    for url in (
+        "https://api-rr.example.com:555",
+        "http://192.168.1.10:555",
+        "https://roborock.example.com",
+        "https://notroborock.com",
+        "https://api-roborock.local",
+    ):
+        assert not is_official_cloud_url(url), url
+
+
+def test_unknown_base_url_is_treated_as_official() -> None:
+    """Fail safe: only a URL we can prove is self-hosted unlocks fast polling."""
+    for value in (None, "", "not a url", "https://", 123, {}):
+        assert is_official_cloud_url(value), value
+
+
+def test_coordinator_uses_the_base_url_to_pick_the_cadence() -> None:
+    config_flow_free = (COMPONENT_DIR / "coordinator.py").read_text(encoding="utf-8")
+
+    assert "is_official_cloud_url" in config_flow_free
+    assert "is_official_cloud=self.is_official_cloud" in config_flow_free
+    # The misleading signal must be gone: map reads do not use the local link.
+    assert "is_local_connected=self._device.is_local_connected" not in config_flow_free
 
 
 def test_manual_label_present_in_every_translation() -> None:

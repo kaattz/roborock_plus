@@ -748,6 +748,7 @@
           "show_rooms": "Show rooms",
           "show_walls": "Show walls",
           "v1_local_status_poll_interval": "Local status polling interval",
+          "v1_map_position_poll_interval": "Danger-zone position polling interval",
           "vacuum_position": "Vacuum position",
           "virtual_walls": "Virtual walls",
           "zones": "Zones"
@@ -773,11 +774,12 @@
           "show_rooms": "Show the rooms on the map.",
           "show_walls": "Show the walls on the map.",
           "v1_local_status_poll_interval": "Enter a value from 1 to 60 seconds. This only refreshes vacuum state, status sensor, and cleaning binary sensor.",
+          "v1_map_position_poll_interval": "Enter 0 to choose automatically from the configured server, or a value from 1 to 300 seconds. This controls how often the vacuum position used by the danger-zone sensors is re-read. Leave it at 0 unless you self-host the server: map data always comes from the server, and polling Roborock's cloud too fast can get the account rate limited.",
           "vacuum_position": "Show the vacuum position on the map.",
           "virtual_walls": "Show virtual walls on the map.",
           "zones": "Show zones on the map."
         },
-        "description": "Configure local status polling, garage door guard, and map drawing options.\n\nCurrent status polling interval: {current_interval} seconds.\n\nGarage door guard only affects clean commands started from Home Assistant.",
+        "description": "Configure local status polling, garage door guard, and map drawing options.\n\nCurrent status polling interval: {current_interval} seconds.\n\nDanger-zone position polling interval: {current_map_interval} seconds. 0 selects this automatically from the configured server.\n\nGarage door guard only affects clean commands started from Home Assistant.",
         "error": {
           "garage_guard_missing_config": "Select a garage door cover, or disable garage door guard."
         },

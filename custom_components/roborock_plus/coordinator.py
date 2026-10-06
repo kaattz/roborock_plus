@@ -39,6 +39,7 @@ from homeassistant.util import dt as dt_util, slugify
 
 from .const import (
     A01_UPDATE_INTERVAL,
+    CONF_BASE_URL,
     DOMAIN,
     IMAGE_CACHE_INTERVAL,
     Q10_UPDATE_INTERVAL,
@@ -47,9 +48,11 @@ from .const import (
     V1_LOCAL_NOT_CLEANING_INTERVAL,
 )
 from .models import DeviceState, get_device_info
+from .server_url import is_official_cloud_url
 from .v1_diagnostics import install_v1_raw_message_diagnostics
 from .v1_map_position import (
     is_v1_map_position_fresh,
+    resolve_map_position_intervals,
     should_refresh_v1_map_position,
 )
 from .v1_status_polling import (
@@ -150,6 +153,17 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
             self._remove_v1_diagnostics_ready_callback = add_ready_callback(
                 install_v1_raw_message_diagnostics
             )
+
+    @cached_property
+    def is_official_cloud(self) -> bool:
+        """Return whether this entry talks to Roborock's own servers.
+
+        Map content is fetched over MQTT with no local fallback (the trait is
+        marked `map_rpc_channel` upstream), so every map read counts against
+        whichever server is configured. Only a base URL we can prove is
+        self-hosted is allowed to poll aggressively.
+        """
+        return is_official_cloud_url(self.config_entry.data.get(CONF_BASE_URL))
 
     @cached_property
     def dock_device_info(self) -> DeviceInfo:
@@ -343,6 +357,11 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
         which is skipped while the device is busy cleaning -- exactly when the
         position matters most.
 
+        Map reads always travel to the configured server (the trait is marked
+        `map_rpc_channel` upstream and has no local fallback), so the cadence
+        comes from `is_official_cloud`: aggressive only against a self-hosted
+        server, conservative against Roborock's own.
+
         The read runs as a background task so a slow (or timing out) map RPC
         cannot delay the fast status poll that the same automations rely on.
         """
@@ -354,7 +373,8 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
                 in_cleaning=status.in_cleaning,
                 in_returning=status.in_returning,
             ),
-            is_local_connected=self._device.is_local_connected,
+            is_official_cloud=self.is_official_cloud,
+            options=self.config_entry.options,
         ):
             return
         if self._map_position_task is not None and not self._map_position_task.done():
@@ -381,6 +401,10 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
     def is_map_position_fresh(self) -> bool:
         """Return whether the last sampled vacuum position may be trusted."""
         status = self.properties_api.status
+        active_interval, _ = resolve_map_position_intervals(
+            self.config_entry.options,
+            is_official_cloud=self.is_official_cloud,
+        )
         return is_v1_map_position_fresh(
             now=dt_util.utcnow(),
             position_time=self.last_map_position_update,
@@ -389,6 +413,8 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
                 in_cleaning=status.in_cleaning,
                 in_returning=status.in_returning,
             ),
+            is_official_cloud=self.is_official_cloud,
+            active_interval=active_interval,
         )
 
     def _should_suppress_update_failure(self) -> bool:

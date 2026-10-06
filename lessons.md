@@ -14,4 +14,7 @@
 - 2026-04-27: 用户指出 roborock_plus 已设计为拦截清扫入口时，不能把 button.press 例程入口排除在外；若没开门，应优先查 routine button 是否走到 async_guard_garage_open。
 - 2026-04-27: 用户实测中途回洗拖布/充电 returning 状态 pause 后用 app_charge 恢复会取消任务并清零进度；APK 里恢复按钮对应 app_resume，app_charge 只对应回充按钮。
 - 2026-04-27: 官方 roborock 集成有 Manual(custom) 区域可手填服务器 URL（用于 local_roborock_server 这类自建服务）；roborock_plus fork 时漏了这个分支，只加 "custom" 到选项列表会拼出 customiot.roborock.com，必须单独加 async_step_custom_url 分支。
-- 2026-04-27: 安全区实体（clear_of_garage / in_safe_zone）读的是 map_content 里的真空坐标，而地图只在 IMAGE_CACHE_INTERVAL(30s) 或 status 变化时刷新，且 update_map() 先调 discover_home() 会在 cleaning 时抛 RoborockDeviceBusy；实测该实体在 2026-09-20 至 10-03 约 13 天内只变过一次，且那次翻转正好与 status 变化同时发生。修法是后台任务按 10s（任务活跃时）单独采样 map_content，并对任务活跃期间的旧样本判定为 unknown 以失败安全。
+- 2026-04-27: 安全区实体（clear_of_garage / in_safe_zone）读的是 map_content 里的真空坐标，而地图只在 IMAGE_CACHE_INTERVAL(30s) 或 status 变化时刷新，且 update_map() 先调 discover_home() 会在 cleaning 时抛 RoborockDeviceBusy；实测该实体在 2026-09-20 至 10-03 约 13 天内只变过一次，且那次翻转正好与 status 变化同时发生。修法是后台任务单独采样 map_content，并对任务活跃期间的旧样本判定为 unknown 以失败安全。
+- 2026-04-27: 用户提醒官方服务器轮询太密会被 ban。核实 python-roborock 源码确认 MapContentTrait/MapsTrait 被标记 @common.map_rpc_channel / @common.mqtt_rpc_channel，map_rpc_channel 硬编码只用 MQTT 无本地回退，所以地图数据始终走服务器。因此不能用 is_local_connected 当"别打云端"的闸门（两者无关），必须按 base_url 判断服务器是谁：官方云 60s/300s 且手动值有 30s 硬下限，自建 10s/60s。
+- 2026-04-27: 坐标样本的有效期不能设最小值下限。最初给 max_age 加了 60s floor，结果 10s 采样时可以容忍 5 次连续失败，等于让过期读数继续回答安全问题；改成 max_age = 采样间隔 × 2，任何配置都只容忍 1 次失败。
+- 2026-04-27: 柜门自动化等 clear_of_garage 的窗口只有 2 分钟，官方云 60s 采样下最坏情况要等 60s 才有新坐标，叠加一次失败就越过窗口。自建服务器把采样降到 10s 才从容——这是切本地服务器最实际的理由。

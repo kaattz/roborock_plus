@@ -65,7 +65,18 @@ from .garage_guard import (
     CONF_GARAGE_DOOR_ENTITY_ID,
     CONF_GARAGE_GUARD_ENABLED,
 )
-from .server_url import is_valid_server_url, normalize_server_url
+from .server_url import (
+    is_official_cloud_url,
+    is_valid_server_url,
+    normalize_server_url,
+)
+from .v1_map_position import (
+    CONF_V1_MAP_POSITION_POLL_INTERVAL,
+    DEFAULT_V1_MAP_POSITION_POLL_INTERVAL,
+    MAX_V1_MAP_POSITION_POLL_INTERVAL,
+    MIN_V1_MAP_POSITION_POLL_INTERVAL,
+    resolve_map_position_intervals,
+)
 from .v1_status_polling import (
     CONF_V1_LOCAL_STATUS_POLL_INTERVAL,
     DEFAULT_V1_LOCAL_STATUS_POLL_INTERVAL,
@@ -317,6 +328,9 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
             self.options[CONF_V1_LOCAL_STATUS_POLL_INTERVAL] = int(
                 user_input.pop(CONF_V1_LOCAL_STATUS_POLL_INTERVAL)
             )
+            self.options[CONF_V1_MAP_POSITION_POLL_INTERVAL] = int(
+                user_input.pop(CONF_V1_MAP_POSITION_POLL_INTERVAL)
+            )
             self.options[CONF_GARAGE_GUARD_ENABLED] = bool(
                 user_input.pop(CONF_GARAGE_GUARD_ENABLED)
             )
@@ -338,6 +352,10 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
             CONF_V1_LOCAL_STATUS_POLL_INTERVAL,
             DEFAULT_V1_LOCAL_STATUS_POLL_INTERVAL,
         )
+        current_map_interval = self.options.get(
+            CONF_V1_MAP_POSITION_POLL_INTERVAL,
+            DEFAULT_V1_MAP_POSITION_POLL_INTERVAL,
+        )
         data_schema = {
             vol.Required(
                 CONF_V1_LOCAL_STATUS_POLL_INTERVAL,
@@ -350,7 +368,19 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
                     mode=NumberSelectorMode.BOX,
                     unit_of_measurement="s",
                 ),
-            )
+            ),
+            vol.Required(
+                CONF_V1_MAP_POSITION_POLL_INTERVAL,
+                default=current_map_interval,
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_V1_MAP_POSITION_POLL_INTERVAL,
+                    max=MAX_V1_MAP_POSITION_POLL_INTERVAL,
+                    step=1,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="s",
+                ),
+            ),
         }
         data_schema[
             vol.Required(
@@ -391,9 +421,19 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
                 default=self.config_entry.options.get(CONF_SHOW_WALLS, True),
             )
         ] = bool
+        is_official_cloud = is_official_cloud_url(
+            self.config_entry.data.get(CONF_BASE_URL)
+        )
+        resolved_map_interval, _ = resolve_map_position_intervals(
+            self.options,
+            is_official_cloud=is_official_cloud,
+        )
         return self.async_show_form(
             step_id=DRAWABLES,
             data_schema=vol.Schema(data_schema),
             errors=errors,
-            description_placeholders={"current_interval": str(current_interval)},
+            description_placeholders={
+                "current_interval": str(current_interval),
+                "current_map_interval": str(int(resolved_map_interval.total_seconds())),
+            },
         )

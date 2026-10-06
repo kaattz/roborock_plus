@@ -1,8 +1,55 @@
+# Python
 __pycache__/
 *.py[cod]
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Test / lint / type-check caches
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.tox/
+.nox/
 .coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Build artifacts
 dist/
 build/
+
+# Local reverse-engineering workspace (jadx APK dump, decompiled bundles,
+# python-roborock wheel, tooling). Large and not part of the integration.
+.analysis/
+
+# Home Assistant local configuration and credentials, in case a real config
+# directory is checked out or symlinked alongside the component.
+.storage/
+secrets.yaml
+*.token
+cloudflare_token
+
+# Certificates and keys
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini

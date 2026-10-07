@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from .clean_command_watch import async_watch_clean_command_started
 from .const import DOMAIN
 from .coordinator import (
     RoborockB01Q10UpdateCoordinator,
@@ -228,6 +229,15 @@ class RoborockRoutineButtonEntity(RoborockEntity, ButtonEntity):
             self._coordinator.config_entry.options,
         )
         await self._coordinator.execute_routines(self._routine_id)
+        # A routine runs asynchronously on the server, so the call above
+        # returns before the vacuum actually starts. Watch it so a routine that
+        # fails does not leave the door open unnoticed.
+        async_watch_clean_command_started(
+            self.hass,
+            self._coordinator,
+            "execute_scene",
+            entity_id=self.entity_id,
+        )
 
 
 class RoborockButtonEntityA01(RoborockCoordinatedEntityA01, ButtonEntity):

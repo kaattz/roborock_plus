@@ -41,7 +41,12 @@ from .entity import (
     RoborockCoordinatedEntityB01Q10,
     RoborockCoordinatedEntityV1,
 )
-from .garage_guard import async_guard_garage_open, should_guard_clean_command
+from .clean_command_watch import async_watch_clean_command_started
+from .garage_guard import (
+    async_guard_garage_open,
+    command_value,
+    should_guard_clean_command,
+)
 from .resume_logic import (
     select_resume_command,
     select_resume_command_for_clean_command,
@@ -233,6 +238,7 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
         )
         await self._async_guard_clean_command(command)
         await self.send(command)
+        self._watch_clean_command(command)
 
     async def async_resume_task(self) -> None:
         """Resume the active task."""
@@ -335,6 +341,7 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
             RoborockCommand.APP_SEGMENT_CLEAN,
             [{"segments": current_map_segments}],
         )
+        self._watch_clean_command(RoborockCommand.APP_SEGMENT_CLEAN)
 
     async def async_send_command(
         self,
@@ -345,6 +352,24 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
         """Send a command to a vacuum cleaner."""
         await self._async_guard_clean_command(command)
         await self.send(command, params)
+        self._watch_clean_command(command)
+
+    def _watch_clean_command(self, command: RoborockCommand | str) -> None:
+        """Report a guarded clean command that never starts a task.
+
+        The command call succeeds as soon as the server accepts it, so a
+        routine that fails afterwards leaves the door open with nothing
+        running. Watching here covers every entry point that goes through the
+        guard, rather than only the routine buttons.
+        """
+        if not should_guard_clean_command(command):
+            return
+        async_watch_clean_command_started(
+            self.hass,
+            self.coordinator,
+            command_value(command),
+            entity_id=self.entity_id,
+        )
 
     async def _async_guard_clean_command(
         self,

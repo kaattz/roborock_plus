@@ -20,3 +20,6 @@
 - 2026-04-27: 柜门自动化等 clear_of_garage 的窗口只有 2 分钟，官方云 60s 采样下最坏情况要等 60s 才有新坐标，叠加一次失败就越过窗口。自建服务器把采样降到 10s 才从容——这是切本地服务器最实际的理由。
 - 2026-04-27: HA 2026.8 起 device registry 的标识符/连接只在一个 config entry 内唯一，async_get_device 被弃用（2027.8 起对第三方集成直接报错），remove_config_entry_id 也被弃用。用户日志只报了一处（__init__.py 的 _is_device_disabled），但同类问题共 3 处；要按官方迁移指南全量排查，而不是只修日志里那一条。
 - 2026-04-27: async_get_device_by_identifier / async_get_devices 是 2026.8 才新增的 API（2026.7 没有），所以修这个弃用必须把 hacs.json 的 homeassistant 下限从 2026.1.0 提到 2026.8.0，否则老版本用户会 AttributeError。
+- 2026-10-07: 实测一次真实故障：按「边扫边拖」例程按钮后柜门打开、扫地机没动。根因在 local_roborock_server 的 routine_runner.py：do_scenes_app_start 用 params=[repeat] 发 set_clean_repeat_times，固件回 -10007 invalid params；该命令紧挨在 app_start 之前，被拒后整个例程 raise，app_start 从未发出。改成 {"repeat": repeat} 后正常（A/B/A 实测 + ioBroker 实现同样是对象）。已在 fork kaattz/local_roborock_server 分支 fix/clean-repeat-times-params 修复。
+- 2026-10-07: 从这次故障得出的通用教训——「HTTP 返回 200」不等于「机器人动了」。例程在服务器内部异步执行，集成只看到 execute_routines 成功。而三个 *_plus 自动化的触发条件全是 docked→cleaning，机器人没动就一个都不触发，所有失败分支（vacuum.stop + alert_notify）都挂在这个前提上。即安全网只防「启动了但没走出去」，不防「压根没启动」。
+- 2026-10-07: 柜门是共用的（别名含洗衣机门），且已有「长时间无人自动关闭」依赖 washer_cabinet_occupancy_status。所以清扫命令失败时不能自动关门：失败≠机器人没动（可能只是回报滞后），关门有夹机风险。只做告警，关门留给人。

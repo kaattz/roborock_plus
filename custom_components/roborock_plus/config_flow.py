@@ -45,6 +45,11 @@ from homeassistant.helpers.selector import (
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 
 from . import RoborockConfigEntry
+from .clean_command_watch import (
+    CONF_CLEAN_COMMAND_WATCH_TIMEOUT,
+    DEFAULT_CLEAN_COMMAND_WATCH_TIMEOUT,
+    MAX_CLEAN_COMMAND_WATCH_TIMEOUT,
+)
 from .const import (
     CONF_BASE_URL,
     CONF_ENTRY_CODE,
@@ -336,6 +341,9 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
             self.options[CONF_V1_MAP_POSITION_POLL_INTERVAL] = int(
                 user_input.pop(CONF_V1_MAP_POSITION_POLL_INTERVAL)
             )
+            self.options[CONF_CLEAN_COMMAND_WATCH_TIMEOUT] = int(
+                user_input.pop(CONF_CLEAN_COMMAND_WATCH_TIMEOUT)
+            )
             self.options[CONF_GARAGE_GUARD_ENABLED] = bool(
                 user_input.pop(CONF_GARAGE_GUARD_ENABLED)
             )
@@ -361,6 +369,10 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
             CONF_V1_MAP_POSITION_POLL_INTERVAL,
             DEFAULT_V1_MAP_POSITION_POLL_INTERVAL,
         )
+        current_watch_timeout = self.options.get(
+            CONF_CLEAN_COMMAND_WATCH_TIMEOUT,
+            DEFAULT_CLEAN_COMMAND_WATCH_TIMEOUT,
+        )
         data_schema = {
             vol.Required(
                 CONF_V1_LOCAL_STATUS_POLL_INTERVAL,
@@ -381,6 +393,18 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
                 NumberSelectorConfig(
                     min=MIN_V1_MAP_POSITION_POLL_INTERVAL,
                     max=MAX_V1_MAP_POSITION_POLL_INTERVAL,
+                    step=1,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="s",
+                ),
+            ),
+            vol.Required(
+                CONF_CLEAN_COMMAND_WATCH_TIMEOUT,
+                default=current_watch_timeout,
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0,
+                    max=MAX_CLEAN_COMMAND_WATCH_TIMEOUT,
                     step=1,
                     mode=NumberSelectorMode.BOX,
                     unit_of_measurement="s",

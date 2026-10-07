@@ -24,7 +24,7 @@ _GUARDED_CLEAN_COMMANDS = {
 }
 
 
-def _command_value(command: Any) -> str:
+def command_value(command: Any) -> str:
     """Return the Roborock wire command value."""
     if hasattr(command, "value"):
         return str(command.value)
@@ -33,7 +33,7 @@ def _command_value(command: Any) -> str:
 
 def should_guard_clean_command(command: Any) -> bool:
     """Return whether a command may move the robot out of the dock."""
-    return _command_value(command) in _GUARDED_CLEAN_COMMANDS
+    return command_value(command) in _GUARDED_CLEAN_COMMANDS
 
 
 def is_garage_door_open_enough(position: Any) -> bool:

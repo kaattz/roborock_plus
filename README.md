@@ -49,6 +49,43 @@
 
 > 危险区只表示位置，不能代替 `returning_home` 判断回基站意图；否则普通清扫靠近柜门时会误触发。
 
+### ⚠️ 「命令成功」不等于「机器人动了」
+
+这是柜门保护的一个真实盲区。清扫命令是**异步执行**的：例程在服务器内部跑，HTTP 调用只要被接受就返回成功。如果例程随后失败（例如某条命令被固件拒绝），**扫地机根本不会启动，但 HA 会认为一切正常**。
+
+后果是门被打开了、活没干、却没有任何东西察觉。而上面那套自动化全都以「机器人已经动了」为前提（触发条件是 `docked` → `cleaning`），所以它们一个都不会触发。
+
+为此集成会**在受保护的清扫命令下发后观察一段时间**：如果始终没有任务开始，就发出事件：
+
+```yaml
+event_type: roborock_plus_clean_command_not_started
+data:
+  command: execute_scene          # 或 app_start / app_segment_clean …
+  entity_id: vacuum.g20s_ultra
+  timeout: 60
+  entry_id: <config entry id>
+```
+
+配套自动化（通知方式由你决定）：
+
+```yaml
+trigger:
+  - platform: event
+    event_type: roborock_plus_clean_command_not_started
+action:
+  - action: script.alert_notify
+    data:
+      title: 扫地机没有启动
+      message: >-
+        {{ trigger.event.data.command }} 已下发，但 {{ trigger.event.data.timeout }} 秒内
+        扫地机没有开始任务，柜门可能一直开着。
+      level: warning
+```
+
+选项里的「清扫启动确认时间」控制等待秒数，填 `0` 关闭。默认 60 秒。
+
+> **本集成不会因为这个事件自动关门。** 命令失败并不等于扫地机没动（可能只是状态回报滞后），而柜门是共用的（兼作洗衣机柜门），贸然关门有夹机或困人的风险。事件只负责让你知道，关不关由你和自动化决定。
+
 ### ⚠️ 地图坐标来自服务器，不是本地
 
 这一点很重要：`map_content` / `maps` 这两个 trait 在 `python-roborock` 里被标记为

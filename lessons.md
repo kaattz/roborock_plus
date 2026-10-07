@@ -18,3 +18,5 @@
 - 2026-04-27: 用户提醒官方服务器轮询太密会被 ban。核实 python-roborock 源码确认 MapContentTrait/MapsTrait 被标记 @common.map_rpc_channel / @common.mqtt_rpc_channel，map_rpc_channel 硬编码只用 MQTT 无本地回退，所以地图数据始终走服务器。因此不能用 is_local_connected 当"别打云端"的闸门（两者无关），必须按 base_url 判断服务器是谁：官方云 60s/300s 且手动值有 30s 硬下限，自建 10s/60s。
 - 2026-04-27: 坐标样本的有效期不能设最小值下限。最初给 max_age 加了 60s floor，结果 10s 采样时可以容忍 5 次连续失败，等于让过期读数继续回答安全问题；改成 max_age = 采样间隔 × 2，任何配置都只容忍 1 次失败。
 - 2026-04-27: 柜门自动化等 clear_of_garage 的窗口只有 2 分钟，官方云 60s 采样下最坏情况要等 60s 才有新坐标，叠加一次失败就越过窗口。自建服务器把采样降到 10s 才从容——这是切本地服务器最实际的理由。
+- 2026-04-27: HA 2026.8 起 device registry 的标识符/连接只在一个 config entry 内唯一，async_get_device 被弃用（2027.8 起对第三方集成直接报错），remove_config_entry_id 也被弃用。用户日志只报了一处（__init__.py 的 _is_device_disabled），但同类问题共 3 处；要按官方迁移指南全量排查，而不是只修日志里那一条。
+- 2026-04-27: async_get_device_by_identifier / async_get_devices 是 2026.8 才新增的 API（2026.7 没有），所以修这个弃用必须把 hacs.json 的 homeassistant 下限从 2026.1.0 提到 2026.8.0，否则老版本用户会 AttributeError。

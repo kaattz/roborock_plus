@@ -249,13 +249,18 @@ class RoborockFlowHandler(ConfigFlow, domain=DOMAIN):
         """Handle a flow started by a dhcp discovery."""
         await self._async_handle_discovery_without_unique_id()
         device_registry = dr.async_get(self.hass)
-        device = device_registry.async_get_device(
+        # A connection is only unique per config entry, so ask for every device
+        # matching it: a match owned by this domain means the vacuum is already
+        # configured.
+        devices = device_registry.async_get_devices(
             connections={
                 (dr.CONNECTION_NETWORK_MAC, dr.format_mac(discovery_info.macaddress))
             }
         )
-        if device is not None and any(
-            identifier[0] == DOMAIN for identifier in device.identifiers
+        if any(
+            identifier[0] == DOMAIN
+            for device in devices
+            for identifier in device.identifiers
         ):
             return self.async_abort(reason="already_configured")
         return await self.async_step_user()

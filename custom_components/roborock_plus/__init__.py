@@ -148,7 +148,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: RoborockConfigEntry) -> 
         )
 
     enabled_devices = [
-        device for device in devices if not _is_device_disabled(device_registry, device)
+        device
+        for device in devices
+        if not _is_device_disabled(device_registry, entry.entry_id, device)
     ]
     _LOGGER.debug("%d of %d devices are enabled", len(enabled_devices), len(devices))
 
@@ -198,10 +200,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: RoborockConfigEntry) -> 
 
 def _is_device_disabled(
     device_registry: dr.DeviceRegistry,
+    entry_id: str,
     device: RoborockDevice,
 ) -> bool:
-    """Check if a device is disabled in the device registry."""
-    device_entry = device_registry.async_get_device(identifiers={(DOMAIN, device.duid)})
+    """Check if a device is disabled in the device registry.
+
+    Looked up scoped to the config entry: identifiers are only unique per
+    config entry, so an unscoped lookup would be ambiguous.
+    """
+    device_entry = device_registry.async_get_device_by_identifier(
+        (DOMAIN, device.duid), entry_id
+    )
     return device_entry is not None and device_entry.disabled
 
 
@@ -227,10 +236,9 @@ def _remove_stale_devices(
             "Removing device: %s because it is no longer exists in your account",
             device.name,
         )
-        device_registry.async_update_device(
-            device_id=device.id,
-            remove_config_entry_id=entry.entry_id,
-        )
+        # A device belongs to a single config entry now, so removing it from
+        # the entry is no longer meaningful -- the device itself is removed.
+        device_registry.async_remove_device(device.id)
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: RoborockConfigEntry) -> bool:

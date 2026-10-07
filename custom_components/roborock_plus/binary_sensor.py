@@ -200,6 +200,10 @@ async def async_setup_entry(
             RoborockClearOfGarageBinarySensorEntity,
         )
     )
+    entities.extend(
+        RoborockStuckBinarySensorEntity(coordinator)
+        for coordinator in config_entry.runtime_data.v1
+    )
     async_add_entities(entities)
 
 
@@ -340,6 +344,35 @@ class RoborockClearOfGarageBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
         if position is None:
             return None
         return point_clear_of_garage(position.x, position.y, stored.zone)
+
+
+class RoborockStuckBinarySensorEntity(RoborockCoordinatedEntityV1, BinarySensorEntity):
+    """Whether the robot should be moving but is not.
+
+    Reads the coordinator's tracker rather than the polled status, because the
+    verdict depends on position history that only the coordinator holds.
+    """
+
+    _attr_translation_key = "stuck"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: RoborockDataUpdateCoordinator) -> None:
+        """Initialize the entity."""
+        super().__init__(f"stuck_{coordinator.duid_slug}", coordinator)
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return True while the robot is stuck."""
+        return self.coordinator.is_stuck
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Expose how long the robot has been stuck."""
+        seconds = self.coordinator.stuck_seconds
+        if seconds is None:
+            return None
+        return {"seconds_stuck": int(seconds)}
 
 
 def _fresh_vacuum_position(

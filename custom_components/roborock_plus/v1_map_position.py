@@ -45,7 +45,11 @@ MAP_POSITION_OFFICIAL_MIN_INTERVAL = timedelta(seconds=30)
 # Intervals used against a self-hosted server, where the only cost is local
 # work. Fast sampling here is what removes the staleness that made
 # `clear_of_garage` unusable.
-MAP_POSITION_LOCAL_ACTIVE_INTERVAL = timedelta(seconds=10)
+#
+# Five seconds rather than ten: the stuck detector needs several usable samples
+# inside its window, and the default window is 120s. Anyone who wants more
+# resolution than that can set `v1_map_position_poll_interval` explicitly.
+MAP_POSITION_LOCAL_ACTIVE_INTERVAL = timedelta(seconds=5)
 MAP_POSITION_LOCAL_IDLE_INTERVAL = timedelta(seconds=60)
 
 # While idle, sample this many times less often than while a task is running.

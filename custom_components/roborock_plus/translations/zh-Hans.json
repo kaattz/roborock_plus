@@ -37,7 +37,8 @@
       "water_shortage": { "name": "缺水" },
       "has_safe_zone": { "name": "已配置危险区" },
       "in_safe_zone": { "name": "位于危险区" },
-      "clear_of_garage": { "name": "已离开柜门危险区" }
+      "clear_of_garage": { "name": "已离开柜门危险区" },
+      "stuck": { "name": "卡住" }
     },
     "button": {
       "empty_dustbin": { "name": "倒垃圾盒" },
@@ -178,14 +179,20 @@
           "garage_door_entity_id": "柜门实体",
           "garage_guard_enabled": "柜门保护",
           "v1_local_status_poll_interval": "本地状态轮询间隔",
-          "v1_map_position_poll_interval": "危险区坐标轮询间隔"
+          "v1_map_position_poll_interval": "危险区坐标轮询间隔",
+          "v1_stuck_detection_enabled": "卡住检测",
+          "v1_stuck_radius": "卡住判定半径",
+          "v1_stuck_window": "卡住判定时长"
         },
         "data_description": {
           "clean_command_watch_timeout": "下发清扫命令后，等待这么多秒仍没有任务开始就发出告警事件（roborock_plus_clean_command_not_started）。填 0 关闭此检查。",
           "garage_door_entity_id": "扫地机柜门的 cover 实体。current_position 大于等于 95 时认为门已完全打开。",
           "garage_guard_enabled": "HA 发起清扫命令前，先打开柜门并等待门完全打开。",
           "v1_local_status_poll_interval": "请输入 1 到 60 秒。这里只刷新扫地机状态、状态传感器、正在清扫传感器。",
-          "v1_map_position_poll_interval": "填 0 表示按当前服务器自动决定，或填 1 到 300 秒。这里控制危险区传感器读取扫地机坐标的频率。除非你自建了服务器，否则请保持 0：地图数据始终来自服务器，对 Roborock 云端轮询过快可能导致账号被限流。"
+          "v1_map_position_poll_interval": "填 0 表示按当前服务器自动决定，或填 1 到 300 秒。这里控制危险区传感器读取扫地机坐标的频率。除非你自建了服务器，否则请保持 0：地图数据始终来自服务器，对 Roborock 云端轮询过快可能导致账号被限流。",
+          "v1_stuck_detection_enabled": "扫地机应该移动却停着不动时上报——扫地机顶住柜门就是这个表现。会发出 roborock_plus_vacuum_stuck 事件并点亮「卡住」传感器。本集成只负责上报，停止扫地机交给自动化。",
+          "v1_stuck_radius": "扫地机在地图坐标里允许漂移多大范围仍算「没动」。默认 200 足以滤掉静止采样的 1~2 单位抖动。如果扫地机沿边缓慢作业时被误报卡住，可以调大。",
+          "v1_stuck_window": "扫地机在判定半径内停留多少秒算「卡住」。默认 120。检测需要在这个窗口内有若干次采样，所以也取决于危险区坐标轮询间隔。"
         },
         "description": "配置本地状态轮询、柜门保护和地图绘制选项。\n\n当前状态轮询间隔：{current_interval} 秒。\n\n危险区坐标轮询间隔：{current_map_interval} 秒（0 表示自动）。\n\n柜门保护只影响从 Home Assistant 发起的清扫命令。\n\n清扫启动确认：命令下发后若始终没有任务开始，会发出事件供自动化告警（本集成不会自动关门）。",
         "error": {

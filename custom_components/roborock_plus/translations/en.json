@@ -104,6 +104,9 @@
       },
       "clear_of_garage": {
         "name": "Clear of garage"
+      },
+      "stuck": {
+        "name": "Stuck"
       }
     },
     "button": {
@@ -753,6 +756,9 @@
           "v1_local_status_poll_interval": "Local status polling interval",
           "clean_command_watch_timeout": "Clean command start check",
           "v1_map_position_poll_interval": "Danger-zone position polling interval",
+          "v1_stuck_detection_enabled": "Stuck detection",
+          "v1_stuck_radius": "Stuck movement tolerance",
+          "v1_stuck_window": "Stuck detection window",
           "vacuum_position": "Vacuum position",
           "virtual_walls": "Virtual walls",
           "zones": "Zones"
@@ -780,6 +786,9 @@
           "clean_command_watch_timeout": "Report clean commands that never start after this many seconds. Enter 0 to disable the check.",
           "v1_local_status_poll_interval": "Enter a value from 1 to 60 seconds. This only refreshes vacuum state, status sensor, and cleaning binary sensor.",
           "v1_map_position_poll_interval": "Enter 0 to choose automatically from the configured server, or a value from 1 to 300 seconds. This controls how often the vacuum position used by the danger-zone sensors is re-read. Leave it at 0 unless you self-host the server: map data always comes from the server, and polling Roborock's cloud too fast can get the account rate limited.",
+          "v1_stuck_detection_enabled": "Report when the vacuum should be moving but is not, which is how a robot pressed against the cabinet door shows up. Fires roborock_plus_vacuum_stuck and turns on the stuck binary sensor. Detection only reports; stopping the robot is left to an automation.",
+          "v1_stuck_radius": "How far the vacuum may drift, in map units, and still count as standing still. Default 200 clears the unit-or-two jitter seen between samples of a parked robot. Raise it if the robot is reported stuck while it is slowly working along an edge.",
+          "v1_stuck_window": "How many seconds the vacuum may stay within the movement tolerance before it is reported stuck. Default 120. Detection needs several samples inside this window, so it also depends on the danger-zone polling interval.",
           "vacuum_position": "Show the vacuum position on the map.",
           "virtual_walls": "Show virtual walls on the map.",
           "zones": "Show zones on the map."

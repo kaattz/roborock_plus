@@ -88,6 +88,17 @@ from .v1_status_polling import (
     MAX_V1_LOCAL_STATUS_POLL_INTERVAL,
     MIN_V1_LOCAL_STATUS_POLL_INTERVAL,
 )
+from .v1_stuck_detection import (
+    CONF_V1_STUCK_DETECTION_ENABLED,
+    CONF_V1_STUCK_RADIUS,
+    CONF_V1_STUCK_WINDOW,
+    DEFAULT_V1_STUCK_RADIUS,
+    DEFAULT_V1_STUCK_WINDOW,
+    MAX_V1_STUCK_RADIUS,
+    MAX_V1_STUCK_WINDOW,
+    MIN_V1_STUCK_RADIUS,
+    MIN_V1_STUCK_WINDOW,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -344,6 +355,15 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
             self.options[CONF_CLEAN_COMMAND_WATCH_TIMEOUT] = int(
                 user_input.pop(CONF_CLEAN_COMMAND_WATCH_TIMEOUT)
             )
+            self.options[CONF_V1_STUCK_DETECTION_ENABLED] = bool(
+                user_input.pop(CONF_V1_STUCK_DETECTION_ENABLED)
+            )
+            self.options[CONF_V1_STUCK_WINDOW] = int(
+                user_input.pop(CONF_V1_STUCK_WINDOW)
+            )
+            self.options[CONF_V1_STUCK_RADIUS] = int(
+                user_input.pop(CONF_V1_STUCK_RADIUS)
+            )
             self.options[CONF_GARAGE_GUARD_ENABLED] = bool(
                 user_input.pop(CONF_GARAGE_GUARD_ENABLED)
             )
@@ -372,6 +392,14 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
         current_watch_timeout = self.options.get(
             CONF_CLEAN_COMMAND_WATCH_TIMEOUT,
             DEFAULT_CLEAN_COMMAND_WATCH_TIMEOUT,
+        )
+        current_stuck_window = self.options.get(
+            CONF_V1_STUCK_WINDOW,
+            DEFAULT_V1_STUCK_WINDOW,
+        )
+        current_stuck_radius = self.options.get(
+            CONF_V1_STUCK_RADIUS,
+            DEFAULT_V1_STUCK_RADIUS,
         )
         data_schema = {
             vol.Required(
@@ -410,7 +438,36 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
                     unit_of_measurement="s",
                 ),
             ),
+            vol.Required(
+                CONF_V1_STUCK_WINDOW,
+                default=current_stuck_window,
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_V1_STUCK_WINDOW,
+                    max=MAX_V1_STUCK_WINDOW,
+                    step=1,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="s",
+                ),
+            ),
+            vol.Required(
+                CONF_V1_STUCK_RADIUS,
+                default=current_stuck_radius,
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_V1_STUCK_RADIUS,
+                    max=MAX_V1_STUCK_RADIUS,
+                    step=1,
+                    mode=NumberSelectorMode.BOX,
+                ),
+            ),
         }
+        data_schema[
+            vol.Required(
+                CONF_V1_STUCK_DETECTION_ENABLED,
+                default=self.options.get(CONF_V1_STUCK_DETECTION_ENABLED, True),
+            )
+        ] = bool
         data_schema[
             vol.Required(
                 CONF_GARAGE_GUARD_ENABLED,

@@ -46,6 +46,7 @@
 | `binary_sensor.<vacuum>_clear_of_garage` | 是否已离开危险区 |
 | `binary_sensor.<vacuum>_in_safe_zone` | 是否位于危险区 |
 | `binary_sensor.<vacuum>_safe_zone_configured` | 是否已配置危险区 |
+| `binary_sensor.<vacuum>_stuck` | 是否应该移动却停着不动 |
 
 > 危险区只表示位置，不能代替 `returning_home` 判断回基站意图；否则普通清扫靠近柜门时会误触发。
 
@@ -86,6 +87,80 @@ action:
 
 > **本集成不会因为这个事件自动关门。** 命令失败并不等于扫地机没动（可能只是状态回报滞后），而柜门是共用的（兼作洗衣机柜门），贸然关门有夹机或困人的风险。事件只负责让你知道，关不关由你和自动化决定。
 
+### ⚠️ 任务启动了，但扫地机卡住了
+
+上一个盲区是「命令没生效」。这个是「命令生效了，但机器人动不了」——任务一直是活的，所以上面那套以
+`docked` → `cleaning` 为触发条件的自动化**一个都不会触发**：
+
+- 门没开，扫地机一直顶着门
+- 清扫完回基站，**开着的门板挡住了回充路径**，一直回不去
+
+这两种情况在 HA 里的表现完全一样：任务进行中，但没有位移。
+
+集成通过**坐标采样**识别它：任务状态属于「应该移动」时，如果坐标在一段时间内始终没有超出容差范围，
+就判定卡住。
+
+| 实体 | 作用 |
+| --- | --- |
+| `binary_sensor.<vacuum>_stuck` | 是否卡住（附带 `seconds_stuck` 属性） |
+
+```yaml
+event_type: roborock_plus_vacuum_stuck
+data:
+  entity_id: vacuum.g20s_ultra
+  x: 25728
+  y: 24233
+  state: returning_home      # 卡住时的状态
+  seconds_stuck: 132
+  entry_id: <config entry id>
+```
+
+配套自动化（停止 + 通知）：
+
+```yaml
+trigger:
+  - platform: event
+    event_type: roborock_plus_vacuum_stuck
+action:
+  - action: vacuum.stop
+    target:
+      entity_id: "{{ trigger.event.data.entity_id }}"
+  - action: script.alert_notify
+    data:
+      title: 扫地机卡住了
+      message: >-
+        状态 {{ trigger.event.data.state }}，在
+        ({{ trigger.event.data.x }}, {{ trigger.event.data.y }})
+        停留 {{ trigger.event.data.seconds_stuck }} 秒，已停止。
+      level: warning
+```
+
+> **本集成只负责上报，不会自己停止扫地机。** 停止是一个决定，放在自动化里你才能加自己的条件、
+> 也才能在 trace 里看到它为什么执行。
+
+#### 为什么不会在洗拖布时误报
+
+判断依据是一份**「应该移动」的状态白名单**（`cleaning`、`returning_home`、`docking`、
+`going_to_wash_the_mop` 等），而不是 `binary_sensor.<vacuum>_task_active`。
+
+后者回答的是「任务还在不在」，所以**暂停、洗拖布、回充时它依然是 `on`**。用它做判断，
+每次洗拖布都会误报一次卡住。白名单只列出确定该动的状态，没列到的状态就是不判断 ——
+万一将来固件加了新状态，也只是少判一次，而不会误停一台正常工作的扫地机。
+
+清扫中途回基站充电、洗拖布都属于「合法静止」，因此被排除在判断之外。
+
+#### 相关选项
+
+| 选项 | 默认 | 说明 |
+| --- | --- | --- |
+| 卡住检测 | 开 | 总开关 |
+| 卡住判定时长 | 120 秒 | 坐标在容差内停留多久算卡住 |
+| 卡住判定半径 | 200 | 坐标容差（地图单位）。静止采样本身有 1~2 单位抖动，所以需要容差 |
+
+> 检测质量取决于采样密度：判定窗口内需要有若干次有效采样。自建服务器默认 5 秒采样，
+> 120 秒窗口内有 24 次。**官方云 60 秒采样下这个功能会明显变粗**，这是限流约束带来的固有限制，
+> 不是可以通过调参解决的。
+
 ### ⚠️ 地图坐标来自服务器，不是本地
 
 这一点很重要：`map_content` / `maps` 这两个 trait 在 `python-roborock` 里被标记为
@@ -97,7 +172,7 @@ action:
 | 服务器 | 清扫中采样 | 空闲采样 | 说明 |
 | --- | --- | --- | --- |
 | Roborock 官方云 | 60 秒 | 300 秒 | 太快会被限流甚至封号 |
-| 自建服务器 | 10 秒 | 60 秒 | 只消耗本地资源，可以放心加快 |
+| 自建服务器 | 5 秒 | 60 秒 | 只消耗本地资源，可以放心加快 |
 
 选项里的「危险区坐标轮询间隔」填 `0`（默认）即按服务器自动选择。手动填写时：
 

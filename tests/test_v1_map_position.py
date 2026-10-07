@@ -24,6 +24,16 @@ MODULE = module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+# The stuck detector is loaded the same way: the package `__init__` imports
+# `roborock`, which is not installed for these tests.
+STUCK_PATH = MODULE_PATH.with_name("v1_stuck_detection.py")
+STUCK_SPEC = spec_from_file_location("roborock_plus_v1_stuck_detection_x", STUCK_PATH)
+assert STUCK_SPEC is not None and STUCK_SPEC.loader is not None
+STUCK = module_from_spec(STUCK_SPEC)
+sys.modules[STUCK_SPEC.name] = STUCK
+STUCK_SPEC.loader.exec_module(STUCK)
+DEFAULT_V1_STUCK_WINDOW = STUCK.DEFAULT_V1_STUCK_WINDOW
+
 CONF_V1_MAP_POSITION_POLL_INTERVAL = MODULE.CONF_V1_MAP_POSITION_POLL_INTERVAL
 MAP_POSITION_OFFICIAL_ACTIVE_INTERVAL = MODULE.MAP_POSITION_OFFICIAL_ACTIVE_INTERVAL
 MAP_POSITION_OFFICIAL_IDLE_INTERVAL = MODULE.MAP_POSITION_OFFICIAL_IDLE_INTERVAL
@@ -69,6 +79,30 @@ def test_self_hosted_server_is_polled_fast() -> None:
 
     assert active == MAP_POSITION_LOCAL_ACTIVE_INTERVAL
     assert idle == MAP_POSITION_LOCAL_IDLE_INTERVAL
+
+
+def test_self_hosted_default_supports_stuck_detection() -> None:
+    """Stuck detection needs several samples inside its window.
+
+    The default window is 120s, so at the self-hosted default interval the
+    detector must see well more than a couple of samples.
+    """
+    active, _ = get_map_position_intervals(is_official_cloud=False)
+
+    samples = DEFAULT_V1_STUCK_WINDOW / active.total_seconds()
+    assert samples >= 20, samples
+
+
+def test_official_cloud_default_cannot_support_stuck_detection() -> None:
+    """A documented limitation, pinned so it is not mistaken for a bug.
+
+    The official cadence is a rate-limit decision, so stuck detection is
+    inherently coarse there rather than something this feature can fix.
+    """
+    active, _ = get_map_position_intervals(is_official_cloud=True)
+
+    samples = DEFAULT_V1_STUCK_WINDOW / active.total_seconds()
+    assert samples < 5, samples
 
 
 def test_self_hosted_is_much_faster_than_official() -> None:

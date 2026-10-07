@@ -59,6 +59,13 @@ from .v1_status_polling import (
     get_v1_local_status_poll_interval,
     should_refresh_full_v1_data,
 )
+from .v1_stuck_detection import (
+    EVENT_VACUUM_STUCK,
+    StuckTracker,
+    build_stuck_event_data,
+    resolve_stuck_options,
+    should_assess_movement,
+)
 from .v1_task_state import is_v1_task_active
 
 SCAN_INTERVAL = timedelta(seconds=30)
@@ -136,6 +143,14 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
         self._last_map_position_attempt: datetime | None = None
         self.last_map_position_update: datetime | None = None
         self._map_position_task: asyncio.Task[None] | None = None
+        # Reports a robot that should be moving but is not, which is how a
+        # robot pressed against the cabinet door shows up.
+        self._stuck_options = resolve_stuck_options(config_entry.options)
+        self._stuck_tracker = StuckTracker(
+            window=self._stuck_options.window,
+            radius=self._stuck_options.radius,
+        )
+        self._stuck_event_sent = False
         # Tracks the last successful update to control when we report failure
         # to the base class. This is reset on successful data update.
         self._last_update_success_time: datetime | None = None
@@ -397,6 +412,66 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
             _LOGGER.debug("Failed to refresh map position: %s", err)
         else:
             self.last_map_position_update = dt_util.utcnow()
+            self._observe_stuck_detection()
+
+    def _observe_stuck_detection(self) -> None:
+        """Feed the freshly sampled position to the stuck detector.
+
+        Runs only after a successful read, so a failed refresh cannot supply a
+        repeated position and be mistaken for the robot standing still.
+        """
+        options = self._stuck_options
+        if not options.enabled:
+            return
+
+        status = self.properties_api.status
+        position = self.properties_api.map_content.map_data
+        position = None if position is None else position.vacuum_position
+
+        was_stuck = self._stuck_tracker.is_stuck
+        stuck = self._stuck_tracker.observe(
+            now=dt_util.utcnow(),
+            sample_time=self.last_map_position_update,
+            x=None if position is None else position.x,
+            y=None if position is None else position.y,
+            should_move=should_assess_movement(state=status.state),
+        )
+
+        if not stuck:
+            self._stuck_event_sent = False
+            return
+
+        if was_stuck and self._stuck_event_sent:
+            return
+        self._stuck_event_sent = True
+        self.hass.bus.async_fire(
+            EVENT_VACUUM_STUCK,
+            build_stuck_event_data(
+                entity_id=f"vacuum.{self.duid_slug}",
+                x=None if position is None else position.x,
+                y=None if position is None else position.y,
+                state=status.state,
+                seconds_stuck=self._stuck_tracker.seconds_stuck(dt_util.utcnow()),
+                entry_id=getattr(self.config_entry, "entry_id", None),
+            ),
+        )
+
+    @property
+    def is_stuck(self) -> bool:
+        """Return whether the robot is believed to be stuck."""
+        if not self._stuck_options.enabled:
+            return False
+        return self._stuck_tracker.is_stuck
+
+    @property
+    def is_stuck_detection_enabled(self) -> bool:
+        """Return whether stuck detection is configured on."""
+        return self._stuck_options.enabled
+
+    @property
+    def stuck_seconds(self) -> float | None:
+        """Return how long the robot has been stuck, if it is."""
+        return self._stuck_tracker.seconds_stuck(dt_util.utcnow())
 
     def is_map_position_fresh(self) -> bool:
         """Return whether the last sampled vacuum position may be trusted."""

@@ -93,6 +93,29 @@ def test_coordinator_clears_the_sent_flag_when_not_stuck() -> None:
     assert "self._stuck_event_sent = False" in observe
 
 
+def test_event_reports_the_real_entity_id_not_a_guessed_one() -> None:
+    """The reported entity_id must be one an automation can target.
+
+    The vacuum entity_id is generated from the device name, not the duid, so
+    deriving it as `vacuum.{duid_slug}` produces an id that does not exist --
+    and a follow-up `vacuum.stop` on it fails with nothing in the log.
+    """
+    text = COORDINATOR.read_text(encoding="utf-8")
+    observe = text.split("def _observe_stuck_detection", 1)[1].split(
+        "\n    @property", 1
+    )[0]
+
+    assert "self.vacuum_entity_id" in observe
+    assert 'f"vacuum.{self.duid_slug}"' not in observe
+    assert "f'vacuum.{self.duid_slug}'" not in observe
+
+    # And the resolver reads the registry rather than rebuilding the id.
+    resolver = text.split("def vacuum_entity_id", 1)[1].split("\n    @property", 1)[0]
+    assert "er.async_get" in resolver
+    assert "async_entries_for_config_entry" in resolver
+    assert 'domain == "vacuum"' in resolver
+
+
 def test_stuck_entity_exists_and_reads_the_coordinator() -> None:
     text = BINARY_SENSOR.read_text(encoding="utf-8")
 

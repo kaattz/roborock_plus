@@ -27,6 +27,7 @@ from homeassistant.const import ATTR_CONNECTIONS
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.issue_registry import (
     IssueSeverity,
@@ -447,7 +448,7 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
         self.hass.bus.async_fire(
             EVENT_VACUUM_STUCK,
             build_stuck_event_data(
-                entity_id=f"vacuum.{self.duid_slug}",
+                entity_id=self.vacuum_entity_id,
                 x=None if position is None else position.x,
                 y=None if position is None else position.y,
                 state=status.state,
@@ -462,6 +463,23 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
         if not self._stuck_options.enabled:
             return False
         return self._stuck_tracker.is_stuck
+
+    @property
+    def vacuum_entity_id(self) -> str | None:
+        """Return the vacuum entity's real entity_id, if it is registered.
+
+        The entity_id cannot be derived from the duid: it is generated from the
+        device's name, so it may be renamed by the user. Reading it from the
+        registry keeps the reported id one an automation can actually target --
+        a guessed id would make `vacuum.stop` fail with nothing in the log.
+        """
+        registry = er.async_get(self.hass)
+        for entry in er.async_entries_for_config_entry(
+            registry, self.config_entry.entry_id
+        ):
+            if entry.domain == "vacuum":
+                return entry.entity_id
+        return None
 
     @property
     def is_stuck_detection_enabled(self) -> bool:

@@ -33,20 +33,36 @@ HA 那边**人工添加、人工更新** —— 在 UI 里粘贴本文件的 YAM
 
 ## 蓝图
 
-`blueprints/roborock_cleaning_schedule.yaml` —— 分区定时清扫,支持按星期、
+`blueprints/扫地机分区定时清扫.yaml` —— 分区定时清扫,支持按星期、
 扫地/拖地意图、区域内有人则跳过并重试。
 
 **蓝图走 GitHub URL 导入**,这是 HA 原生支持的路径,不需要任何凭据:
 
 ```
 设置 → 自动化 → 蓝图 → 导入蓝图
-https://raw.githubusercontent.com/kaattz/roborock_plus/main/blueprints/roborock_cleaning_schedule.yaml
+https://raw.githubusercontent.com/kaattz/roborock_plus/main/blueprints/%E6%89%AB%E5%9C%B0%E6%9C%BA%E5%88%86%E5%8C%BA%E5%AE%9A%E6%97%B6%E6%B8%85%E6%89%AB.yaml
+```
+
+上面是 URL 编码后的形式。**没编码的中文路径也能用**,HA 两种都接受:
+
+```
+https://raw.githubusercontent.com/kaattz/roborock_plus/main/blueprints/扫地机分区定时清扫.yaml
 ```
 
 导入后落在 `/config/blueprints/automation/kaattz/`。
 
-**文件名是 ASCII**(显示名在 YAML 的 `name:` 字段里,仍是中文)。这样避免
-中文路径在传输时的编码问题 —— 之前往容器里传中文名文件时丢过字节。
+**顺序很重要:先 push 到 GitHub,再从 URL 导入。** 反过来的话 HA 装到的
+是上一次推送的版本 —— 这一点踩过一次。
+
+### 为什么文件名用中文
+
+**HA 用文件名作为蓝图的显示名**,不看 YAML 里的 `name:` 字段。所以
+
+- 文件名 `扫地机分区定时清扫.yaml` → UI 里显示「扫地机分区定时清扫」
+
+一开始为了避开中文路径的编码问题用了 ASCII 名,代价是 UI 里显示
+`roborock_cleaning_schedule` —— 一眼看不出是什么。**而且现在是从 GitHub URL
+导入,不经过手工传输,当初担心的编码问题根本不存在**,所以换回中文。
 
 改动蓝图后**重新导入一次**才会生效(HA 不会自己跟着 GitHub 更新)。
 

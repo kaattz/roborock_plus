@@ -25,11 +25,35 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 AUTOMATIONS = ROOT / "automations"
-BLUEPRINT = ROOT / "blueprints" / "roborock_cleaning_schedule.yaml"
+BLUEPRINTS = ROOT / "blueprints"
 
 STATEMACHINE = AUTOMATIONS / "roborock_garage_door_statemachine.yaml"
 STUCK = AUTOMATIONS / "roborock_stuck_or_error_stop.yaml"
 NOT_STARTED = AUTOMATIONS / "roborock_clean_command_not_started.yaml"
+
+
+def _blueprint_path() -> Path:
+    """Find the cleaning-schedule blueprint without hardcoding its filename.
+
+    It is deliberately named in Chinese so Home Assistant shows a readable title
+    -- HA derives the blueprint's display name from the file name, not from the
+    ``name:`` field. Hardcoding that name here would make every rename a test
+    edit, and the name has already changed once.
+    """
+    candidates = [
+        path
+        for path in BLUEPRINTS.glob("*.yaml")
+        if "cleaning" in path.name or "清扫" in path.name
+    ]
+    if len(candidates) != 1:
+        raise AssertionError(
+            f"expected exactly one cleaning blueprint in {BLUEPRINTS}, "
+            f"found: {[p.name for p in candidates]}"
+        )
+    return candidates[0]
+
+
+BLUEPRINT = _blueprint_path()
 
 
 def _text(path: Path) -> str:
@@ -150,9 +174,12 @@ class TestReadmeDescribesTheSystem:
             "automations/roborock_garage_door_statemachine.yaml",
             "automations/roborock_stuck_or_error_stop.yaml",
             "automations/roborock_clean_command_not_started.yaml",
-            "blueprints/roborock_cleaning_schedule.yaml",
         ):
             assert name in readme, f"README does not link {name}"
+        # The blueprint is linked by its (Chinese) filename.
+        assert f"blueprints/{BLUEPRINT.name}" in readme, (
+            f"README does not link blueprints/{BLUEPRINT.name}"
+        )
 
     def test_readme_has_no_stale_entity_names(self) -> None:
         """The zone entities were renamed; the README must not teach the old ones."""
@@ -180,7 +207,8 @@ class TestAutomationsReadmeIsAccurate:
 
     def test_it_documents_the_blueprint_url(self) -> None:
         text = _text(AUTOMATIONS / "README.md")
+        # The URL may be percent-encoded or plain; accept either.
+        assert "raw.githubusercontent.com/kaattz/roborock_plus/main/blueprints/" in text
         assert (
-            "raw.githubusercontent.com/kaattz/roborock_plus/main/blueprints/"
-            "roborock_cleaning_schedule.yaml" in text
-        )
+            "%E6%89%AB%E5%9C%B0%E6%9C%BA" in text or BLUEPRINT.name in text
+        ), "the blueprint import URL is not documented"

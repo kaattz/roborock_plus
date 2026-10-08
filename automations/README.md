@@ -43,16 +43,45 @@ HA 那边**人工添加、人工更新** —— 在 UI 里粘贴本文件的 YAM
 https://raw.githubusercontent.com/kaattz/roborock_plus/main/blueprints/%E6%89%AB%E5%9C%B0%E6%9C%BA%E5%88%86%E5%8C%BA%E5%AE%9A%E6%97%B6%E6%B8%85%E6%89%AB.yaml
 ```
 
-上面是 URL 编码后的形式。**没编码的中文路径也能用**,HA 两种都接受:
-
-```
-https://raw.githubusercontent.com/kaattz/roborock_plus/main/blueprints/扫地机分区定时清扫.yaml
-```
-
 导入后落在 `/config/blueprints/automation/kaattz/`。
 
-**顺序很重要:先 push 到 GitHub,再从 URL 导入。** 反过来的话 HA 装到的
-是上一次推送的版本 —— 这一点踩过一次。
+**两种 URL 都行** —— 中文原样和百分号编码都验证过,HA 都能解析。
+
+### 改蓝图的三步
+
+```
+1. 改仓库文件,commit,push
+2. 重新导入,必须带 overwrite=true
+3. reload 自动化 —— 已建的实例会跟着更新,不需要重建
+```
+
+第 2 步:重新导入同一个路径会报 `RESOURCE_ALREADY_EXISTS`,要显式覆盖:
+
+```
+ha_manage_blueprints(action="import", url=..., overwrite=True)
+```
+
+或者 UI 里 `⋮ → Re-import blueprint`。
+
+第 3 步:**更新会自动传播到已创建的自动化。** 这一点我一开始写反了 ——
+以为蓝图渲染成独立副本。实际不是:自动化里存的是
+
+```yaml
+use_blueprint:
+  path: my_custom/智能起夜模式.yaml
+  input: { ... }
+```
+
+**只有路径和输入值,没有展开的逻辑。** 所以 HA 每次加载都重新渲染,
+蓝图一改,所有实例跟着变。官方文档也确认:*"The new changes will appear
+to your existing automations as well."*
+
+反过来的代价:**不兼容的改动能改坏已运行的自动化**。文档专门警告了这点。
+所以改蓝图时不要改输入的名字或含义 —— 改了会让已有实例的参数失配。
+
+**顺序不能反:先 push,再从 URL 导入。** 反过来的话 HA 装到的是上一次
+推送的版本 —— 这一点踩过一次:改了文件名却先导入了,结果 HA 里同时存在
+新旧两份。
 
 ### 为什么文件名用中文
 

@@ -277,7 +277,13 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
 
     async def async_clean_spot(self, **kwargs: Any) -> None:
         """Spot clean."""
+        # Spot cleaning sends the robot out of its dock just like the other
+        # clean commands, so it needs the same door guard. It was the one entry
+        # point that bypassed it: `send` was called directly, so a spot clean
+        # started with the cabinet door still shut.
+        await self._async_guard_clean_command(RoborockCommand.APP_SPOT)
         await self.send(RoborockCommand.APP_SPOT)
+        self._watch_clean_command(RoborockCommand.APP_SPOT)
 
     async def async_locate(self, **kwargs: Any) -> None:
         """Locate vacuum."""
@@ -303,6 +309,11 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
 
     async def async_set_vacuum_goto_position(self, x: int, y: int) -> None:
         """Send vacuum to a specific target point."""
+        # Goto also drives the robot out of its dock, so it needs the same door
+        # guard as the clean commands. Nothing in this installation uses it
+        # today; guarding it keeps a future automation from starting a move
+        # into a shut door.
+        await self._async_guard_clean_command(RoborockCommand.APP_GOTO_TARGET)
         await self.send(RoborockCommand.APP_GOTO_TARGET, [x, y])
 
     async def async_get_segments(self) -> list[Segment]:

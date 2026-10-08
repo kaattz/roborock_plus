@@ -15,11 +15,15 @@ DEFAULT_GARAGE_DOOR_OPEN_POSITION = 95
 DEFAULT_GARAGE_DOOR_TIMEOUT = 60
 
 _GUARDED_CLEAN_COMMANDS = {
+    "APP_GOTO_TARGET",
     "APP_START",
     "APP_SEGMENT_CLEAN",
+    "APP_SPOT",
     "APP_ZONED_CLEAN",
+    "app_goto_target",
     "app_start",
     "app_segment_clean",
+    "app_spot",
     "app_zoned_clean",
 }
 

@@ -33,3 +33,26 @@
 如果某条命令会让**物理世界发生变化**（轮子转、门移动、灯亮），那它就属于实操。
 拿不准的时候，先问用户。
 
+## 发服务调用前的机械检查
+
+上面那条"拿不准就问"不够硬 —— 2026-10-08 我在核实 `clean_spot` 是否走 guard 时，
+把只读核实和实操混在同一个工具批次里，**误发了一条 `vacuum.clean_spot`**。
+核实那件事只需要读代码，根本不该发命令。
+
+所以加一条可以机械执行的规则：**任何 `ha_call_service` 之前，先说出目标域，并对照下表。**
+
+| 域 | 能不能调 |
+| --- | --- |
+| `vacuum` | ❌ 一律不调（`start` / `pause` / `stop` / `return_to_base` / `clean_spot` / `clean_area` / `send_command` 全部禁止） |
+| `cover` | ❌ 不调 |
+| `button` / `input_button` | ❌ 不按 |
+| `automation.trigger` | ❌ 不调（会跑动设备的自动化；`turn_on`/`turn_off` 只改启用状态，可以） |
+| `roborock_plus.*` 里带 `get_` / `clear_` / `set_safe_zone` | ✅ 只读或改配置，可以 |
+| `homeassistant.*` | ⚠️ 看目标：`update_entity` 只读可以，`turn_on/off/toggle` 按目标域判断 |
+
+**"我要验证 X 会不会动设备" 不是调用它的理由。** 验证代码路径用读代码、读 trace、跑仿真；
+只有用户明确要求才实操。
+
+**批次里混放也有风险**：只读核实和一个危险的写调用放在同一个 `invoke` 块里时，
+注意力在"核实"上，写调用就被顺手带出去了。**危险的调用单独发，发之前单独确认一次。**
+

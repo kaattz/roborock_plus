@@ -1,0 +1,193 @@
+id: '1791392186966'
+alias: Roborock Garage Door State Machine
+description: "合并原先三个 *_plus 自动化，用 mode: queued 串行化，避免它们同时抢柜门和 pause。\n\n危险区语义：配置的区域包含充电桩，是「不能关门」的危险区。\n所以停靠时 outside_danger_zone=off、in_danger_zone=on；出门后正好反过来。\n\n四个阶段：\nA 启动：集成的 garage_guard 在下发命令前就开门并等门全开，扫地机不会被关着的门挡住。按约定只管 HA 发起的命令；从 Roborock App 启动不归这里管。\nB 离开：outside_danger_zone 从 off 变 on（扫地机真的走出危险区）后，暂停 → 关门 → 恢复。\n   暂停只在清扫状态里做，并确认真的进入 paused 才关门；否则只告警不关门，因为「暂停没生效」意味着它可能还在往门口方向移动。\nC 返回：状态变成回基站/洗拖布，且扫地机确实不在基站上，才开门。\n   这个「不在基站」的守卫是必须的：2026-10-08 01:26 扫地机全程停在基站上装拖布，状态却跳了 docking，把门白白开了又关、关了又开共 5 次。\nD 停靠：清扫已完成、已回基站、危险区传感器确认它在区内，才关门。\n   两个守卫都不能省：\n   · task_active 单独不够。它的状态表把 charging / attaching_the_mop / detaching_the_mop / back_to_dock_washing_duster 都当作「无任务」，所以「清扫中途回基站」（洗拖布、充电，任务没完成）会让它变成 off。此时若关门，扫地机马上要出来继续扫，而阶段 C 不会重新开门 —— 它从 charging 直接变 cleaning，不会报 returning_home。所以另外要求设备自己的「上次清扫结束」时间戳是最近的。\n   · 危险区传感器必须确认它在区内。停靠时它就在危险区里，若读数是过时的 on（「已离开」），关下去就会夹住机器。传感器没确认时门保持开启并告警。\n\n任何等待超时都只告警、不强行动作：门与扫地机状态不一致时，扫地机可能在门洞里，没有安全的自动恢复方式。"
+triggers:
+- trigger: state
+  entity_id: binary_sensor.g20s_ultra_outside_danger_zone
+  id: leave
+  to: 'on'
+  from: 'off'
+- trigger: state
+  entity_id: sensor.g20s_ultra_status
+  id: return
+  to:
+  - returning_home
+  - docking
+  - going_to_wash_the_mop
+  for:
+    seconds: 10
+- trigger: state
+  entity_id: binary_sensor.g20s_ultra_task_active
+  id: park_task
+  to: 'off'
+- trigger: state
+  entity_id: vacuum.g20s_ultra
+  id: park_dock
+  to: docked
+conditions: []
+actions:
+- choose:
+  - conditions:
+    - condition: trigger
+      id:
+      - leave
+    - condition: state
+      entity_id: sensor.g20s_ultra_status
+      state:
+      - cleaning
+      - segment_cleaning
+      - zoned_cleaning
+      - spot_cleaning
+    - condition: not
+      conditions:
+      - condition: state
+        entity_id: vacuum.g20s_ultra
+        state:
+        - docked
+        - charging
+    - condition: numeric_state
+      entity_id: cover.vacuum_garage_door
+      attribute: current_position
+      above: 5
+    sequence:
+    - action: vacuum.pause
+      target:
+        entity_id: vacuum.g20s_ultra
+    - continue_on_timeout: true
+      timeout: 00:00:20
+      wait_template: '{{ is_state(''vacuum.g20s_ultra'', ''paused'') }}'
+    - if:
+      - condition: template
+        value_template: '{{ not wait.completed }}'
+      then:
+      - action: script.alert_notify
+        data:
+          level: warning
+          title: 柜门状态机：暂停失败
+          message: 扫地机已走出危险区，但暂停没有生效，柜门保持开启。它可能仍在移动，此时关门有夹机风险。vacuum={{ states('vacuum.g20s_ultra') }}，status={{ states('sensor.g20s_ultra_status') }}
+      - stop: 离开阶段暂停失败
+    - action: cover.close_cover
+      target:
+        entity_id: cover.vacuum_garage_door
+    - continue_on_timeout: true
+      timeout: 00:01:00
+      wait_template: '{{ (state_attr(''cover.vacuum_garage_door'', ''current_position'') | float(100)) < 5 }}'
+    - if:
+      - condition: template
+        value_template: '{{ not wait.completed }}'
+      then:
+      - action: script.alert_notify
+        data:
+          level: warning
+          title: 柜门状态机：关门失败
+          message: 扫地机已暂停、不再移动，但柜门未能在 60 秒内完全关闭。扫地机保持暂停，请手动处理。
+      - stop: 离开阶段关门失败
+    - action: roborock_plus.resume_task
+      target:
+        entity_id: vacuum.g20s_ultra
+    - action: script.alert_notify
+      data:
+        level: info
+        title: 扫地机已出门
+        message: 扫地机已离开危险区，柜门已关闭，任务已恢复。
+  - conditions:
+    - condition: trigger
+      id:
+      - return
+    - condition: not
+      conditions:
+      - condition: state
+        entity_id: vacuum.g20s_ultra
+        state:
+        - docked
+        - charging
+    - condition: numeric_state
+      entity_id: cover.vacuum_garage_door
+      attribute: current_position
+      below: 95
+    sequence:
+    - action: cover.open_cover
+      target:
+        entity_id: cover.vacuum_garage_door
+    - continue_on_timeout: true
+      timeout: 00:01:00
+      wait_template: '{{ (state_attr(''cover.vacuum_garage_door'', ''current_position'') | float(0)) >= 95 }}'
+    - if:
+      - condition: template
+        value_template: '{{ not wait.completed }}'
+      then:
+      - action: script.alert_notify
+        data:
+          level: critical
+          title: 柜门打开失败
+          message: 扫地机正在回基站（{{ trigger.to_state.state }}），但柜门未能在 60 秒内完全打开，有撞门风险。
+      - stop: 返回阶段开门失败
+  - conditions:
+    - condition: trigger
+      id:
+      - park_task
+      - park_dock
+    - condition: state
+      entity_id: binary_sensor.g20s_ultra_task_active
+      state: 'off'
+    - condition: state
+      entity_id: vacuum.g20s_ultra
+      state:
+      - docked
+      - charging
+    - condition: numeric_state
+      entity_id: cover.vacuum_garage_door
+      attribute: current_position
+      above: 5
+    - condition: template
+      value_template: '{% set ended = states(''sensor.sao_di_ji_v2_timestamp_2'') %}{% if ended in [''unknown'', ''unavailable'', ''none'', ''''] %}false{% else %}{{ (as_timestamp(ended) | float(0)) > 0 and (as_timestamp(now()) - as_timestamp(ended)) < 600 }}{% endif %}'
+    sequence:
+    - delay: 00:00:08
+    - condition: state
+      entity_id: binary_sensor.g20s_ultra_task_active
+      state: 'off'
+    - condition: state
+      entity_id: vacuum.g20s_ultra
+      state:
+      - docked
+      - charging
+    - condition: numeric_state
+      entity_id: cover.vacuum_garage_door
+      attribute: current_position
+      above: 5
+    - condition: template
+      value_template: '{% set ended = states(''sensor.sao_di_ji_v2_timestamp_2'') %}{% if ended in [''unknown'', ''unavailable'', ''none'', ''''] %}false{% else %}{{ (as_timestamp(ended) | float(0)) > 0 and (as_timestamp(now()) - as_timestamp(ended)) < 600 }}{% endif %}'
+    - if:
+      - condition: state
+        entity_id: binary_sensor.g20s_ultra_outside_danger_zone
+        state: 'off'
+      then:
+      - action: cover.close_cover
+        target:
+          entity_id: cover.vacuum_garage_door
+      - continue_on_timeout: true
+        timeout: 00:01:00
+        wait_template: '{{ (state_attr(''cover.vacuum_garage_door'', ''current_position'') | float(100)) < 5 }}'
+      - if:
+        - condition: template
+          value_template: '{{ not wait.completed }}'
+        then:
+        - action: script.alert_notify
+          data:
+            level: warning
+            title: 柜门状态机关门失败
+            message: 清扫任务已结束、扫地机已在基站，但柜门未能完全关闭，柜门保持开启。
+      - action: script.alert_notify
+        data:
+          level: info
+          title: 扫地机已回柜
+          message: 任务已结束、扫地机已在基站，柜门已关闭。
+      else:
+      - action: script.alert_notify
+        data:
+          level: warning
+          title: 柜门状态机：未确认扫地机在危险区内，柜门保持开启
+          message: 扫地机已停靠在基站、任务已结束，但 outside_danger_zone={{ states('binary_sensor.g20s_ultra_outside_danger_zone') }}（停靠时应为 off）。危险区读数未确认它在区内，为避免夹机，柜门保持开启，请手动确认后关闭。
+mode: queued
+max: 5
+max_exceeded: silent

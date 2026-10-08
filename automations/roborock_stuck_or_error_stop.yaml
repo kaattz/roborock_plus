@@ -1,0 +1,57 @@
+id: '1791390713215'
+alias: Roborock Stuck or Error Stop and Notify
+description: '两条独立的失败路径。
+
+
+  1）集成检测到「应该移动却停着不动」时发出 roborock_plus_vacuum_stuck —— 覆盖门没开顶住门、以及门开着回不了基站（门板挡住回充路径）。这类情况任务一直是活的，现有以 docked→cleaning 为触发条件的自动化一个都不会触发。
+
+
+  2）设备自己上报的错误枚举（robot_trapped / return_to_dock_fail 等）—— 归自动化监听，集成不重复实现。
+
+
+  共同点：都执行 vacuum.stop 并通知。停止是安全的（避免继续顶门），但绝不自动关门 —— 扫地机可能正卡在门洞里，关门会夹机。'
+triggers:
+- event_type: roborock_plus_vacuum_stuck
+  id: stuck
+  trigger: event
+- entity_id: sensor.sao_di_ji_v2_5
+  id: device_error
+  not_to:
+  - none
+  - unknown
+  - unavailable
+  trigger: state
+conditions: []
+actions:
+- choose:
+  - conditions:
+    - condition: trigger
+      id: stuck
+    sequence:
+    - action: vacuum.stop
+      target:
+        entity_id: vacuum.g20s_ultra
+    - action: script.alert_notify
+      data:
+        level: warning
+        message: '状态 {{ trigger.event.data.state }}，在 ({{ trigger.event.data.x }}, {{ trigger.event.data.y }}) 停留 {{ trigger.event.data.seconds_stuck }} 秒，已停止。
+
+          柜门可能仍开着，请确认后手动处理。'
+        title: 扫地机卡住了
+  - conditions:
+    - condition: trigger
+      id: device_error
+    sequence:
+    - action: vacuum.stop
+      target:
+        entity_id: vacuum.g20s_ultra
+    - action: script.alert_notify
+      data:
+        level: warning
+        message: '设备上报错误：{{ trigger.to_state.state }}，已停止。
+
+          柜门可能仍开着，请确认后手动处理。'
+        title: 扫地机报错
+  default: []
+max_exceeded: silent
+mode: single

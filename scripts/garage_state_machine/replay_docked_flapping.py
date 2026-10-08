@@ -33,7 +33,7 @@ VACUUM = "vacuum.g20s_ultra"
 STATUS = "sensor.g20s_ultra_status"
 COVER = "cover.vacuum_garage_door"
 TASK_ACTIVE = "binary_sensor.g20s_ultra_task_active"
-CLEAR = "binary_sensor.g20s_ultra_clear_of_garage"
+CLEAR = "binary_sensor.g20s_ultra_outside_danger_zone"
 
 
 def eval_template(template: str, state: dict) -> bool:
@@ -258,7 +258,7 @@ SEQUENCE = [
 ]
 
 print("Replaying the 01:26 docked-robot flapping")
-print("(clear_of_garage is the STALE 'on' that made the old automation act)")
+print("(outside_danger_zone is the STALE 'on' that made the old automation act)")
 print()
 
 door_moves = 0

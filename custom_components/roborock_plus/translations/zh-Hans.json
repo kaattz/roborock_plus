@@ -37,7 +37,7 @@
       "water_shortage": { "name": "缺水" },
       "has_danger_zone": { "name": "已配置危险区" },
       "in_danger_zone": { "name": "位于危险区" },
-      "clear_of_danger_zone": { "name": "已离开柜门危险区" },
+      "outside_danger_zone": { "name": "已离开危险区" },
       "stuck": { "name": "卡住" }
     },
     "button": {

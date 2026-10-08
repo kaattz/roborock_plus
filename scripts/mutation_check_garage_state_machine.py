@@ -30,7 +30,7 @@ MUTATIONS = [
     (
         "key the departure on the inverted sensor",
         lambda c: _set_trigger_entity(
-            c, "leave", "binary_sensor.g20s_ultra_in_safe_zone"
+            c, "leave", "binary_sensor.g20s_ultra_in_danger_zone"
         ),
     ),
     (

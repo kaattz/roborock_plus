@@ -31,7 +31,7 @@ VACUUM = "vacuum.g20s_ultra"
 STATUS = "sensor.g20s_ultra_status"
 COVER = "cover.vacuum_garage_door"
 TASK_ACTIVE = "binary_sensor.g20s_ultra_task_active"
-CLEAR_OF_GARAGE = "binary_sensor.g20s_ultra_clear_of_garage"
+CLEAR_OF_GARAGE = "binary_sensor.g20s_ultra_outside_danger_zone"
 
 
 def _config() -> dict:
@@ -63,14 +63,14 @@ class TestDepartureTriggerRequiresARealDeparture:
         assert trigger["to"] == "on"
 
     def test_leave_trigger_is_keyed_on_the_danger_zone_sensor(self) -> None:
-        """`in_safe_zone` is `on` at the dock, so it cannot mean "departed"."""
+        """`in_danger_zone` is `on` at the dock, so it cannot mean "departed"."""
         trigger = _trigger(_config(), "leave")
         assert trigger["entity_id"] == CLEAR_OF_GARAGE
 
     def test_departure_is_not_keyed_on_the_inverted_sensor(self) -> None:
         config = _config()
         blob = json.dumps(config, ensure_ascii=False)
-        assert "binary_sensor.g20s_ultra_in_safe_zone" not in blob
+        assert "binary_sensor.g20s_ultra_in_danger_zone" not in blob
 
 
 class TestReturnTriggerIsSustained:

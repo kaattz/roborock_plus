@@ -98,6 +98,13 @@ def point_in_danger_zone(x: int, y: int, zone: SafeZone) -> bool:
     return zone.min_x <= x <= zone.max_x and zone.min_y <= y <= zone.max_y
 
 
-def point_clear_of_danger_zone(x: int, y: int, danger_zone: SafeZone) -> bool:
-    """Return True if a point is outside the danger zone."""
+def point_outside_danger_zone(x: int, y: int, danger_zone: SafeZone) -> bool:
+    """Return True if a point is outside the danger zone.
+
+    Named as the direct counterpart of `point_in_danger_zone`: the pair reads as
+    one idea, and neither direction needs a double negative. The earlier name
+    (`point_clear_of_garage`) meant "not inside", so `off` read as "not clear"
+    -- a construction that takes a moment to untangle and that named the garage
+    rather than the robot.
+    """
     return not point_in_danger_zone(x, y, danger_zone)

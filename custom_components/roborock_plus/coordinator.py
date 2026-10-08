@@ -56,6 +56,7 @@ from .v1_map_position import (
     resolve_map_position_intervals,
     should_refresh_v1_map_position,
 )
+from .v1_position_trust import ResolvedPosition, resolve_position_trust
 from .v1_status_polling import (
     get_v1_local_status_poll_interval,
     should_refresh_full_v1_data,
@@ -508,6 +509,39 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
             ),
             is_official_cloud=self.is_official_cloud,
             active_interval=active_interval,
+        )
+
+    def note_map_position_sample(self) -> None:
+        """Record that the map content was just read successfully.
+
+        The services re-read the map on demand, so the position they are about
+        to return is newer than the last background sample. Recording that keeps
+        `resolve_vacuum_position` from rejecting a position read a moment ago
+        merely because the background cadence had not come round yet.
+        """
+        self.last_map_position_update = dt_util.utcnow()
+
+    def resolve_vacuum_position(self) -> ResolvedPosition:
+        """Return the position a door decision may be based on.
+
+        `is_map_position_fresh` only bounds how old the *read* is. It cannot
+        tell that the payload describes a previous task: on 2026-10-08 the map
+        kept returning the living room for thirteen hours while the robot sat
+        on its dock, which made `clear_of_garage` report that closing the door
+        was safe while the robot was standing in the danger zone.
+
+        While the robot is docked, the map's own charger marker is where the
+        robot physically is, so it corroborates or replaces the reported
+        position. See `v1_position_trust` for the tolerances.
+        """
+        if not self.is_map_position_fresh():
+            return ResolvedPosition(None, None, False, "sample_too_old")
+
+        map_data = self.properties_api.map_content.map_data
+        return resolve_position_trust(
+            state=self.properties_api.status.state,
+            position=None if map_data is None else map_data.vacuum_position,
+            charger=None if map_data is None else map_data.charger,
         )
 
     def _should_suppress_update_failure(self) -> bool:

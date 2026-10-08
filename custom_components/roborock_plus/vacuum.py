@@ -405,25 +405,43 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
 
         The device can refuse or time out on a map read while it is busy, so
         fall back to the position the coordinator last sampled rather than
-        failing outright. `stale` reports which of the two answered.
+        failing outright.
+
+        `stale` reports whether the answer is safe to act on, not merely
+        whether the read succeeded. A docked robot is resolved against the
+        map's charger marker, because the map payload can keep returning an
+        earlier task's position for hours -- which is how a parked robot came
+        to be reported in the living room while standing in the danger zone.
         """
         map_content_trait = self.coordinator.properties_api.map_content
         refreshed = await self._async_try_refresh_map_content(map_content_trait)
+        if refreshed:
+            self.coordinator.note_map_position_sample()
         map_data = map_content_trait.map_data
         if map_data is None:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="map_failure",
             )
-        if (robot_position := map_data.vacuum_position) is None:
+
+        resolved = self.coordinator.resolve_vacuum_position()
+        if not resolved.trusted or resolved.x is None or resolved.y is None:
             raise HomeAssistantError(
                 translation_domain=DOMAIN, translation_key="position_not_found"
             )
 
         return {
-            "x": robot_position.x,
-            "y": robot_position.y,
-            "stale": not refreshed,
+            "x": resolved.x,
+            "y": resolved.y,
+            # `stale` means the answer did not come from a fresh reading of the
+            # robot's own location: either the read failed, or a docked robot's
+            # position was replaced by the charger marker because the payload
+            # still described an earlier task. The value is trustworthy either
+            # way (otherwise this raises); `position_source` says which case.
+            "stale": (not refreshed) or resolved.from_dock,
+            "position_source": resolved.reason,
+            "from_dock": resolved.from_dock,
+            "map_read_succeeded": refreshed,
         }
 
     async def _async_try_refresh_map_content(self, map_content_trait: Any) -> bool:
@@ -523,7 +541,8 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
                 "Falling back to cached home data for %s: %s", self.entity_id, err
             )
         map_content_trait = self.coordinator.properties_api.map_content
-        await self._async_try_refresh_map_content(map_content_trait)
+        if await self._async_try_refresh_map_content(map_content_trait):
+            self.coordinator.note_map_position_sample()
 
         current_map = self._home_trait.current_map_data
         if current_map is None:
@@ -621,12 +640,13 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
         current_position = None
         calibration = None
         image_meta = None
+        # Resolved unconditionally: `map_data` can legitimately be absent while
+        # the home data above still produced a map, and the trust fields below
+        # are reported either way.
+        resolved = self.coordinator.resolve_vacuum_position()
         if map_content_trait.map_data is not None:
-            if map_content_trait.map_data.vacuum_position is not None:
-                current_position = {
-                    "x": map_content_trait.map_data.vacuum_position.x,
-                    "y": map_content_trait.map_data.vacuum_position.y,
-                }
+            if resolved.x is not None and resolved.y is not None:
+                current_position = {"x": resolved.x, "y": resolved.y}
             calibration = map_content_trait.map_data.calibration()
             if map_content_trait.map_data.image is not None:
                 image_meta = map_content_trait.map_data.image.as_dict()
@@ -644,6 +664,8 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
             "image_url": image_url,
             "dock_position": {"x": DEFAULT_DOCK_X, "y": DEFAULT_DOCK_Y},
             "current_position": current_position,
+            "position_trusted": resolved.trusted,
+            "position_source": resolved.reason,
             "safe_zone": None if stored_zone is None else stored_zone.zone.as_dict(),
             "current_map": {
                 "flag": current_map.map_flag,

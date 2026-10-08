@@ -314,7 +314,7 @@ class RoborockInSafeZoneBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
         position = _fresh_vacuum_position(self.coordinator)
         if position is None:
             return None
-        return point_in_safe_zone(position.x, position.y, stored.zone)
+        return point_in_safe_zone(position[0], position[1], stored.zone)
 
 
 class RoborockClearOfGarageBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
@@ -343,7 +343,7 @@ class RoborockClearOfGarageBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
         position = _fresh_vacuum_position(self.coordinator)
         if position is None:
             return None
-        return point_clear_of_garage(position.x, position.y, stored.zone)
+        return point_clear_of_garage(position[0], position[1], stored.zone)
 
 
 class RoborockStuckBinarySensorEntity(RoborockCoordinatedEntityV1, BinarySensorEntity):
@@ -377,14 +377,14 @@ class RoborockStuckBinarySensorEntity(RoborockCoordinatedEntityV1, BinarySensorE
 
 def _fresh_vacuum_position(
     coordinator: RoborockDataUpdateCoordinator,
-) -> Any | None:
-    """Return the vacuum position, or None when it is missing or untrusted."""
-    if not coordinator.is_map_position_fresh():
+) -> tuple[float, float] | None:
+    """Return the vacuum position, or None when it is missing or untrusted.
+
+    The coordinator resolves the sample against the map's charger marker, so a
+    docked robot is reported where it actually stands rather than wherever the
+    map payload last left it.
+    """
+    resolved = coordinator.resolve_vacuum_position()
+    if not resolved.trusted or resolved.x is None or resolved.y is None:
         return None
-    map_content_trait = coordinator.properties_api.map_content
-    if (
-        map_content_trait.map_data is None
-        or map_content_trait.map_data.vacuum_position is None
-    ):
-        return None
-    return map_content_trait.map_data.vacuum_position
+    return resolved.x, resolved.y

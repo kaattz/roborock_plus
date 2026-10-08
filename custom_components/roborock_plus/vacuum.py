@@ -426,9 +426,31 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
 
         resolved = self.coordinator.resolve_vacuum_position()
         if not resolved.trusted or resolved.x is None or resolved.y is None:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="position_not_found"
-            )
+            # A read that fails while the cached sample has aged out is an
+            # ordinary event during a clean, not an error: the poll cadence
+            # (5s) is shorter than a map read takes (measured median 6s, often
+            # 11s), so the sample expires before its replacement lands. This is
+            # an informational query, so answer with the last position the map
+            # carried and mark it stale. Raising here made the service return
+            # HTTP 500 during every clean.
+            #
+            # The safety entities are unaffected: they read `resolved.trusted`
+            # directly and still refuse, so this cannot close a door on a stale
+            # reading.
+            fallback = None if map_data is None else map_data.vacuum_position
+            if resolved.reason != "sample_too_old" or fallback is None:
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="position_not_found",
+                )
+            return {
+                "x": fallback.x,
+                "y": fallback.y,
+                "stale": True,
+                "position_source": resolved.reason,
+                "from_dock": False,
+                "map_read_succeeded": refreshed,
+            }
 
         return {
             "x": resolved.x,

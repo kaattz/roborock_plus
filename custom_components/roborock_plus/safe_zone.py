@@ -86,11 +86,18 @@ def suggest_safe_zone(
     raise ValueError("cabinet_direction must be one of north/south/east/west")
 
 
-def point_in_safe_zone(x: int, y: int, zone: SafeZone) -> bool:
-    """Return True if a point lies inside the safe zone."""
+def point_in_danger_zone(x: int, y: int, zone: SafeZone) -> bool:
+    """Return True if a point lies inside the danger zone.
+
+    The zone contains the dock, so a docked robot is inside it and the door must
+    stay open. It is a *danger* zone, not a safe one: the older `safe_zone`
+    naming assumed the dock sat outside it, which the measured geometry
+    disproved on 2026-10-08 (dock at (25688, 28538) inside x 24997-26069,
+    y 27123-28764).
+    """
     return zone.min_x <= x <= zone.max_x and zone.min_y <= y <= zone.max_y
 
 
-def point_clear_of_garage(x: int, y: int, danger_zone: SafeZone) -> bool:
-    """Return True if a point is outside the garage door danger zone."""
-    return not point_in_safe_zone(x, y, danger_zone)
+def point_clear_of_danger_zone(x: int, y: int, danger_zone: SafeZone) -> bool:
+    """Return True if a point is outside the danger zone."""
+    return not point_in_danger_zone(x, y, danger_zone)

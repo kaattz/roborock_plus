@@ -96,14 +96,14 @@
       "water_shortage": {
         "name": "Water shortage"
       },
-      "has_safe_zone": {
-        "name": "Safe zone configured"
+      "has_danger_zone": {
+        "name": "Danger zone configured"
       },
-      "in_safe_zone": {
-        "name": "In safe zone"
+      "in_danger_zone": {
+        "name": "In danger zone"
       },
-      "clear_of_garage": {
-        "name": "Clear of garage"
+      "clear_of_danger_zone": {
+        "name": "Clear of danger zone"
       },
       "stuck": {
         "name": "Stuck"

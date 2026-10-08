@@ -35,9 +35,9 @@
       "softener_empty": { "name": "柔顺剂" },
       "water_box_attached": { "name": "附有水箱" },
       "water_shortage": { "name": "缺水" },
-      "has_safe_zone": { "name": "已配置危险区" },
-      "in_safe_zone": { "name": "位于危险区" },
-      "clear_of_garage": { "name": "已离开柜门危险区" },
+      "has_danger_zone": { "name": "已配置危险区" },
+      "in_danger_zone": { "name": "位于危险区" },
+      "clear_of_danger_zone": { "name": "已离开柜门危险区" },
       "stuck": { "name": "卡住" }
     },
     "button": {

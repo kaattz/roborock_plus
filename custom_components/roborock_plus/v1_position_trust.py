@@ -12,8 +12,8 @@ zone.
 
 A stale position is dangerous in one specific direction. The robot is on the
 dock, so it is standing in the danger zone, but the stale reading puts it in the
-living room. `clear_of_garage` then reports that closing the door is clear --
-which is the one answer that must never be wrong.
+living room. `clear_of_danger_zone` then reports that closing the door is clear
+-- which is the one answer that must never be wrong.
 
 Two things made that possible beyond the payload itself:
 

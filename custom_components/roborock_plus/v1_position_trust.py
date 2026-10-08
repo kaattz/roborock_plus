@@ -38,6 +38,19 @@ from typing import Any
 # States in which the robot is sitting on its dock. `idle` is deliberately not
 # here: it can mean parked on the dock or left in the middle of a room, and
 # substituting the dock for a robot that is elsewhere would be its own error.
+#
+# `back_to_dock_washing_duster` (6310) is here despite being ambiguous: the name
+# reads either as travelling to the dock or as sitting on it washing the duster.
+# Treating it as docked is the fail-safe reading, because the two possible
+# mistakes are not symmetric. If it is docked and we did not say so, the stale
+# payload could place the robot outside the zone and the door could close on it.
+# If it is travelling and we do say so, the door merely stays open a little
+# longer, which is the direction that cannot hurt anyone.
+#
+# This set must stay disjoint from `v1_stuck_detection.MOVEMENT_STATES`: a state
+# in both would feed a docked robot's unchanging position to the stuck detector
+# and, once the window elapsed, raise a false "stuck" that stops a working clean.
+# `test_position_trust_wiring` enforces the disjointness.
 DOCKED_STATE_NAMES = frozenset(
     {
         "charging",

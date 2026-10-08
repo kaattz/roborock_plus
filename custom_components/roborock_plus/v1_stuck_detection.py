@@ -54,6 +54,18 @@ MAX_V1_STUCK_RADIUS = 2000
 # whether a task is still alive and so stays true while the robot pauses or
 # washes the mop; using it here would report every mop wash and every mid-clean
 # recharge as stuck.
+#
+# `back_to_dock_washing_duster` (6310) is deliberately absent, although the name
+# reads as travelling. Its meaning is genuinely ambiguous -- it may equally be
+# sitting on the dock washing the duster -- and the two ways of being wrong do
+# not cost the same here. If it is travelling and we do not assess it, we miss a
+# stuck robot and the existing guards still cover that. If it is docked and we
+# do assess it, an unchanging position accumulates for the whole window and then
+# `vacuum.stop` halts a clean that was working. Staying out fails cheaply.
+#
+# Consequently this set must stay disjoint from `v1_position_trust`'s
+# `DOCKED_STATE_NAMES`; a state in both would read a docked robot's position as
+# evidence of standing still.
 MOVEMENT_STATES = frozenset(
     {
         "cleaning",
@@ -77,7 +89,6 @@ MOVEMENT_STATES = frozenset(
         "zoned_mopping",
         "zoned_clean_mop_cleaning",
         "zoned_clean_mop_mopping",
-        "back_to_dock_washing_duster",
     }
 )
 

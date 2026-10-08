@@ -1,0 +1,358 @@
+blueprint:
+  name: 扫地机分区定时清扫
+  description: |
+    到点用 HA 指定的房间清扫，支持按星期、扫地/拖地意图、以及"区域内有人则跳过并重试"。
+
+    ## 这个蓝图解决什么
+
+    - **时间**：每天某个时刻触发；用「星期」输入限定每周哪几天（全选＝每天）。
+    - **区域**：直接选 HA 区域（客厅/餐厅…），不依赖设备里的例程。
+    - **扫地还是拖地**：见下面「扫地/拖地怎么表达」。
+    - **有人跳过**：填了人体传感器就只在无人时扫；没填就是到点就扫。
+    - **失败重试**：触发时如果因为有人、扫地机正忙、门打不开等原因没扫成，
+      会在指定窗口内反复重试；窗口内始终不成才告警。
+
+    ## 扫地/拖地怎么表达
+
+    V1 协议没有「仅扫地/仅拖地/扫拖一体」这个开关，它是用**底层参数**组合出来的
+    （依据 python-roborock 的 `CleaningMode` 抽象，其中 `VACUUM` 对应水量 `off`）：
+
+    | 意图 | 拖地强度 | 风机 |
+    | --- | --- | --- |
+    | 仅扫地 | `off`（水量关＝干扫） | 不变 |
+    | 扫拖一体 | 你选的水量 | 不变 |
+    | 仅拖地 | 你选的水量 | `off_raise_main_brush`（抬主刷） |
+
+    ⚠️ **不要**把「拖地模式」（`standard`/`deep`/`deep_plus`）当成扫地/拖地——
+    那是「拖地走几遍的路线」，与扫地还是拖地无关。
+
+    ## 前置条件
+
+    必须先在 **设置 → 设备与服务 → 该扫地机 → 齿轮 → 区域映射** 里，
+    把 HA 区域对应到设备的房间号。否则 `vacuum.clean_area` 会直接报错。
+
+    ## 判断"清扫真的启动了"
+
+    看集成的「任务进行中」二元传感器，而不是看服务调用是否报错：
+    服务调用成功只代表命令被服务器接受，不代表机器人动了（这是实测过的坑）。
+    重试与否、成功与否都以这个传感器为准。
+
+    ## 柜门
+
+    开门由集成的 `garage_guard` 在下发命令前自动完成，本蓝图不管门。
+
+  domain: automation
+  author: kaattz
+  homeassistant:
+    min_version: "2024.6.0"
+  input:
+    target:
+      name: 扫地机
+      icon: mdi:robot-vacuum
+      input:
+        vacuum_entity:
+          name: 扫地机实体
+          selector:
+            entity:
+              domain: vacuum
+        task_active_entity:
+          name: 任务进行中传感器
+          description: 集成的「任务进行中」二元传感器，用来确认清扫真的启动了。
+          selector:
+            entity:
+              domain: binary_sensor
+
+    schedule:
+      name: 时间
+      icon: mdi:clock-outline
+      input:
+        start_time:
+          name: 启动时间
+          selector:
+            time:
+        weekdays:
+          name: 星期
+          description: 只在这些星期执行。全选＝每天。
+          default:
+            - mon
+            - tue
+            - wed
+            - thu
+            - fri
+            - sat
+            - sun
+          selector:
+            select:
+              multiple: true
+              options:
+                - label: 周一
+                  value: mon
+                - label: 周二
+                  value: tue
+                - label: 周三
+                  value: wed
+                - label: 周四
+                  value: thu
+                - label: 周五
+                  value: fri
+                - label: 周六
+                  value: sat
+                - label: 周日
+                  value: sun
+
+    area:
+      name: 清扫区域
+      icon: mdi:floor-plan
+      input:
+        areas:
+          name: 区域
+          description: 要清扫的 HA 区域，可多选。
+          selector:
+            area:
+              multiple: true
+
+    mode:
+      name: 清扫方式
+      icon: mdi:water-opacity
+      input:
+        cleaning_mode:
+          name: 意图
+          default: 扫拖一体
+          selector:
+            select:
+              options:
+                - 仅扫地
+                - 扫拖一体
+                - 仅拖地
+        mop_intensity_entity:
+          name: 拖地强度实体
+          description: 形如「扫地机 拖地强度」的 select 实体。仅扫地时会被设为 off。
+          selector:
+            entity:
+              domain: select
+        mop_intensity:
+          name: 拖地强度
+          description: 扫拖一体／仅拖地时使用的水量。仅扫地时忽略（强制 off）。
+          default: medium
+          selector:
+            select:
+              options:
+                - slight
+                - low
+                - medium
+                - moderate
+                - high
+                - extreme
+        mop_route_entity:
+          name: 拖地模式实体（可选）
+          description: 形如「扫地机 拖地模式」的 select 实体。留空则不设置。
+          default: ""
+          selector:
+            entity:
+              domain: select
+        mop_route:
+          name: 拖地模式
+          description: 拖地走几遍的路线，与扫地/拖地无关。
+          default: standard
+          selector:
+            select:
+              options:
+                - standard
+                - deep
+                - deep_plus
+                - fast
+
+    presence:
+      name: 有人跳过
+      icon: mdi:motion-sensor
+      collapsed: true
+      input:
+        presence_sensors:
+          name: 本区域人体传感器
+          description: 留空＝不检查，到点就扫。填了就只在全部无人时扫。
+          default: []
+          selector:
+            entity:
+              domain: binary_sensor
+              multiple: true
+
+    retry:
+      name: 失败重试
+      icon: mdi:refresh
+      collapsed: true
+      input:
+        retry_window_minutes:
+          name: 重试窗口（分钟）
+          description: 在这个时间内反复尝试；0＝只试一次，不重试。
+          default: 30
+          selector:
+            number:
+              min: 0
+              max: 180
+              mode: box
+              unit_of_measurement: 分钟
+        retry_interval_minutes:
+          name: 重试间隔（分钟）
+          default: 5
+          selector:
+            number:
+              min: 1
+              max: 30
+              mode: box
+              unit_of_measurement: 分钟
+
+    notify:
+      name: 告警
+      icon: mdi:bell-alert
+      collapsed: true
+      input:
+        notify_script:
+          name: 告警脚本
+          description: 需要接受 title / message / level 三个参数。
+          default: script.alert_notify
+          selector:
+            entity:
+              domain: script
+
+mode: single
+max_exceeded: silent
+
+# 取值全部是纯 !input 代入（不是模板），所以没有"渲染顺序"问题。
+# 运行中不改写任何变量 —— 是否成功一律现查 task_active 传感器，
+# 不依赖"跨块设置变量是否保留"这种不确定行为。
+variables:
+  vacuum_entity: !input vacuum_entity
+  task_active_entity: !input task_active_entity
+  presence_sensors: !input presence_sensors
+  mop_intensity_entity: !input mop_intensity_entity
+  mop_route_entity: !input mop_route_entity
+  cleaning_mode: !input cleaning_mode
+  mop_intensity: !input mop_intensity
+  mop_route: !input mop_route
+  areas: !input areas
+  retry_window: !input retry_window_minutes
+  retry_interval: !input retry_interval_minutes
+  notify_script: !input notify_script
+  # 尝试次数 = 窗口/间隔 + 1，至少 1 次（窗口 0 时就是那一次）。
+  max_attempts: >-
+    {% set window = retry_window | int(0) %}
+    {% set interval = [retry_interval | int(5), 1] | max %}
+    {% set rounds = ((window / interval) | round(0, 'ceil') | int) + 1 %}
+    {{ [rounds, 1] | max }}
+  # 窗口 0 时 deadline 就是起始时刻；第一次尝试由下面的 repeat.index == 1 保证。
+  deadline: "{{ now() + timedelta(minutes=retry_window | int(0)) }}"
+
+triggers:
+  - trigger: time
+    at: !input start_time
+
+conditions:
+  - condition: time
+    weekday: !input weekdays
+
+actions:
+  - repeat:
+      count: "{{ max_attempts }}"
+      sequence:
+        # repeat.index == 1 保证至少尝试一次；之后按 deadline 收敛。
+        # 没有这个特例时，窗口设 0 会让 deadline 立刻过期、连第一次都被跳过。
+        - if:
+            - condition: template
+              value_template: >-
+                {{ not is_state(task_active_entity, 'on')
+                   and (repeat.index == 1 or now() <= deadline) }}
+            then:
+              # 阻塞条件：区域内有人，或扫地机不在基站（正在忙）。
+              # 两者都不满足才下发命令。
+              - if:
+                  - condition: template
+                    value_template: >-
+                      {% set sensors = presence_sensors | default([], true) %}
+                      {% set occupied = sensors | count > 0
+                         and expand(sensors) | selectattr('state', 'eq', 'on')
+                             | list | count > 0 %}
+                      {% set busy = states(vacuum_entity) not in ['docked', 'charging'] %}
+                      {{ not occupied and not busy }}
+                then:
+                  # 扫地/拖地意图 → 底层参数
+                  - action: select.select_option
+                    target:
+                      entity_id: "{{ mop_intensity_entity }}"
+                    data:
+                      option: "{{ 'off' if cleaning_mode == '仅扫地' else mop_intensity }}"
+                    continue_on_error: true
+
+                  - if:
+                      - condition: template
+                        value_template: >-
+                          {{ mop_route_entity | default('', true) not in ['', none]
+                             and cleaning_mode != '仅扫地' }}
+                    then:
+                      - action: select.select_option
+                        target:
+                          entity_id: "{{ mop_route_entity }}"
+                        data:
+                          option: "{{ mop_route }}"
+                        continue_on_error: true
+
+                  - if:
+                      - condition: template
+                        value_template: "{{ cleaning_mode == '仅拖地' }}"
+                    then:
+                      - action: vacuum.set_fan_speed
+                        target:
+                          entity_id: "{{ vacuum_entity }}"
+                        data:
+                          fan_speed: off_raise_main_brush
+                        continue_on_error: true
+
+                  # clean_area 会走集成的 garage_guard：门先开，再发命令。
+                  # 区域用 !input 静态代入，不用模板 —— 模板会把列表渲染成字符串。
+                  - action: vacuum.clean_area
+                    target:
+                      entity_id: "{{ vacuum_entity }}"
+                    data:
+                      cleaning_area_id: !input areas
+                    continue_on_error: true
+
+                  # 确认真的启动了。服务调用成功 ≠ 机器人动了。
+                  # 用 wait_template 而不是 wait_for_trigger：后者只认"变化"，
+                  # 而任务可能在这之前就已经是 on 了。
+                  - wait_template: "{{ is_state(task_active_entity, 'on') }}"
+                    timeout:
+                      seconds: 90
+                    continue_on_timeout: true
+
+              # 还没成功就等一等再试。等一等而不是立刻重试：立刻重试会在同一个
+              # 阻塞条件上反复下发命令，也会把设备打成命令风暴。
+              - if:
+                  - condition: template
+                    value_template: >-
+                      {{ not is_state(task_active_entity, 'on')
+                         and now() <= deadline }}
+                then:
+                  - delay:
+                      minutes: "{{ retry_interval | int(5) }}"
+
+  # ---- 窗口内始终没扫成才告警。原因在这里现算，不依赖任何跨块变量。----
+  - if:
+      - condition: template
+        value_template: "{{ not is_state(task_active_entity, 'on') }}"
+    then:
+      - action: "{{ notify_script }}"
+        data:
+          level: warning
+          title: 扫地机定时清扫未执行
+          message: >-
+            {{ retry_window }} 分钟内未能启动清扫。
+            区域：{{ areas | map('area_name') | join('、') }}。
+            扫地机状态：{{ states(vacuum_entity) }}。
+            {%- set sensors = presence_sensors | default([], true) %}
+            {%- if sensors | count > 0 %}
+            {%- set present = expand(sensors) | selectattr('state', 'eq', 'on')
+                  | map(attribute='name') | list %}
+            区域内有人：{{ present | join('、') if present else '否' }}。
+            {%- else %}
+            未配置人体传感器。
+            {%- endif %}
+            请手动处理，或调整重试窗口。

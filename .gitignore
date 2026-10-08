@@ -35,6 +35,14 @@ secrets.yaml
 *.token
 cloudflare_token
 
+# Local credential files for the sync scripts. Those scripts read the HA SSH
+# password from ROBOROCK_HA_PASSWORD; this covers the case where someone keeps
+# it in a file instead. The repository is public.
+.env
+.env.*
+!.env.example
+*.credentials
+
 # Certificates and keys
 *.pem
 *.key

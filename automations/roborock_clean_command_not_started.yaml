@@ -1,0 +1,24 @@
+id: '1791372324572'
+alias: Roborock Clean Command Not Started Notify
+description: 清扫命令下发后扫地机始终没有开始任务时告警（例如例程在本地服务器内部失败，HA 只看到 200）。门可能一直开着，需人工确认。本自动化只告警，不关门。
+triggers:
+- event_type: roborock_plus_clean_command_not_started
+  trigger: event
+actions:
+- action: script.alert_notify
+  data:
+    level: warning
+    message: '清扫命令 {{ trigger.event.data.command }} 已下发，但 {{ trigger.event.data.timeout }} 秒内扫地机没有开始任务。
+
+
+      实体：{{ trigger.event.data.entity_id | default(''未知'') }}
+
+      当前状态：{{ states(trigger.event.data.entity_id) if trigger.event.data.entity_id else ''未知'' }}
+
+      柜门：{{ states(''cover.vacuum_garage_door'') }}
+
+
+      柜门可能仍处于打开状态，请确认后手动处理。本自动化不会自动关门。'
+    title: 扫地机没有启动
+max_exceeded: silent
+mode: single

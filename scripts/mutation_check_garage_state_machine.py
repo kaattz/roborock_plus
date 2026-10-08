@@ -58,8 +58,15 @@ MUTATIONS = [
         lambda c: _drop_delay(c, 2),
     ),
     (
-        "allow waits to treat a timeout as success",
+        "let waits treat a timeout as success",
         lambda c: _drop_continue_on_timeout(c),
+    ),
+    (
+        # The guard that separates a finished clean from a mid-task dock visit.
+        # It sits in the conditions AND after the settle delay, so a mutation
+        # that removes only one still leaves the door protected -- both go.
+        "drop the task-end guard so a mid-task dock visit closes the door",
+        lambda c: _drop_mentioning(c, 2, "sensor.sao_di_ji_v2_timestamp_2"),
     ),
 ]
 
@@ -132,6 +139,24 @@ def _drop_delay(config: dict, branch: int) -> None:
     sequence = config["actions"][0]["choose"][branch]["sequence"]
     config["actions"][0]["choose"][branch]["sequence"] = [
         step for step in sequence if "delay" not in step
+    ]
+
+
+def _drop_mentioning(config: dict, branch: int, needle: str) -> None:
+    """Remove every condition or sequence step that references `needle`.
+
+    A guard repeated in two places (the branch conditions and the re-check after
+    the settle delay) must be removed from both, or the mutation is not a real
+    weakening and the suite would rightly still pass.
+    """
+    target = config["actions"][0]["choose"][branch]
+    target["conditions"] = [
+        c for c in target["conditions"] if needle not in json.dumps(c, ensure_ascii=False)
+    ]
+    target["sequence"] = [
+        s
+        for s in target["sequence"]
+        if needle not in json.dumps(s, ensure_ascii=False)
     ]
 
 

@@ -80,6 +80,21 @@ def eval_template(template: str, state: dict) -> bool:
             "==": left == right,
         }[op]
 
+    # The task-end guard:
+    # {% set ended = states('...') %}{% if ended in [...] %}false{% else %}
+    # {{ ... (as_timestamp(now()) - as_timestamp(ended)) < N }}{% endif %}
+    if "as_timestamp(ended)" in expr:
+        match = re.search(r"< (\d+)", expr)
+        if match is None:
+            raise AssertionError(f"no age limit in template: {template}")
+        limit = float(match.group(1))
+        age = state.get("__last_clean_end_age_seconds__")
+        # A missing or unavailable marker means the guard is false: the
+        # template's first branch renders the literal string "false".
+        if age is None:
+            return False
+        return float(age) < limit
+
     raise AssertionError(f"unsupported template: {template}")
 
 
@@ -200,8 +215,16 @@ def sequence_closes_door(sequence: list, state: dict) -> bool:
     return False
 
 
-def branch_closes_door(branch: dict, state: dict) -> bool:
-    """Return whether the branch would close the door for this state."""
+def branch_closes_door(branch: dict, state: dict, trigger_id: str = "") -> bool:
+    """Return whether the branch would close the door for this state.
+
+    The branch's own conditions are checked first. Skipping them made an earlier
+    version report "closes" for states the phase D guard exists to refuse, which
+    is how a mid-task dock visit slipped through this harness while the guard
+    was correctly present in the config.
+    """
+    if not all(condition_holds(c, trigger_id, state) for c in branch["conditions"]):
+        return False
     return sequence_closes_door(branch["sequence"], state)
 
 
@@ -302,15 +325,17 @@ checks = [
         "park_task",
         PARK,
         {VACUUM: "docked", STATUS: "charging", TASK_ACTIVE: "off", CLEAR: "off",
-         f"{COVER}:current_position": "100"},
+         f"{COVER}:current_position": "100",
+         "__last_clean_end_age_seconds__": 120},
         True,
-        "parked and confirmed inside the zone",
+        "parked, confirmed inside, clean just finished",
     ),
     (
         "park_task",
         PARK,
         {VACUUM: "docked", STATUS: "charging", TASK_ACTIVE: "off", CLEAR: "on",
-         f"{COVER}:current_position": "100"},
+         f"{COVER}:current_position": "100",
+         "__last_clean_end_age_seconds__": 120},
         False,
         "parked but the sensor does NOT confirm it is inside -> refuse",
     ),
@@ -322,12 +347,40 @@ checks = [
         False,
         "docked but status blips docking -> refuse to open",
     ),
+    (
+        # The user's step 2.1: the robot goes back to the dock mid-task to wash
+        # the mop or take on charge, and must be able to come back out.
+        "park_task",
+        PARK,
+        {VACUUM: "docked", STATUS: "charging", TASK_ACTIVE: "off", CLEAR: "off",
+         f"{COVER}:current_position": "100",
+         "__last_clean_end_age_seconds__": 3 * 3600},
+        False,
+        "MID-TASK dock visit (clean ended hours ago) -> refuse to close",
+    ),
+    (
+        "park_dock",
+        PARK,
+        {VACUUM: "docked", STATUS: "attaching_the_mop", TASK_ACTIVE: "off",
+         CLEAR: "off", f"{COVER}:current_position": "100",
+         "__last_clean_end_age_seconds__": 4 * 3600},
+        False,
+        "MID-TASK mop attach (clean ended hours ago) -> refuse to close",
+    ),
+    (
+        "park_task",
+        PARK,
+        {VACUUM: "docked", STATUS: "charging", TASK_ACTIVE: "off", CLEAR: "off",
+         f"{COVER}:current_position": "100"},
+        False,
+        "task-end marker unavailable -> refuse rather than guess",
+    ),
 ]
 
 failures = []
 for trigger, branch, state, expected, description in checks:
     if branch is PARK:
-        got = branch_closes_door(branch, state)
+        got = branch_closes_door(branch, state, trigger)
     else:
         # LEAVE and RETURN both act through their sequence once matched.
         got = phase_fires(branch, trigger, state)

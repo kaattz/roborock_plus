@@ -26,6 +26,18 @@ COVER = "cover.vacuum_garage_door"
 TASK_ACTIVE = "binary_sensor.g20s_ultra_task_active"
 CLEAR_OF_GARAGE = "binary_sensor.g20s_ultra_clear_of_garage"
 
+# The device's own record of when it finished a clean. It is written when the
+# cleaning stops, before the robot travels home: on 2026-10-08 it read 21:07:21
+# while the entity updated at 21:07:24 and the status became `returning_home` at
+# 21:07:26.
+LAST_CLEAN_END = "sensor.sao_di_ji_v2_timestamp_2"
+
+# How recently that marker must have been written for a dock visit to count as
+# "the task is over". A genuine finish reaches the dock 1-2 minutes later; a
+# mid-task visit leaves the marker at the *previous* task's time, which is
+# normally hours earlier.
+TASK_END_MAX_AGE_MINUTES = 10
+
 # States in which a pause is documented as resumable. Outside these the pause
 # cancels the task, which is why phase B refuses to close without one.
 CLEANING_STATES = (
@@ -61,16 +73,23 @@ DESCRIPTION = "\n".join(
         "",
         "四个阶段：",
         "A 启动：集成的 garage_guard 在下发命令前就开门并等门全开，扫地机不会被",
-        "   关着的门挡住。按约定只管 HA 发起的命令。",
-        "B 离开：clear_of_garage 变 on（扫地机真的走出危险区）后，暂停 → 关门 → 恢复。",
+        "   关着的门挡住。按约定只管 HA 发起的命令；从 Roborock App 启动不归这里管。",
+        "B 离开：clear_of_garage 从 off 变 on（扫地机真的走出危险区）后，暂停 → 关门 → 恢复。",
         "   暂停只在清扫状态里做，并确认真的进入 paused 才关门；否则只告警不关门，",
         "   因为「暂停没生效」意味着它可能还在往门口方向移动。",
         "C 返回：状态变成回基站/洗拖布，且扫地机确实不在基站上，才开门。",
         "   这个「不在基站」的守卫是必须的：2026-10-08 01:26 扫地机全程停在基站上",
         "   装拖布，状态却跳了 docking，把门白白开了又关、关了又开共 5 次。",
-        "D 停靠：任务结束、已回基站、危险区传感器确认它在区内，才关门。",
-        "   要求传感器确认是关键：停靠时它就在危险区里，若读数是过时的 on（「已离开」），",
-        "   关下去就会夹住机器。传感器没确认时门保持开启并告警。",
+        "D 停靠：清扫已完成、已回基站、危险区传感器确认它在区内，才关门。",
+        "   两个守卫都不能省：",
+        "   · task_active 单独不够。它的状态表把 charging / attaching_the_mop /",
+        "     detaching_the_mop / back_to_dock_washing_duster 都当作「无任务」，",
+        "     所以「清扫中途回基站」（洗拖布、充电，任务没完成）会让它变成 off。",
+        "     此时若关门，扫地机马上要出来继续扫，而阶段 C 不会重新开门 ——",
+        "     它从 charging 直接变 cleaning，不会报 returning_home。",
+        "     所以另外要求设备自己的「上次清扫结束」时间戳是最近的。",
+        "   · 危险区传感器必须确认它在区内。停靠时它就在危险区里，若读数是过时的",
+        "     on（「已离开」），关下去就会夹住机器。传感器没确认时门保持开启并告警。",
         "",
         "任何等待超时都只告警、不强行动作：门与扫地机状态不一致时，扫地机可能在门洞里，",
         "没有安全的自动恢复方式。",
@@ -178,6 +197,39 @@ def condition_door_above(value: int) -> dict:
     }
 
 
+def condition_task_really_ended() -> dict:
+    """The clean must have finished, not merely paused at the dock.
+
+    `task_active` alone cannot answer this. Its state list treats `charging`,
+    `attaching_the_mop`, `detaching_the_mop` and `back_to_dock_washing_duster`
+    as "no task", so a mid-task dock visit (to wash the mop or take on charge)
+    drives it to `off` while the clean is still unfinished. Phase D closing on
+    that would shut the door on a robot that is about to come back out -- and
+    phase C would not reopen it, because a robot going straight from `charging`
+    to `cleaning` never reports `returning_home`.
+
+    The device's own end-of-clean marker resolves it. It is stamped when the
+    cleaning stops, and a mid-task visit leaves it at the *previous* task's
+    time. Requiring it to be recent separates a finished clean from a pause.
+
+    The dashboard's `robot_status_mopping` and similar states are not used:
+    they name the cleaning mode, not the task's life cycle.
+    """
+    return {
+        "condition": "template",
+        "value_template": (
+            "{% set ended = states('" + LAST_CLEAN_END + "') %}"
+            "{% if ended in ['unknown', 'unavailable', 'none', ''] %}"
+            "false"
+            "{% else %}"
+            "{{ (as_timestamp(ended) | float(0)) > 0"
+            " and (as_timestamp(now()) - as_timestamp(ended))"
+            " < " + str(TASK_END_MAX_AGE_MINUTES * 60) + " }}"
+            "{% endif %}"
+        ),
+    }
+
+
 def guard(fail_title: str, fail_message: str, stop_reason: str) -> dict:
     """Alert and stop when the preceding wait timed out."""
     return {
@@ -269,6 +321,8 @@ PHASE_PARK = {
         {"condition": "state", "entity_id": TASK_ACTIVE, "state": "off"},
         condition_parked(),
         condition_door_above(5),
+        # The guard that separates "finished" from "paused at the dock mid-task".
+        condition_task_really_ended(),
     ],
     "sequence": [
         # Settle first: the state blips during mop attach/detach are shorter
@@ -277,6 +331,7 @@ PHASE_PARK = {
         {"condition": "state", "entity_id": TASK_ACTIVE, "state": "off"},
         condition_parked(),
         condition_door_above(5),
+        condition_task_really_ended(),
         {
             "if": [
                 # A docked robot stands inside the danger zone, so the sensor

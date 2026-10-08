@@ -26,10 +26,11 @@ import base64
 import json
 import os
 import sys
+from pathlib import Path
 
-HOST = os.environ.get("ROBOROCK_HA_HOST", "192.168.166.68")
-USER = os.environ.get("ROBOROCK_HA_USER", "hass")
-PASSWORD = os.environ.get("ROBOROCK_HA_PASSWORD", "gsdjsj")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ha_ssh import connect  # noqa: E402
+
 CONTAINER = os.environ.get("ROBOROCK_HA_CONTAINER", "homeassistant")
 
 # Distinct from both the charger and each other, so a block mix-up cannot pass.
@@ -126,18 +127,11 @@ print("PASS: the byte walk and the real parser agree, before and after patching.
 
 def ssh(command: str, timeout: int = 180) -> str:
     """Run a command on the HA host."""
-    import paramiko
-
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(HOST, username=USER, password=PASSWORD, timeout=20)
-    try:
+    with connect() as client:
         _in, out, err = client.exec_command(command, timeout=timeout)
         return out.read().decode("utf-8", "replace") + err.read().decode(
             "utf-8", "replace"
         )
-    finally:
-        client.close()
 
 
 def main() -> int:

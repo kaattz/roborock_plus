@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import base64
 import json
+import sys
 from pathlib import Path
 
-import paramiko
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from ha_ssh import connect  # noqa: E402
 
 UNIQUE_ID = "1791500000000"
 OUT = (
@@ -34,10 +36,9 @@ else:
     sys.exit("automation {UNIQUE_ID} not found")
 '''
 
-client = paramiko.SSHClient()
-client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-client.connect("192.168.166.68", username="hass", password="gsdjsj", timeout=20)
-try:
+text = ""
+errors = ""
+with connect() as client:
     payload = base64.b64encode(READER.encode()).decode()
     step = (
         f"echo {payload} | base64 -d | sudo -n tee /root/read_btn.py > /dev/null && "
@@ -47,8 +48,6 @@ try:
     _in, out, err = client.exec_command(f"bash -lc {json.dumps(step)}", timeout=180)
     text = out.read().decode("utf-8", "replace")
     errors = err.read().decode("utf-8", "replace")
-finally:
-    client.close()
 
 if not text.strip().startswith("{"):
     raise SystemExit(f"could not read the automation: {errors[:600] or text[:300]}")

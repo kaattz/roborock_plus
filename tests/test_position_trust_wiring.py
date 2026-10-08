@@ -108,3 +108,69 @@ class TestServiceWiring:
         source = _read("vacuum.py")
         assert '"position_trusted": resolved.trusted,' in source
         assert '"position_source": resolved.reason,' in source
+
+
+class TestImageWiring:
+    """The map PNG carries its own copy of the position, so it needs its own fix.
+
+    Correcting the services and entities is not enough: the library bakes the
+    robot marker into the image at parse time, so the picture kept showing a
+    docked robot in the room the previous task ended in.
+    """
+
+    def test_image_entity_rerenders_the_marker(self) -> None:
+        source = _read("image.py")
+        assert "from .v1_map_render import rerender_map_image" in source
+        assert "rerender_map_image," in source
+
+    def test_image_entity_passes_the_resolved_position(self) -> None:
+        source = _read("image.py")
+        assert "resolved = self.coordinator.resolve_vacuum_position()" in source
+        assert "resolved_x=resolved.x,\n" in source
+        assert "resolved_y=resolved.y,\n" in source
+        assert "trusted=resolved.trusted," in source
+        assert "from_dock=resolved.from_dock," in source
+
+    def test_image_entity_does_not_pass_the_drawn_position_as_resolved(self) -> None:
+        """Passing the drawn value as `resolved` would always cancel the redraw."""
+        source = _read("image.py")
+        assert "resolved_x=map_data.vacuum_position.x,\n" not in source
+        assert "resolved_y=map_data.vacuum_position.y,\n" not in source
+
+    def test_image_entity_passes_the_drawn_position(self) -> None:
+        """The decision needs both where it is and where it was drawn."""
+        source = _read("image.py")
+        assert "map_data.vacuum_position.x, map_data.vacuum_position.y" in source
+
+    def test_image_entity_falls_back_to_the_library_image(self) -> None:
+        source = _read("image.py")
+        assert "if corrected is None:\n            return image\n" in source
+
+    def test_image_entity_reports_a_missing_map_rather_than_a_blank(self) -> None:
+        source = _read("image.py")
+        assert '"Map flag not found in coordinator maps"' in source
+
+    def test_image_rendering_runs_off_the_event_loop(self) -> None:
+        """Re-parsing a map is synchronous CPU work on the loop otherwise."""
+        source = _read("image.py")
+        assert "await self.hass.async_add_executor_job(" in source
+        assert "partial(\n                rerender_map_image," in source
+
+    def test_image_entity_caches_the_corrected_render(self) -> None:
+        """A dashboard polling the image must not re-render an identical map."""
+        source = _read("image.py")
+        assert "self._corrected_cache" in source
+        assert "self._corrected_cache[0] == cache_key" in source
+        assert "self._corrected_cache = (cache_key, corrected)" in source
+
+    def test_image_cache_key_covers_every_rendering_input(self) -> None:
+        source = _read("image.py")
+        for field in (
+            "id(map_content.raw_api_response),",
+            "drawn,",
+            "resolved.x,",
+            "resolved.y,",
+            "resolved.trusted,",
+            "resolved.from_dock,",
+        ):
+            assert field in source, f"{field} missing from the cache key"

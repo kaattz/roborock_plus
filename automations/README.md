@@ -1,19 +1,6 @@
 # 仓库里的自动化与蓝图
 
-这个仓库是**真源**;Home Assistant 是它们运行的地方。两份东西:
-
-| 目录 | 内容 | 同步方向 |
-| --- | --- | --- |
-| `automations/` | 三个扫地机自动化 | 双向,各有脚本 |
-| `blueprints/` | 分区定时清扫蓝图 | 复制到 HA 的 blueprints 目录 |
-
-## 为什么不是 HACS 同步
-
-HACS 只支持这几类:[AppDaemon / Dashboard / Integration / Python Script / Template / Theme](https://hacs.xyz/docs/publish/start/)。
-**没有 blueprint,也没有 automation。** 所以集成那套 HACS 更新流程覆盖不到这两类,
-必须单独同步。
-
-## 三个自动化
+## 三个扫地机自动化
 
 | 文件 | HA unique_id | entity_id |
 | --- | --- | --- |
@@ -21,79 +8,82 @@ HACS 只支持这几类:[AppDaemon / Dashboard / Integration / Python Script / T
 | `roborock_stuck_or_error_stop.yaml` | `1791390713215` | `automation.roborock_stuck_or_error_stop` |
 | `roborock_clean_command_not_started.yaml` | `1791372324572` | `automation.roborock_clean_command_not_started` |
 
-**匹配永远按 `id`,不按 alias 或 entity_id。** `id` 是自动化唯一的稳定身份;
-alias 和 entity_id 都可以改而自动化还是同一个。
+**这两个目录是给人看的版本管理,不是自动同步源。**
+
+HA 那边**人工添加、人工更新** —— 在 UI 里粘贴本文件的 YAML 内容即可。
+没有同步脚本,也不需要。
 
 > **`id` 不能改。** 它是 HA 的 unique_id,改了等于换一个自动化:历史断掉、
-> 实体注册表的身份丢失。2026-10-09 把这三个改成英文名时,只改了 alias 和
-> entity_id,`id` 原样保留。
+> 实体注册表的身份丢失。2026-10-09 改成英文名时只改了 alias 和 entity_id,
+> `id` 原样保留。
 
-## 同步
+## 为什么不做自动同步
 
-两个脚本**故意分开**。合成一个"读+写"的脚本会在同一次运行里接受自己的输出,
-真正的漂移就永远看不出来。
+一开始写了双向同步脚本,后来去掉了:
 
-**HA → 仓库**(发现漂移):
+- **HACS 覆盖不到这两类。** 它只支持 [AppDaemon / Dashboard / Integration /
+  Python Script / Template / Theme](https://hacs.xyz/docs/publish/start/),
+  **没有 blueprint 和 automation**。所以集成那套 HACS 更新流程用不上。
+- **剩下的同步要么靠 SSH,要么靠 git 集成**,两者都要在 HA 上多养一套机制,
+  而收益只是省几次复制粘贴 —— 三个自动化的改动频率很低。
+- **同步脚本本身有风险**:`automations.yaml` 里有 109 个自动化,只有 3 个是这里的,
+  写错一次会波及无关的自动化。
 
-```powershell
-$env:ROBOROCK_HA_PASSWORD = '...'
-python scripts/fetch_automations.py           # 只检查,报告漂移
-python scripts/fetch_automations.py --write   # 接受 HA 的改动
-```
-
-**仓库 → HA**(下发改动):
-
-```powershell
-$env:ROBOROCK_HA_PASSWORD = '...'
-python scripts/sync_automations.py            # 默认 dry run
-python scripts/sync_automations.py --apply    # 写入 + 校验
-```
-
-写完要 reload 才生效:
-
-```
-ha_reload_core(target="automations")
-```
-
-### 为什么凭据走环境变量
-
-**这个仓库是公开的**,而 SSH 密码曾被硬编码进三个脚本并推送上去:
-
-```
-scripts/garage_button_cycle/verify_deployed.py
-scripts/garage_state_machine/fetch_deployed.py
-scripts/validate_map_block_against_library.py
-```
-
-那三个仍在已推送的历史里。新脚本一律从 `ROBOROCK_HA_PASSWORD` 读,
-`tests/test_no_committed_secrets.py` 会扫描全仓库,阻止再扩散。
-
-**待办**:轮换 HA 的 SSH 密码,或重写历史。改工作区删不掉历史里的值。
-
-## 写入 automation.yaml 的安全措施
-
-`automations.yaml` 里有 **109 个自动化,只有 3 个属于本仓库**。所以
-`sync_automations.py` 在写入前做四道检查:
-
-1. **往返校验** —— 先确认 pyyaml 的 dump 与输入等价。不等价就拒绝写入,
-   因为那意味着 dump 有损,写下去可能破坏无关的自动化。
-2. **目标唯一** —— 每个 `id` 必须恰好出现一次。重复 id 会让"改哪个"变得含糊。
-3. **备份** —— 写入前复制一份带时间戳的 `automations.yaml.bak-sync-*`。
-4. **写后校验** —— 重新读取,逐字段比对,并确认条目总数没变。
-   任何不符就**自动还原备份**。
-
-只替换这三个条目,其余 106 个原样重新 dump,不重建。
-
-### 为什么载荷走文件而不是命令行
-
-约 15 KB 的 JSON 放进 argv 会超出命令行长度并被**静默截断** —— 第一次实现就
-踩了这个坑。现在写到 `/config/_sync.json` 再读。
+**结论:人工维护,仓库只负责版本记录和 review。**
 
 ## 蓝图
 
-`blueprints/扫地机分区定时清扫.yaml` —— 分区定时清扫,支持按星期、
-扫地/拖地意图、区域内有人则跳过并重试。部署时复制到
-`/config/blueprints/automation/kaattz/`。
+`blueprints/roborock_cleaning_schedule.yaml` —— 分区定时清扫,支持按星期、
+扫地/拖地意图、区域内有人则跳过并重试。
 
-蓝图内容与设计说明见
+**蓝图走 GitHub URL 导入**,这是 HA 原生支持的路径,不需要任何凭据:
+
+```
+设置 → 自动化 → 蓝图 → 导入蓝图
+https://raw.githubusercontent.com/kaattz/roborock_plus/main/blueprints/roborock_cleaning_schedule.yaml
+```
+
+导入后落在 `/config/blueprints/automation/kaattz/`。
+
+**文件名是 ASCII**(显示名在 YAML 的 `name:` 字段里,仍是中文)。这样避免
+中文路径在传输时的编码问题 —— 之前往容器里传中文名文件时丢过字节。
+
+改动蓝图后**重新导入一次**才会生效(HA 不会自己跟着 GitHub 更新)。
+
+设计说明见
 [2026-10-09 清扫调度蓝图设计](../docs/plans/2026-10-09-cleaning-schedule-blueprint-design.md)。
+
+## 提交前的检查
+
+```powershell
+python scripts/validate_blueprints.py     # 蓝图结构与 YAML
+python -m pytest tests -q                 # 全量测试
+```
+
+`validate_blueprints.py` 检查的是 HA 导入时的真实要求:YAML 可解析、
+`!input` 有声明、`if/then` 缩进关系正确、`repeat` 有结束条件等。
+**这不是多余的** —— 蓝图第一版所有 Jinja 模板都渲染正确,却被 HA 拒收,
+原因是 `then:` 缩进在 `if:` 的条件列表里。只渲染模板发现不了这种结构错误。
+
+`scripts/mutation_check_blueprint.py` 会把那个 bug 重新种回去,
+确认检查能抓到 —— 否则"检查通过"没有意义。
+
+## 凭据
+
+仓库是**公开的**。任何需要 SSH 的脚本都从环境变量读密码:
+
+```powershell
+$env:ROBOROCK_HA_PASSWORD = '...'
+```
+
+**不要把密码写进文件。** 早期版本有三个脚本硬编码了它并推送上去;
+那些值仍在 git 历史里,已通过**轮换密码**作废(比重写历史更彻底 ——
+重写收不回已经公开过的值)。
+
+`tests/test_no_committed_secrets.py` 会扫描整个仓库,阻止再出现。
+
+剩下的 SSH 脚本(`garage_state_machine/fetch_deployed.py`、
+`garage_button_cycle/verify_deployed.py`、`validate_map_block_against_library.py`)
+只用于**读回 HA 里实际运行的配置并与仓库构建比对** —— 这个比对有价值,
+因为"本地构建正确"和"HA 在运行正确的东西"是两个不同的断言。
+它们不推送任何东西。

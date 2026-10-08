@@ -254,85 +254,87 @@ actions:
   - repeat:
       count: "{{ max_attempts }}"
       sequence:
-        # repeat.index == 1 保证至少尝试一次；之后按 deadline 收敛。
-        # 没有这个特例时，窗口设 0 会让 deadline 立刻过期、连第一次都被跳过。
+        # 本轮要不要动作。repeat.index == 1 保证至少尝试一次：没有这个特例时，
+        # 窗口设 0 会让 deadline 立刻过期，连第一次都被跳过。
+        - variables:
+            should_act: >-
+              {{ not is_state(task_active_entity, 'on')
+                 and (repeat.index == 1 or now() <= deadline) }}
+            occupied: >-
+              {% set sensors = presence_sensors | default([], true) %}
+              {{ sensors | count > 0
+                 and expand(sensors) | selectattr('state', 'eq', 'on')
+                     | list | count > 0 }}
+            busy: "{{ states(vacuum_entity) not in ['docked', 'charging'] }}"
+
         - if:
             - condition: template
-              value_template: >-
-                {{ not is_state(task_active_entity, 'on')
-                   and (repeat.index == 1 or now() <= deadline) }}
-            then:
-              # 阻塞条件：区域内有人，或扫地机不在基站（正在忙）。
-              # 两者都不满足才下发命令。
-              - if:
-                  - condition: template
-                    value_template: >-
-                      {% set sensors = presence_sensors | default([], true) %}
-                      {% set occupied = sensors | count > 0
-                         and expand(sensors) | selectattr('state', 'eq', 'on')
-                             | list | count > 0 %}
-                      {% set busy = states(vacuum_entity) not in ['docked', 'charging'] %}
-                      {{ not occupied and not busy }}
-                then:
-                  # 扫地/拖地意图 → 底层参数
-                  - action: select.select_option
-                    target:
-                      entity_id: "{{ mop_intensity_entity }}"
-                    data:
-                      option: "{{ 'off' if cleaning_mode == '仅扫地' else mop_intensity }}"
-                    continue_on_error: true
+              value_template: "{{ should_act }}"
+          then:
+            # 有人或扫地机正忙就什么都不做，等下一轮再看。
+            - if:
+                - condition: template
+                  value_template: "{{ not occupied and not busy }}"
+              then:
+                # 扫地/拖地意图 → 底层参数
+                - action: select.select_option
+                  target:
+                    entity_id: "{{ mop_intensity_entity }}"
+                  data:
+                    option: "{{ 'off' if cleaning_mode == '仅扫地' else mop_intensity }}"
+                  continue_on_error: true
 
-                  - if:
-                      - condition: template
-                        value_template: >-
-                          {{ mop_route_entity | default('', true) not in ['', none]
-                             and cleaning_mode != '仅扫地' }}
-                    then:
-                      - action: select.select_option
-                        target:
-                          entity_id: "{{ mop_route_entity }}"
-                        data:
-                          option: "{{ mop_route }}"
-                        continue_on_error: true
+                - if:
+                    - condition: template
+                      value_template: >-
+                        {{ mop_route_entity | default('', true) not in ['', none]
+                           and cleaning_mode != '仅扫地' }}
+                  then:
+                    - action: select.select_option
+                      target:
+                        entity_id: "{{ mop_route_entity }}"
+                      data:
+                        option: "{{ mop_route }}"
+                      continue_on_error: true
 
-                  - if:
-                      - condition: template
-                        value_template: "{{ cleaning_mode == '仅拖地' }}"
-                    then:
-                      - action: vacuum.set_fan_speed
-                        target:
-                          entity_id: "{{ vacuum_entity }}"
-                        data:
-                          fan_speed: off_raise_main_brush
-                        continue_on_error: true
+                - if:
+                    - condition: template
+                      value_template: "{{ cleaning_mode == '仅拖地' }}"
+                  then:
+                    - action: vacuum.set_fan_speed
+                      target:
+                        entity_id: "{{ vacuum_entity }}"
+                      data:
+                        fan_speed: off_raise_main_brush
+                      continue_on_error: true
 
-                  # clean_area 会走集成的 garage_guard：门先开，再发命令。
-                  # 区域用 !input 静态代入，不用模板 —— 模板会把列表渲染成字符串。
-                  - action: vacuum.clean_area
-                    target:
-                      entity_id: "{{ vacuum_entity }}"
-                    data:
-                      cleaning_area_id: !input areas
-                    continue_on_error: true
+                # clean_area 会走集成的 garage_guard：门先开，再发命令。
+                # 区域用 !input 静态代入，不用模板 —— 模板会把列表渲染成字符串。
+                - action: vacuum.clean_area
+                  target:
+                    entity_id: "{{ vacuum_entity }}"
+                  data:
+                    cleaning_area_id: !input areas
+                  continue_on_error: true
 
-                  # 确认真的启动了。服务调用成功 ≠ 机器人动了。
-                  # 用 wait_template 而不是 wait_for_trigger：后者只认"变化"，
-                  # 而任务可能在这之前就已经是 on 了。
-                  - wait_template: "{{ is_state(task_active_entity, 'on') }}"
-                    timeout:
-                      seconds: 90
-                    continue_on_timeout: true
+                # 确认真的启动了。服务调用成功 ≠ 机器人动了。
+                # 用 wait_template 而不是 wait_for_trigger：后者只认"变化"，
+                # 而任务可能在这之前就已经是 on 了。
+                - wait_template: "{{ is_state(task_active_entity, 'on') }}"
+                  timeout:
+                    seconds: 90
+                  continue_on_timeout: true
 
-              # 还没成功就等一等再试。等一等而不是立刻重试：立刻重试会在同一个
-              # 阻塞条件上反复下发命令，也会把设备打成命令风暴。
-              - if:
-                  - condition: template
-                    value_template: >-
-                      {{ not is_state(task_active_entity, 'on')
-                         and now() <= deadline }}
-                then:
-                  - delay:
-                      minutes: "{{ retry_interval | int(5) }}"
+            # 还没成功就等一等再试。等一等而不是立刻重试：立刻重试会在同一个
+            # 阻塞条件上反复下发命令，也会把设备打成命令风暴。
+            - if:
+                - condition: template
+                  value_template: >-
+                    {{ not is_state(task_active_entity, 'on')
+                       and now() <= deadline }}
+              then:
+                - delay:
+                    minutes: "{{ retry_interval | int(5) }}"
 
   # ---- 窗口内始终没扫成才告警。原因在这里现算，不依赖任何跨块变量。----
   - if:

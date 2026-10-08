@@ -30,6 +30,86 @@
 - 可配置本地状态轮询间隔（1–60 秒），只刷新状态类实体
 - 支持填写自建服务器地址（区域选择 `Manual`），可对接 [local_roborock_server](https://github.com/Python-roborock/local_roborock_server)
 
+## 这套东西怎么配合
+
+`Roborock Plus` 不只是一个集成。**集成、三个自动化、一个蓝图是一套系统**，缺一件都达不到目的 —— 让扫地机在柜门关着的情况下安全地自己出门、干活、回家。
+
+### 为什么必须配合
+
+难点在于**柜门**。扫地机停在柜子里，出门前门必须开，出门后门必须关（门是共用的）。而这件事分成两半，各自都做不全：
+
+| 谁 | 能做 | 做不到 |
+| --- | --- | --- |
+| **集成** | 在命令**下发前**开门并等门全开 —— 它在命令通路上，可以阻塞 | 看不到机器人**之后**的动向 |
+| **自动化** | 看机器人**之后**的动向，决定何时关门、何时再开 | 做不到"命令下发前就把门开好"：等它看到机器人动了，机器人已经在动了 |
+
+所以：**集成负责"出门前"，自动化负责"出门后"**。蓝图则是"什么时候开始"。
+
+### 一条完整的时序
+
+```
+蓝图（到点触发）
+  │  设拖地意图 → vacuum.clean_area
+  ▼
+集成 garage_guard ──────── 开门 → 等 position ≥ 95 → 才下发清扫命令
+  │                        （门没开到位就不发命令，机器人不会被关着的门挡住）
+  ▼
+命令已下发
+  ├─ 自动化③ 清扫没启动？ ──→ 只告警，不关门
+  ▼
+机器人出门中
+  ├─ 自动化② 卡住 / 设备报错？ ──→ vacuum.stop + 告警（绝不自动关门）
+  ▼
+走出危险区
+  └─ 自动化① 柜门状态机 ──→ 暂停 → 关门 → roborock_plus.resume_task（集成提供）
+  ▼
+清扫中（中途回基站洗拖布？门全程开着）
+  ▼
+回基站途中
+  └─ 自动化① ──→ 开门
+  ▼
+任务结束 + 已停靠 + 危险区确认
+  └─ 自动化① ──→ 关门
+```
+
+**三处关键分工**：
+
+1. **开门靠集成，不靠自动化。** 开门必须在命令下发**之前**完成，只有走命令通路的集成代码能做到。这也是为什么"监控状态 → 开门"的方案必然有撞门窗口。
+2. **恢复任务靠集成的 `resume_task`。** 原生 `vacuum.start` 在暂停后会重开任务而不是续上；关门流程必须暂停机器人（否则门会夹到正在移动的它），暂停后又必须能续上原任务。
+3. **判断"清扫真的启动了"靠集成的 `task_active`。** 服务调用返回 200 不等于机器人动了 —— 这是实测过的坑（见下文）。
+
+### 各部分清单
+
+| 部分 | 位置 | 作用 |
+| --- | --- | --- |
+| **集成** | `custom_components/roborock_plus/` | 开门守卫、恢复语义、状态实体、失败事件 |
+| **自动化①** | [automations/roborock_garage_door_statemachine.yaml](automations/roborock_garage_door_statemachine.yaml) | 出门后关门、回基站前开门、停靠后关门 |
+| **自动化②** | [automations/roborock_stuck_or_error_stop.yaml](automations/roborock_stuck_or_error_stop.yaml) | 卡住或设备报错时停止并告警 |
+| **自动化③** | [automations/roborock_clean_command_not_started.yaml](automations/roborock_clean_command_not_started.yaml) | 命令下发了但任务没启动时告警 |
+| **蓝图** | [blueprints/roborock_cleaning_schedule.yaml](blueprints/roborock_cleaning_schedule.yaml) | 分区定时清扫，可选"区域内有人则跳过并重试" |
+
+**自动化和蓝图靠人工加入 HA，不在 HACS 流程里**（HACS 没有这两类）。
+细节见 [automations/README.md](automations/README.md)。
+
+### 集成提供的接口（自动化依赖这些）
+
+| 实体 | 作用 |
+| --- | --- |
+| `binary_sensor.<vacuum>_task_active` | 任务是否仍然存在（暂停也算在） |
+| `binary_sensor.<vacuum>_outside_danger_zone` | 是否已离开危险区（出门信号） |
+| `binary_sensor.<vacuum>_in_danger_zone` | 是否位于危险区（关门确认） |
+| `binary_sensor.<vacuum>_danger_zone_configured` | 是否已配置危险区 |
+| `binary_sensor.<vacuum>_stuck` | 是否应该移动却停着不动 |
+
+| 服务 / 事件 | 作用 |
+| --- | --- |
+| `roborock_plus.resume_task` | 恢复已暂停的任务（区别于"重新开始"） |
+| `roborock_plus.set_safe_zone` 等 | 危险区的读写 |
+| 事件 `roborock_plus_vacuum_stuck` | 集成判定卡住 → 自动化② 停止并告警 |
+| 事件 `roborock_plus_clean_command_not_started` | 命令没生效 → 自动化③ 告警 |
+
+> 危险区只表示位置，不能代替 `returning_home` 判断回基站意图；否则普通清扫靠近柜门时会误触发。
+
 ## 柜门保护
 
 扫地机停在柜子里时，需要先开门才能出 dock。`Roborock Plus` 会拦截 HA 发起的清扫命令：
@@ -38,14 +118,16 @@
 - 调用配置的 cover，等待 `current_position >= 95` 才下发扫地机命令
 - 只影响从 Home Assistant 发起的命令；Roborock App 发起的命令不经过 HA，无法拦截
 
-关门需要配合自动化：等扫地机离开危险区后再暂停、关门、恢复任务。相关状态由集成提供：
+关门需要配合自动化：等扫地机离开危险区后再暂停、关门、恢复任务。这个自动化就是
+[automations/roborock_garage_door_statemachine.yaml](automations/roborock_garage_door_statemachine.yaml)，
+它依赖下面这些由集成提供的实体：
 
 | 实体 | 作用 |
 | --- | --- |
 | `binary_sensor.<vacuum>_task_active` | 任务是否仍然存在（暂停也算在） |
-| `binary_sensor.<vacuum>_clear_of_garage` | 是否已离开危险区 |
-| `binary_sensor.<vacuum>_in_safe_zone` | 是否位于危险区 |
-| `binary_sensor.<vacuum>_safe_zone_configured` | 是否已配置危险区 |
+| `binary_sensor.<vacuum>_outside_danger_zone` | 是否已离开危险区 |
+| `binary_sensor.<vacuum>_in_danger_zone` | 是否位于危险区 |
+| `binary_sensor.<vacuum>_danger_zone_configured` | 是否已配置危险区 |
 | `binary_sensor.<vacuum>_stuck` | 是否应该移动却停着不动 |
 
 > 危险区只表示位置，不能代替 `returning_home` 判断回基站意图；否则普通清扫靠近柜门时会误触发。
@@ -67,20 +149,23 @@ data:
   entry_id: <config entry id>
 ```
 
-配套自动化（通知方式由你决定）：
+配套自动化就是
+[automations/roborock_clean_command_not_started.yaml](automations/roborock_clean_command_not_started.yaml)
+（通知方式由你决定，本仓库用的是 `script.alert_notify`）。它做的事：
 
 ```yaml
-trigger:
-  - platform: event
+triggers:
+  - trigger: event
     event_type: roborock_plus_clean_command_not_started
-action:
+actions:
   - action: script.alert_notify
     data:
+      level: warning
       title: 扫地机没有启动
       message: >-
-        {{ trigger.event.data.command }} 已下发，但 {{ trigger.event.data.timeout }} 秒内
-        扫地机没有开始任务，柜门可能一直开着。
-      level: warning
+        {{ trigger.event.data.command }} 已下发，但
+        {{ trigger.event.data.timeout }} 秒内扫地机没有开始任务，
+        柜门可能一直开着。
 ```
 
 选项里的「清扫启动确认时间」控制等待秒数，填 `0` 关闭。默认 60 秒。
@@ -115,24 +200,26 @@ data:
   entry_id: <config entry id>
 ```
 
-配套自动化（停止 + 通知）：
+配套自动化就是
+[automations/roborock_stuck_or_error_stop.yaml](automations/roborock_stuck_or_error_stop.yaml)
+（停止 + 通知）：
 
 ```yaml
-trigger:
-  - platform: event
+triggers:
+  - trigger: event
     event_type: roborock_plus_vacuum_stuck
-action:
+actions:
   - action: vacuum.stop
     target:
       entity_id: "{{ trigger.event.data.entity_id }}"
   - action: script.alert_notify
     data:
+      level: warning
       title: 扫地机卡住了
       message: >-
         状态 {{ trigger.event.data.state }}，在
         ({{ trigger.event.data.x }}, {{ trigger.event.data.y }})
         停留 {{ trigger.event.data.seconds_stuck }} 秒，已停止。
-      level: warning
 ```
 
 > **本集成只负责上报，不会自己停止扫地机。** 停止是一个决定，放在自动化里你才能加自己的条件、
@@ -184,7 +271,7 @@ action:
 
 ### 为什么柜门自动化建议配自建服务器
 
-你那套柜门自动化等 `clear_of_garage` 翻转的窗口是 **2 分钟**。官方云下 60 秒才采样一次，
+柜门状态机等 `outside_danger_zone` 翻转的窗口是 **2 分钟**。官方云下 60 秒才采样一次，
 最坏情况第一个新坐标就要等 60 秒，再叠加一次失败就越过窗口 —— 属于「能用但很紧」。
 自建服务器把采样缩短到 10 秒，这个窗口就非常从容。这是切本地服务器最实际的理由。
 
@@ -265,12 +352,19 @@ action:
 ## 当前仓库结构
 
 ```text
-custom_components/roborock_plus/
+custom_components/roborock_plus/    集成本体（HACS 分发这一部分）
+automations/                        三个扫地机自动化 + 说明（人工加入 HA）
+blueprints/                         分区定时清扫蓝图（从 GitHub URL 导入）
+scripts/                            构建、验证、变异检查工具
+tests/                              测试
+docs/plans/                         设计文档
 hacs.json
 README.md
 ```
 
-这个结构符合 HACS 对自定义集成仓库的基本要求。
+**HACS 只分发 `custom_components/roborock_plus/` 这一个目录。** 自动化和蓝图不在
+HACS 的类别里（它只支持 AppDaemon / Dashboard / Integration / Python Script /
+Template / Theme），所以单独维护，见 [automations/README.md](automations/README.md)。
 
 ## 兼容性说明
 
@@ -286,14 +380,35 @@ README.md
 python -m pytest tests -q
 ```
 
-测试覆盖恢复命令选择、危险区几何、柜门保护、轮询策略和翻译文件完整性。
+测试覆盖恢复命令选择、危险区几何、柜门保护、轮询策略、状态表互斥和翻译文件完整性。
+
+改蓝图或自动化后，提交前跑这两个：
+
+```bash
+python scripts/validate_blueprints.py    # 蓝图结构（HA 导入时才会发现的结构错误）
+python scripts/mutation_check_blueprint.py   # 确认上面的检查真的能抓到问题
+```
+
+`validate_blueprints.py` 不是多余的：蓝图第一版的**每个 Jinja 模板都渲染正确**，
+但被 HA 导入器拒收 —— `then:` 的缩进落在了 `if:` 的条件列表里。只渲染模板
+永远发现不了这类结构错误。
 
 ## 项目状态
 
-当前项目仍在演进中。已经完成的主线是恢复语义、危险区/柜门保护和状态轮询；
-接下来会继续补文档和自动化示例。
+已完成的主线：恢复语义、危险区/柜门保护、状态轮询、卡住检测、位置可信度、
+三个自动化与分区定时清扫蓝图。
 
 如果你只是想直接替代内置集成，这个项目**不是覆盖版**，而是**并存版**。
+
+## 已知问题
+
+- **`last_resume_command` 在 HA 重启后丢失。** 它存在内存里，用于暂停后
+  恢复原任务。若恰好在"暂停中"重启，`resume_task` 会因为没有兜底命令而报
+  `resume_not_available`。集成已经尽量从设备状态推导，但暂停态本身信息不足。
+- **官方云下卡住检测精度受限。** 采样 60 秒时，120 秒窗口内只有 2 个样本，
+  判定会明显变粗。这是限流约束带来的固有限制，调参解决不了。
+- **App 发起的清扫不受保护。** 从 Roborock App 启动的命令不经过 HA，
+  `garage_guard` 拦不到，柜门不会自动打开。这是架构限制，不是 bug。
 
 ## 致谢
 

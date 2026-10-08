@@ -18,7 +18,30 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-BLUEPRINT = REPO / "blueprints" / "roborock_cleaning_schedule.yaml"
+BLUEPRINTS = REPO / "blueprints"
+
+
+def _blueprint() -> Path:
+    """Find the cleaning blueprint without hardcoding its (Chinese) filename.
+
+    It is named in Chinese so Home Assistant shows a readable title -- HA takes
+    the display name from the file name. Hardcoding it here would turn every
+    rename into an edit of this script.
+    """
+    candidates = [
+        path
+        for path in BLUEPRINTS.glob("*.yaml")
+        if "cleaning" in path.name or "清扫" in path.name
+    ]
+    if len(candidates) != 1:
+        raise SystemExit(
+            f"expected exactly one cleaning blueprint in {BLUEPRINTS}, "
+            f"found: {[p.name for p in candidates]}"
+        )
+    return candidates[0]
+
+
+BLUEPRINT = _blueprint()
 
 spec = importlib.util.spec_from_file_location(
     "validate_blueprints", REPO / "scripts" / "validate_blueprints.py"

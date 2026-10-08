@@ -86,7 +86,7 @@
 | **自动化①** | [automations/roborock_garage_door_statemachine.yaml](automations/roborock_garage_door_statemachine.yaml) | 出门后关门、回基站前开门、停靠后关门 |
 | **自动化②** | [automations/roborock_stuck_or_error_stop.yaml](automations/roborock_stuck_or_error_stop.yaml) | 卡住或设备报错时停止并告警 |
 | **自动化③** | [automations/roborock_clean_command_not_started.yaml](automations/roborock_clean_command_not_started.yaml) | 命令下发了但任务没启动时告警 |
-| **蓝图** | [blueprints/roborock_cleaning_schedule.yaml](blueprints/roborock_cleaning_schedule.yaml) | 分区定时清扫，可选"区域内有人则跳过并重试" |
+| **蓝图** | [blueprints/扫地机分区定时清扫.yaml](blueprints/扫地机分区定时清扫.yaml) | 分区定时清扫，可选"区域内有人则跳过并重试" |
 
 **自动化和蓝图靠人工加入 HA，不在 HACS 流程里**（HACS 没有这两类）。
 细节见 [automations/README.md](automations/README.md)。

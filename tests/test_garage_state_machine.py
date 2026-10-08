@@ -133,6 +133,79 @@ class TestParkingRequiresConfirmationTheRobotIsInside:
         assert branch["sequence"][0].get("delay") == "00:00:08"
 
 
+class TestParkingRequiresTheTaskToBeOver:
+    """A dock visit mid-task must not be mistaken for a finished clean.
+
+    `binary_sensor.g20s_ultra_task_active` cannot answer this on its own: its
+    state list treats `charging`, `attaching_the_mop`, `detaching_the_mop` and
+    `back_to_dock_washing_duster` as "no task". A robot that comes back to wash
+    its mop or take on charge therefore reads as idle while the clean is still
+    unfinished. Closing there would shut the door on a robot that is about to
+    come back out, and phase C would not reopen it, because a robot going
+    straight from `charging` to `cleaning` never reports `returning_home`.
+    """
+
+    END_MARKER = "sensor.sao_di_ji_v2_timestamp_2"
+
+    def test_phase_d_consults_the_devices_end_of_clean_marker(self) -> None:
+        branch = _branch(_config(), 2)
+        serialised = json.dumps(branch, ensure_ascii=False)
+        assert self.END_MARKER in serialised, (
+            "phase D must distinguish a finished clean from a mid-task dock "
+            "visit; task_active alone cannot"
+        )
+
+    def test_the_marker_is_required_in_both_places(self) -> None:
+        """Once in the conditions, once after the settle delay re-check."""
+        branch = _branch(_config(), 2)
+        in_conditions = any(
+            self.END_MARKER in json.dumps(c, ensure_ascii=False)
+            for c in branch["conditions"]
+        )
+        in_sequence = any(
+            self.END_MARKER in json.dumps(s, ensure_ascii=False)
+            for s in branch["sequence"]
+        )
+        assert in_conditions, "the guard must gate the branch"
+        assert in_sequence, (
+            "the guard must be re-checked after the delay, or a task that "
+            "restarts inside those 8 seconds would still close the door"
+        )
+
+    def test_an_unavailable_marker_refuses_rather_than_guesses(self) -> None:
+        """A missing timestamp must not be treated as 'just finished'."""
+        branch = _branch(_config(), 2)
+        guard = next(
+            c for c in branch["conditions"]
+            if self.END_MARKER in json.dumps(c, ensure_ascii=False)
+        )
+        template = guard["value_template"]
+        assert "false" in template, (
+            "the template must render false when the marker is unknown, "
+            "unavailable or empty"
+        )
+        for missing in ("unknown", "unavailable", "none"):
+            assert missing in template, f"{missing} must be handled"
+
+    def test_the_window_is_short_enough_to_exclude_a_previous_task(self) -> None:
+        """A mid-task visit leaves the marker at the previous task's time."""
+        branch = _branch(_config(), 2)
+        guard = next(
+            c for c in branch["conditions"]
+            if self.END_MARKER in json.dumps(c, ensure_ascii=False)
+        )
+        import re
+
+        limit = int(re.search(r"< (\d+)", guard["value_template"]).group(1))
+        assert limit <= 30 * 60, (
+            "the window must be well under the gap between separate tasks; a "
+            "multi-hour window would accept yesterday's finish"
+        )
+        assert limit >= 2 * 60, (
+            "the window must outlast the trip from the last room to the dock"
+        )
+
+
 class TestTheAutomationNeverClosesOnATimeout:
     """No wait may be treated as success, and no window may end in a close."""
 

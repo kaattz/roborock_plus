@@ -1,0 +1,93 @@
+{
+  "alias": "车库门单键循环（BLE 按键）",
+  "description": "车库门 BLE 物理按键的单键循环，用门自己上报的 current_position 判断，\n取代原先的「无线窗帘电动窗单键循环控制」蓝图自动化。\n\n为什么换掉蓝图：蓝图是为了给「不报 position 的设备」补一个位置而做的 ——\nZigbee 窗帘电机和米家开窗器只暴露 开/关/停，所以蓝图用 total_duration\n加一个 input_datetime 去推算「还在动」，这是对那类设备合理的变通。\n\n但这扇门不需要：cover.vacuum_garage_door 是 zhenji.wopener.zj1q，\n走原生 xiaomi_home，直接上报真实 position（实测见过 0 / 11 / 77 / 100，\n包含停在半路的中间值）。所以蓝图那套计时器对本门既多余又算错：\n它配的 total_duration 是 40 秒，而门不到 1 秒就报到位。\n\n这个错配就是 2026-10-08 两次「关门 9.5 秒后又被打开」的原因：\n20:53:44.950 状态机关门 → 20:53:55.377 门被打开；21:09 同样。\n蓝图监听 cover 域的每一次 call_service，分不清状态机的命令和按键。\n\n按键行为：\n  门在动（opening/closing） → 停止\n  位置 ≤ 1（已关）          → 打开\n  位置 ≥ 2（未关到底）      → 关闭\n  位置读不到                → 什么都不做，并发通知\n\n最后一条是刻意的：位置未知时不能猜。猜「关闭」是唯一可能夹到扫地机的方向。\n什么都不做至少保持原状，用户看得见也能自己处理。\n\n没有用 input_datetime / input_select 辅助实体 —— 它们只是为了补 position\n而存在，现在只会变成第二个更滞后的真相来源。",
+  "mode": "single",
+  "max_exceeded": "silent",
+  "triggers": [
+    {
+      "trigger": "state",
+      "entity_id": "event.vacuum_garage_door_click",
+      "id": "press"
+    }
+  ],
+  "conditions": [
+    {
+      "condition": "state",
+      "entity_id": "event.vacuum_garage_door_click",
+      "attribute": "event_type",
+      "state": "单击"
+    }
+  ],
+  "actions": [
+    {
+      "choose": [
+        {
+          "conditions": [
+            {
+              "condition": "state",
+              "entity_id": "cover.vacuum_garage_door",
+              "state": [
+                "opening",
+                "closing"
+              ]
+            }
+          ],
+          "sequence": [
+            {
+              "action": "cover.stop_cover",
+              "target": {
+                "entity_id": "cover.vacuum_garage_door"
+              }
+            }
+          ]
+        },
+        {
+          "conditions": [
+            {
+              "condition": "numeric_state",
+              "entity_id": "cover.vacuum_garage_door",
+              "attribute": "current_position",
+              "below": 2
+            }
+          ],
+          "sequence": [
+            {
+              "action": "cover.open_cover",
+              "target": {
+                "entity_id": "cover.vacuum_garage_door"
+              }
+            }
+          ]
+        },
+        {
+          "conditions": [
+            {
+              "condition": "numeric_state",
+              "entity_id": "cover.vacuum_garage_door",
+              "attribute": "current_position",
+              "above": 1
+            }
+          ],
+          "sequence": [
+            {
+              "action": "cover.close_cover",
+              "target": {
+                "entity_id": "cover.vacuum_garage_door"
+              }
+            }
+          ]
+        }
+      ],
+      "default": [
+        {
+          "action": "script.alert_notify",
+          "data": {
+            "level": "warning",
+            "title": "车库门按键：位置未知，未动作",
+            "message": "按了车库门按键，但读不到门的位置，为避免误关门夹到扫地机，没有执行任何动作。cover={{ states('cover.vacuum_garage_door') }}，position={{ state_attr('cover.vacuum_garage_door', 'current_position') }}"
+          }
+        }
+      ]
+    }
+  ]
+}

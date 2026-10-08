@@ -18,8 +18,8 @@ SPEC.loader.exec_module(MODULE)
 
 SafeZone = MODULE.SafeZone
 suggest_safe_zone = MODULE.suggest_safe_zone
-point_in_safe_zone = MODULE.point_in_safe_zone
-point_clear_of_garage = getattr(MODULE, "point_clear_of_garage", None)
+point_in_danger_zone = MODULE.point_in_danger_zone
+point_clear_of_danger_zone = getattr(MODULE, "point_clear_of_danger_zone", None)
 DEFAULT_DOCK_X = MODULE.DEFAULT_DOCK_X
 DEFAULT_DOCK_Y = MODULE.DEFAULT_DOCK_Y
 
@@ -58,22 +58,24 @@ def test_suggest_safe_zone_north() -> None:
     )
 
 
-def test_point_in_safe_zone_true() -> None:
+def test_point_in_danger_zone_true() -> None:
     zone = SafeZone(min_x=25800, max_x=28300, min_y=24300, max_y=26700)
-    assert point_in_safe_zone(26000, 25000, zone) is True
+    assert point_in_danger_zone(26000, 25000, zone) is True
 
 
-def test_point_in_safe_zone_false() -> None:
+def test_point_in_danger_zone_false() -> None:
     zone = SafeZone(min_x=25800, max_x=28300, min_y=24300, max_y=26700)
-    assert point_in_safe_zone(25000, 25000, zone) is False
+    assert point_in_danger_zone(25000, 25000, zone) is False
 
 
-def test_point_clear_of_garage_is_true_outside_danger_zone() -> None:
-    assert callable(point_clear_of_garage), "point_clear_of_garage is missing"
+def test_point_clear_of_danger_zone_is_true_outside() -> None:
+    assert callable(point_clear_of_danger_zone), (
+        "point_clear_of_danger_zone is missing"
+    )
     zone = SafeZone(min_x=25800, max_x=28300, min_y=24300, max_y=26700)
 
-    assert point_clear_of_garage(25000, 25000, zone) is True
-    assert point_clear_of_garage(26000, 25000, zone) is False
+    assert point_clear_of_danger_zone(25000, 25000, zone) is True
+    assert point_clear_of_danger_zone(26000, 25000, zone) is False
 
 
 def test_suggest_safe_zone_rejects_invalid_direction() -> None:

@@ -29,7 +29,7 @@ from .coordinator import (
 from .entity import RoborockCoordinatedEntityA01, RoborockCoordinatedEntityV1
 from .models import DeviceState
 from .safe_zone_entities import build_safe_zone_entities
-from .safe_zone import point_clear_of_garage, point_in_safe_zone
+from .safe_zone import point_clear_of_danger_zone, point_in_danger_zone
 from .safe_zone_store import DISPATCH_SAFE_ZONE_UPDATED, get_safe_zone_store
 from .v1_task_state import is_v1_task_active
 
@@ -195,9 +195,9 @@ async def async_setup_entry(
     entities.extend(
         build_safe_zone_entities(
             config_entry.runtime_data.v1,
-            RoborockHasSafeZoneBinarySensorEntity,
-            RoborockInSafeZoneBinarySensorEntity,
-            RoborockClearOfGarageBinarySensorEntity,
+            RoborockHasDangerZoneBinarySensorEntity,
+            RoborockInDangerZoneBinarySensorEntity,
+            RoborockClearOfDangerZoneBinarySensorEntity,
         )
     )
     entities.extend(
@@ -277,13 +277,14 @@ class RoborockSafeZoneBinarySensorBase(RoborockCoordinatedEntityV1, BinarySensor
         self.async_write_ha_state()
 
 
-class RoborockHasSafeZoneBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
-    """Whether a safe zone is configured."""
+class RoborockHasDangerZoneBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
+    """Whether a danger zone is configured."""
 
-    _attr_translation_key = "has_safe_zone"
+    _attr_translation_key = "has_danger_zone"
 
     def __init__(self, coordinator: RoborockDataUpdateCoordinator) -> None:
         """Initialize the entity."""
+        # Unique_id unchanged; see the note on the entities below.
         super().__init__(f"has_safe_zone_{coordinator.duid_slug}", coordinator)
 
     @property
@@ -294,18 +295,31 @@ class RoborockHasSafeZoneBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
         )
 
 
-class RoborockInSafeZoneBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
-    """Whether the robot is inside the configured safe zone."""
+class RoborockInDangerZoneBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
+    """Whether the robot is inside the configured danger zone.
 
-    _attr_translation_key = "in_safe_zone"
+    The zone is called a *danger* zone because it contains the dock: a robot
+    sitting on its charger is inside it, so "inside" means "do not shut the
+    cabinet door". An earlier name (`in_safe_zone`) came from the opposite
+    assumption -- that the dock sat outside the zone -- which the measured
+    geometry disproved.
+    """
+
+    _attr_translation_key = "in_danger_zone"
 
     def __init__(self, coordinator: RoborockDataUpdateCoordinator) -> None:
         """Initialize the entity."""
+        # The unique_id keeps its original `in_safe_zone_` text on purpose.
+        # It is the entity registry's permanent identity, not a label: changing
+        # it would make Home Assistant treat this as a brand-new entity, orphan
+        # the existing one, and cut its recorded history. Only the translation
+        # key -- which produces the display name -- and the entity_id are
+        # renamed.
         super().__init__(f"in_safe_zone_{coordinator.duid_slug}", coordinator)
 
     @property
     def is_on(self) -> bool | None:
-        """Return True if the robot position is inside the configured safe zone."""
+        """Return True if the robot position is inside the danger zone."""
         if (
             (stored := get_safe_zone_store(self.hass).get_loaded(self.coordinator.duid))
             is None
@@ -314,16 +328,18 @@ class RoborockInSafeZoneBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
         position = _fresh_vacuum_position(self.coordinator)
         if position is None:
             return None
-        return point_in_safe_zone(position[0], position[1], stored.zone)
+        return point_in_danger_zone(position[0], position[1], stored.zone)
 
 
-class RoborockClearOfGarageBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
-    """Whether the robot is outside the configured garage danger zone."""
+class RoborockClearOfDangerZoneBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
+    """Whether the robot is outside the configured danger zone."""
 
-    _attr_translation_key = "clear_of_garage"
+    _attr_translation_key = "clear_of_danger_zone"
 
     def __init__(self, coordinator: RoborockDataUpdateCoordinator) -> None:
         """Initialize the entity."""
+        # See the note above: the unique_id stays as originally registered so
+        # the entity keeps its identity and its history.
         super().__init__(f"clear_of_garage_{coordinator.duid_slug}", coordinator)
 
     @property
@@ -332,8 +348,8 @@ class RoborockClearOfGarageBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
 
         Reports unknown when the position is missing, or too old to act on
         while a task is running. This is a safety interlock: a stale "clear of
-        garage" reading must never be used to conclude that closing the door is
-        safe.
+        danger zone" reading must never be used to conclude that closing the
+        door is safe.
         """
         if (
             (stored := get_safe_zone_store(self.hass).get_loaded(self.coordinator.duid))
@@ -343,7 +359,7 @@ class RoborockClearOfGarageBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
         position = _fresh_vacuum_position(self.coordinator)
         if position is None:
             return None
-        return point_clear_of_garage(position[0], position[1], stored.zone)
+        return point_clear_of_danger_zone(position[0], position[1], stored.zone)
 
 
 class RoborockStuckBinarySensorEntity(RoborockCoordinatedEntityV1, BinarySensorEntity):

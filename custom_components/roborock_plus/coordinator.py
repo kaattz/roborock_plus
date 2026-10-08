@@ -527,7 +527,7 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
         `is_map_position_fresh` only bounds how old the *read* is. It cannot
         tell that the payload describes a previous task: on 2026-10-08 the map
         kept returning the living room for thirteen hours while the robot sat
-        on its dock, which made `clear_of_danger_zone` report that closing the
+        on its dock, which made `outside_danger_zone` report that closing the
         door was safe while the robot was standing in the danger zone.
 
         While the robot is docked, the map's own charger marker is where the

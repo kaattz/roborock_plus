@@ -36,10 +36,10 @@ class TestBinarySensorWiring:
         assert "map_data.vacuum_position" not in source
 
     def test_danger_sensor_returns_none_when_untrusted(self) -> None:
-        """`clear_of_danger_zone` must go unknown, not report a stale 'clear'."""
+        """`outside_danger_zone` must go unknown, not report a stale 'outside'."""
         source = _read("binary_sensor.py")
         assert (
-            "return point_clear_of_danger_zone(position[0], position[1], stored.zone)"
+            "return point_outside_danger_zone(position[0], position[1], stored.zone)"
             in source
         )
 

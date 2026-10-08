@@ -2,7 +2,7 @@
 
 These cover the failure measured on 2026-10-08: the robot sat on its dock for
 thirteen hours while the map payload kept returning the living room, and
-`clear_of_garage` reported that closing the door was safe while the robot was
+`outside_danger_zone` reported that closing the door was safe while the robot was
 standing in the danger zone.
 """
 

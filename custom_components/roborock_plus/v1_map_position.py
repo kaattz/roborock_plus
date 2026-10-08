@@ -1,6 +1,6 @@
 """Helpers for V1 vacuum map position freshness.
 
-The danger-zone entities (`in_danger_zone`, `clear_of_danger_zone`) read the
+The danger-zone entities (`in_danger_zone`, `outside_danger_zone`) read the
 vacuum position from the map content trait. These helpers decide how often that
 trait may be re-read and how long a sample may be trusted.
 
@@ -30,7 +30,7 @@ MAX_V1_MAP_POSITION_POLL_INTERVAL = 300
 # rate limiting or a ban.
 #
 # Note the trade-off these values encode: the garage-door automations wait at
-# most two minutes for `clear_of_danger_zone` to flip after the robot leaves the
+# most two minutes for `outside_danger_zone` to flip after the robot leaves the
 # dock. At a 60s interval the first fresh sample can be a full minute away, so
 # against the official cloud the sensor is right at the edge of that window --
 # and a single failed read pushes it past it. Local hosting is what makes the
@@ -44,7 +44,7 @@ MAP_POSITION_OFFICIAL_MIN_INTERVAL = timedelta(seconds=30)
 
 # Intervals used against a self-hosted server, where the only cost is local
 # work. Fast sampling here is what removes the staleness that made
-# `clear_of_danger_zone` unusable.
+# `outside_danger_zone` unusable.
 #
 # Five seconds rather than ten: the stuck detector needs several usable samples
 # inside its window, and the default window is 120s. Anyone who wants more

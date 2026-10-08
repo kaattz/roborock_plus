@@ -2,12 +2,12 @@
 
 Every rule below is tied to measured evidence:
 
-* The zone contains the dock, so it is a *danger* zone: `clear_of_garage` is
-  `off` while docked and `on` once the robot has left. The previous version
-  keyed the departure phase on `in_safe_zone` turning `on`, which happens *at*
+* The zone contains the dock, so it is a *danger* zone: `outside_danger_zone`
+  is `off` while docked and `on` once the robot has left. The previous version
+  keyed the departure phase on `in_danger_zone` turning `on`, which happens *at*
   the dock -- so it fired while the robot was still parked.
-* The robot has never reported `in_safe_zone` as a departure signal; it is `on`
-  at the dock. Phase B therefore keys on `clear_of_garage -> on`.
+* The robot has never reported `in_danger_zone` as a departure signal; it is `on`
+  at the dock. Phase B therefore keys on `outside_danger_zone -> on`.
 * On 2026-10-08 the robot never left the dock but reported `docking` while
   attaching the mop (01:26:30-39), and the return phase opened the door for no
   reason. Guards are added to both phases C and D.
@@ -24,7 +24,7 @@ VACUUM = "vacuum.g20s_ultra"
 STATUS = "sensor.g20s_ultra_status"
 COVER = "cover.vacuum_garage_door"
 TASK_ACTIVE = "binary_sensor.g20s_ultra_task_active"
-CLEAR_OF_GARAGE = "binary_sensor.g20s_ultra_clear_of_garage"
+OUTSIDE_DANGER_ZONE = "binary_sensor.g20s_ultra_outside_danger_zone"
 
 # The device's own record of when it finished a clean. It is written when the
 # cleaning stops, before the robot travels home: on 2026-10-08 it read 21:07:21
@@ -69,12 +69,12 @@ DESCRIPTION = "\n".join(
         "合并原先三个 *_plus 自动化，用 mode: queued 串行化，避免它们同时抢柜门和 pause。",
         "",
         "危险区语义：配置的区域包含充电桩，是「不能关门」的危险区。",
-        "所以停靠时 clear_of_garage=off、in_safe_zone=on；出门后正好反过来。",
+        "所以停靠时 outside_danger_zone=off、in_danger_zone=on；出门后正好反过来。",
         "",
         "四个阶段：",
         "A 启动：集成的 garage_guard 在下发命令前就开门并等门全开，扫地机不会被",
         "   关着的门挡住。按约定只管 HA 发起的命令；从 Roborock App 启动不归这里管。",
-        "B 离开：clear_of_garage 从 off 变 on（扫地机真的走出危险区）后，暂停 → 关门 → 恢复。",
+        "B 离开：outside_danger_zone 从 off 变 on（扫地机真的走出危险区）后，暂停 → 关门 → 恢复。",
         "   暂停只在清扫状态里做，并确认真的进入 paused 才关门；否则只告警不关门，",
         "   因为「暂停没生效」意味着它可能还在往门口方向移动。",
         "C 返回：状态变成回基站/洗拖布，且扫地机确实不在基站上，才开门。",
@@ -112,7 +112,7 @@ TRIGGERS = [
         # seconds of a recovery. Requiring `off` makes a real departure
         # (off -> on) fire and a flap recovery (unknown -> on) not.
         "trigger": "state",
-        "entity_id": CLEAR_OF_GARAGE,
+        "entity_id": OUTSIDE_DANGER_ZONE,
         "id": "leave",
         "from": "off",
         "to": "on",
@@ -336,7 +336,7 @@ PHASE_PARK = {
             "if": [
                 # A docked robot stands inside the danger zone, so the sensor
                 # must confirm it is there before the door may move.
-                {"condition": "state", "entity_id": CLEAR_OF_GARAGE, "state": "off"}
+                {"condition": "state", "entity_id": OUTSIDE_DANGER_ZONE, "state": "off"}
             ],
             "then": [
                 {"action": "cover.close_cover", "target": {"entity_id": COVER}},
@@ -370,7 +370,7 @@ PHASE_PARK = {
                     "warning",
                     "柜门状态机：未确认扫地机在危险区内，柜门保持开启",
                     "扫地机已停靠在基站、任务已结束，但 "
-                    "clear_of_garage={{ states('" + CLEAR_OF_GARAGE + "') }}"
+                    "outside_danger_zone={{ states('" + OUTSIDE_DANGER_ZONE + "') }}"
                     "（停靠时应为 off）。危险区读数未确认它在区内，"
                     "为避免夹机，柜门保持开启，请手动确认后关闭。",
                 )

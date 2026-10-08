@@ -29,7 +29,7 @@ from .coordinator import (
 from .entity import RoborockCoordinatedEntityA01, RoborockCoordinatedEntityV1
 from .models import DeviceState
 from .safe_zone_entities import build_safe_zone_entities
-from .safe_zone import point_clear_of_danger_zone, point_in_danger_zone
+from .safe_zone import point_in_danger_zone, point_outside_danger_zone
 from .safe_zone_store import DISPATCH_SAFE_ZONE_UPDATED, get_safe_zone_store
 from .v1_task_state import is_v1_task_active
 
@@ -197,7 +197,7 @@ async def async_setup_entry(
             config_entry.runtime_data.v1,
             RoborockHasDangerZoneBinarySensorEntity,
             RoborockInDangerZoneBinarySensorEntity,
-            RoborockClearOfDangerZoneBinarySensorEntity,
+            RoborockOutsideDangerZoneBinarySensorEntity,
         )
     )
     entities.extend(
@@ -331,10 +331,17 @@ class RoborockInDangerZoneBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
         return point_in_danger_zone(position[0], position[1], stored.zone)
 
 
-class RoborockClearOfDangerZoneBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
-    """Whether the robot is outside the configured danger zone."""
+class RoborockOutsideDangerZoneBinarySensorEntity(RoborockSafeZoneBinarySensorBase):
+    """Whether the robot is outside the configured danger zone.
 
-    _attr_translation_key = "clear_of_danger_zone"
+    The counterpart of `in_danger_zone`, and strictly the negation of it. Named
+    as its mirror image so the pair reads as one idea: `on` means the robot is
+    outside, `off` means it is not outside. The earlier `clear_of_garage` was a
+    double negative (`off` read as "not clear") and named the garage instead of
+    the robot.
+    """
+
+    _attr_translation_key = "outside_danger_zone"
 
     def __init__(self, coordinator: RoborockDataUpdateCoordinator) -> None:
         """Initialize the entity."""
@@ -347,9 +354,8 @@ class RoborockClearOfDangerZoneBinarySensorEntity(RoborockSafeZoneBinarySensorBa
         """Return True if the robot position is outside the danger zone.
 
         Reports unknown when the position is missing, or too old to act on
-        while a task is running. This is a safety interlock: a stale "clear of
-        danger zone" reading must never be used to conclude that closing the
-        door is safe.
+        while a task is running. This is a safety interlock: a stale "outside"
+        reading must never be used to conclude that closing the door is safe.
         """
         if (
             (stored := get_safe_zone_store(self.hass).get_loaded(self.coordinator.duid))
@@ -359,7 +365,7 @@ class RoborockClearOfDangerZoneBinarySensorEntity(RoborockSafeZoneBinarySensorBa
         position = _fresh_vacuum_position(self.coordinator)
         if position is None:
             return None
-        return point_clear_of_danger_zone(position[0], position[1], stored.zone)
+        return point_outside_danger_zone(position[0], position[1], stored.zone)
 
 
 class RoborockStuckBinarySensorEntity(RoborockCoordinatedEntityV1, BinarySensorEntity):

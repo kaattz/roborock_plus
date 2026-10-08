@@ -102,8 +102,8 @@
       "in_danger_zone": {
         "name": "In danger zone"
       },
-      "clear_of_danger_zone": {
-        "name": "Clear of danger zone"
+      "outside_danger_zone": {
+        "name": "Outside danger zone"
       },
       "stuck": {
         "name": "Stuck"

@@ -19,7 +19,7 @@ SPEC.loader.exec_module(MODULE)
 SafeZone = MODULE.SafeZone
 suggest_safe_zone = MODULE.suggest_safe_zone
 point_in_danger_zone = MODULE.point_in_danger_zone
-point_clear_of_danger_zone = getattr(MODULE, "point_clear_of_danger_zone", None)
+point_outside_danger_zone = getattr(MODULE, "point_outside_danger_zone", None)
 DEFAULT_DOCK_X = MODULE.DEFAULT_DOCK_X
 DEFAULT_DOCK_Y = MODULE.DEFAULT_DOCK_Y
 
@@ -68,14 +68,14 @@ def test_point_in_danger_zone_false() -> None:
     assert point_in_danger_zone(25000, 25000, zone) is False
 
 
-def test_point_clear_of_danger_zone_is_true_outside() -> None:
-    assert callable(point_clear_of_danger_zone), (
-        "point_clear_of_danger_zone is missing"
+def test_point_outside_danger_zone_is_true_outside() -> None:
+    assert callable(point_outside_danger_zone), (
+        "point_outside_danger_zone is missing"
     )
     zone = SafeZone(min_x=25800, max_x=28300, min_y=24300, max_y=26700)
 
-    assert point_clear_of_danger_zone(25000, 25000, zone) is True
-    assert point_clear_of_danger_zone(26000, 25000, zone) is False
+    assert point_outside_danger_zone(25000, 25000, zone) is True
+    assert point_outside_danger_zone(26000, 25000, zone) is False
 
 
 def test_suggest_safe_zone_rejects_invalid_direction() -> None:

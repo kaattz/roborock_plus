@@ -24,18 +24,18 @@
 
 配置的区域**包含充电桩**，所以它是「不能关门」的危险区：
 
-| 状态 | `clear_of_garage` | `in_safe_zone` |
+| 状态 | `outside_danger_zone` | `in_danger_zone` |
 | --- | --- | --- |
 | 停在基站 | `off` | `on` |
 | 出门清扫 | `on` | `off` |
 
-所以「离开」用 `clear_of_garage` 从 `off` 变 `on` 判断，**不是** `in_safe_zone` 变 `on`
+所以「离开」用 `outside_danger_zone` 从 `off` 变 `on` 判断，**不是** `in_danger_zone` 变 `on`
 （那个在基站时就是 `on`）。
 
 ## 四个阶段
 
 - **A 启动** —— 集成的 `garage_guard` 在下发命令前开门并等门全开。
-- **B 离开** —— `clear_of_garage` 从 `off` 变 `on` 后：暂停 → 关门 → 恢复。
+- **B 离开** —— `outside_danger_zone` 从 `off` 变 `on` 后：暂停 → 关门 → 恢复。
 - **C 返回** —— 状态变成回基站/洗拖布，**且扫地机确实不在基站上**，才开门。
 - **D 停靠** —— 任务结束、已回基站、**危险区传感器确认它在区内**，才关门。
 
@@ -61,7 +61,7 @@
 
 ### 3. D 阶段要求传感器确认它在区内
 
-停靠时机器人就在危险区里，`clear_of_garage` 应该是 `off`。如果读数是过时的 `on`
+停靠时机器人就在危险区里，`outside_danger_zone` 应该是 `off`。如果读数是过时的 `on`
 （「已离开」），关下去就会夹住机器。没确认时门保持开启**并且告警**。
 
 ## 超时策略

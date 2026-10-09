@@ -16,11 +16,13 @@ blueprint:
 
     ## 三种典型配法
 
-    1. **公区，每天** — 触发器「时间」= 你希望的时刻；星期留空。
-    2. **卧室，每周三天** — 触发器「时间」= 时刻；星期勾选那三天。
+    1. **公区，每天** — 触发器「时间」= 你希望的时刻。
+    2. **卧室，每周三天** — 触发器「时间」= 时刻，再展开触发器里的
+       「星期几 / Days of the Week」勾那三天。**星期在触发器里设**，
+       蓝图没有单独的星期参数。
     3. **午饭后餐厨** — 触发器「状态」= 洗碗机的
        `binary_sensor.<dishwasher>_program_finished`，`off` → `on`。
-       这个信号只有 60 秒，但实测 4/4 都抓到了；星期留空。
+       这个信号只有 60 秒，但实测 4/4 都抓到了。这种触发器不用管星期。
 
     ## 扫地/拖地怎么表达
 
@@ -92,44 +94,19 @@ blueprint:
         my_trigger:
           name: 何时清扫
           description: >-
-            **在这里自己配触发器**，蓝图不预设。常见三种：
+            **在这里自己配触发器**，蓝图不预设。三种典型：
 
             · **每天定时** — 触发器选「时间」，填个时刻。
 
-            · **定时 + 每周固定几天** — 先按上面配时间，再到下面「星期」里选。
+            · **每周固定几天** — 触发器选「时间」，填时刻，然后展开
+            下面的「星期几 / Days of the Week」，勾你要的那几天。
+            **星期是在触发器里设的**，蓝图没有单独的星期参数。
 
             · **洗碗机洗完就扫** — 触发器选「状态」，实体选洗碗机的
-            `program_finished`，从 `off` 变 `on`。这个传感器只亮 60 秒，
-            但实测 4/4 都捕获到了。
-
-            用「状态」触发时，下面的「星期」留空即可（不限制）。
+            `program_finished`，从 `off` 变 `on`。这个信号只亮 60 秒，
+            但实测 4/4 都抓到了。这种触发器**不用管星期**。
           selector:
             trigger:
-        weekdays:
-          name: 星期
-          description: >-
-            额外的星期过滤，对上面配的任何触发器都生效。
-            **留空＝不限制**（洗碗机那类触发应该留空）。
-            全选也等于不限制。
-          default: []
-          selector:
-            select:
-              multiple: true
-              options:
-                - label: 周一
-                  value: mon
-                - label: 周二
-                  value: tue
-                - label: 周三
-                  value: wed
-                - label: 周四
-                  value: thu
-                - label: 周五
-                  value: fri
-                - label: 周六
-                  value: sat
-                - label: 周日
-                  value: sun
 
     area:
       name: 清扫区域
@@ -257,7 +234,6 @@ variables:
   mop_intensity: !input mop_intensity
   mop_route: !input mop_route
   areas: !input areas
-  weekdays: !input weekdays
   retry_window: !input retry_window_minutes
   retry_interval: !input retry_interval_minutes
   notify_script: !input notify_script
@@ -316,16 +292,11 @@ variables:
 # —— 只有 async_initialize_triggers 阶段才跳过禁用的。所以"时间"实例里留空的
 # entity_id 会在校验阶段就报错，把整个自动化标成 failed_triggers。
 # trigger 选择器是官方为此提供的做法，且不用留空任何输入。
+#
+# 星期也在触发器里设：HA 的 time 触发器自带 weekday 选项。曾经加过一个独立的
+# 「星期」输入，但它和触发器重复，语义还绕（"额外的过滤，留空＝不限制"），
+# 所以删掉了。
 triggers: !input my_trigger
-
-conditions:
-  # 星期过滤。留空＝不限制：洗碗机那类事件触发不该被星期挡住。
-  # 用 template 而不是 condition: time，因为 condition: time 的 weekday
-  # 不接受空列表（会变成"永不匹配"）。
-  - condition: template
-    value_template: >-
-      {% set days = weekdays | default([], true) %}
-      {{ days | count == 0 or now().strftime('%a') | lower in days }}
 
 actions:
   # 推导失败就告警并停止，不猜、不半途而废。

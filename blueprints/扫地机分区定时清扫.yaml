@@ -37,6 +37,19 @@ blueprint:
     服务调用成功只代表命令被服务器接受，不代表机器人动了（这是实测过的坑）。
     重试与否、成功与否都以这个传感器为准。
 
+    **这个传感器不用你选** —— 蓝图从选中的扫地机设备上自己找。同理「拖地强度」
+    和「拖地模式」两个 select 也是自己找的，所以整套只填一个实体。
+
+    推导判据（都取自设备实际能力，不靠名字）：
+
+    | 要找 | 判据 |
+    | --- | --- |
+    | 任务进行中 | 该设备上 `device_class: running` 且 id 含 `task_active` |
+    | 拖地强度 | 该设备上 options 同时含 `off` 与 `extreme` |
+    | 拖地模式 | 该设备上 options 含 `deep_plus` |
+
+    找不到时**告警并停止**，不猜、不跳过。
+
     ## 柜门
 
     开门由集成的 `garage_guard` 在下发命令前自动完成，本蓝图不管门。
@@ -52,23 +65,15 @@ blueprint:
       input:
         vacuum_entity:
           name: 扫地机实体
+          description: >-
+            只选这一个。它的「任务进行中」传感器、拖地强度、拖地模式都由蓝图
+            从这台设备上自动找出，不用你挑 —— 那几个实体名字很像
+            （`_v2` 和 `_v2_2`），手选容易看反。
           selector:
             entity:
               filter:
                 - integration: roborock_plus
                   domain: vacuum
-        task_active_entity:
-          name: 任务进行中传感器
-          description: >-
-            集成的「任务进行中」二元传感器（`binary_sensor.<扫地机>_task_active`）。
-            回答的是「任务还活着吗」——暂停、回基站、洗拖布时它仍然是 on。
-            本蓝图只用它确认清扫真的启动了：服务调用返回 200 不代表机器人动了。
-          selector:
-            entity:
-              filter:
-                - integration: roborock_plus
-                  domain: binary_sensor
-                  device_class: running
 
     schedule:
       name: 时间
@@ -132,18 +137,11 @@ blueprint:
                 - 仅扫地
                 - 扫拖一体
                 - 仅拖地
-        mop_intensity_entity:
-          name: 拖地强度实体
-          description: 集成里那个「拖地强度」select（`select.<扫地机>_mop_intensity`）。
-            仅扫地时会被设为 off。
-          selector:
-            entity:
-              filter:
-                - integration: roborock_plus
-                  domain: select
         mop_intensity:
           name: 拖地强度
-          description: 扫拖一体／仅拖地时使用的水量。仅扫地时忽略（强制 off）。
+          description: >-
+            扫拖一体／仅拖地时使用的水量。仅扫地时忽略（蓝图强制设为 off，
+            那正是"干扫"的实现方式）。
           default: medium
           selector:
             select:
@@ -154,18 +152,11 @@ blueprint:
                 - moderate
                 - high
                 - extreme
-        mop_route_entity:
-          name: 拖地模式实体（可选）
-          description: 集成里那个「拖地模式」select。留空则不设置。
-          default: ""
-          selector:
-            entity:
-              filter:
-                - integration: roborock_plus
-                  domain: select
         mop_route:
           name: 拖地模式
-          description: 拖地走几遍的路线，与扫地/拖地无关。
+          description: >-
+            拖地走几遍的路线，与扫地/拖地无关。蓝图会设到设备上那个
+            「拖地模式」select；设备没有这个实体时就跳过。
           default: standard
           selector:
             select:
@@ -239,15 +230,11 @@ blueprint:
 mode: single
 max_exceeded: silent
 
-# 取值全部是纯 !input 代入（不是模板），所以没有"渲染顺序"问题。
-# 运行中不改写任何变量 —— 是否成功一律现查 task_active 传感器，
-# 不依赖"跨块设置变量是否保留"这种不确定行为。
+# 取值全部是纯 !input 代入或从设备推导，不依赖"跨块设置变量是否保留"。
+# 运行中不改写任何变量 —— 是否成功一律现查 task_active 传感器。
 variables:
   vacuum_entity: !input vacuum_entity
-  task_active_entity: !input task_active_entity
   presence_sensors: !input presence_sensors
-  mop_intensity_entity: !input mop_intensity_entity
-  mop_route_entity: !input mop_route_entity
   cleaning_mode: !input cleaning_mode
   mop_intensity: !input mop_intensity
   mop_route: !input mop_route
@@ -255,6 +242,45 @@ variables:
   retry_window: !input retry_window_minutes
   retry_interval: !input retry_interval_minutes
   notify_script: !input notify_script
+
+  # --- 从选中的扫地机推导出三个实体，省掉三次手选 -----------------------
+  #
+  # 都挂在同一台设备上，所以用 device_entities(device_id(vacuum)) 一次拿到，
+  # 再按"设备实际能力"挑，而不是按名字匹配 —— 名字不可靠（用户这套里
+  # 拖地强度是 select.sao_di_ji_v2、拖地模式是 select.sao_di_ji_v2_2，
+  # 只差一个后缀，手选极易看反）。
+  #
+  # 三个判据都是能力特征：
+  #   task_active   device_class=running 且 id 含 task_active
+  #   拖地强度       options 同时含 off（干扫）和 extreme（最大水量）
+  #   拖地模式       options 含 deep_plus（该选项为它独有）
+  device_entities_list: "{{ device_entities(device_id(vacuum_entity)) | default([], true) }}"
+
+  task_active_entity: >-
+    {% set found = expand(device_entities_list)
+       | selectattr('entity_id', 'match', '^binary_sensor\.')
+       | selectattr('attributes.device_class', 'eq', 'running')
+       | selectattr('entity_id', 'search', 'task_active')
+       | map(attribute='entity_id') | list %}
+    {{ found[0] if found else '' }}
+
+  mop_intensity_entity: >-
+    {% set found = expand(device_entities_list)
+       | selectattr('entity_id', 'match', '^select\.')
+       | selectattr('attributes.options', 'defined')
+       | selectattr('attributes.options', 'contains', 'off')
+       | selectattr('attributes.options', 'contains', 'extreme')
+       | map(attribute='entity_id') | list %}
+    {{ found[0] if found else '' }}
+
+  mop_route_entity: >-
+    {% set found = expand(device_entities_list)
+       | selectattr('entity_id', 'match', '^select\.')
+       | selectattr('attributes.options', 'defined')
+       | selectattr('attributes.options', 'contains', 'deep_plus')
+       | map(attribute='entity_id') | list %}
+    {{ found[0] if found else '' }}
+
   # 尝试次数 = 窗口/间隔 + 1，至少 1 次（窗口 0 时就是那一次）。
   max_attempts: >-
     {% set window = retry_window | int(0) %}
@@ -273,6 +299,26 @@ conditions:
     weekday: !input weekdays
 
 actions:
+  # 推导失败就告警并停止，不猜、不半途而废。
+  # 这两个实体是必需的：没有「任务进行中」就无法判断清扫是否真的启动，
+  # 没有「拖地强度」就无法表达"仅扫地"（那是靠水量 off 实现的）。
+  # 它们只在设备换了、或集成改了实体命名时才会找不到。
+  - if:
+      - condition: template
+        value_template: "{{ task_active_entity == '' or mop_intensity_entity == '' }}"
+    then:
+      - action: "{{ notify_script }}"
+        data:
+          level: warning
+          title: 扫地机定时清扫：找不到设备实体
+          message: >-
+            从 {{ vacuum_entity }} 上无法推导出所需实体，清扫未执行。
+            任务进行中传感器：{{ task_active_entity or '未找到' }}；
+            拖地强度实体：{{ mop_intensity_entity or '未找到' }}。
+            设备上有这些 select：{{ device_entities_list | select('match', '^select\.') | list }}；
+            这些 binary_sensor：{{ device_entities_list | select('match', '^binary_sensor\.') | list }}。
+      - stop: 推导失败
+
   - repeat:
       count: "{{ max_attempts }}"
       sequence:
@@ -298,7 +344,8 @@ actions:
                 - condition: template
                   value_template: "{{ not occupied and not busy }}"
               then:
-                # 扫地/拖地意图 → 底层参数
+                # 扫地/拖地意图 → 底层参数。
+                # "仅扫地"就是水量 off（干扫），这是 V1 协议里表达干扫的方式。
                 - action: select.select_option
                   target:
                     entity_id: "{{ mop_intensity_entity }}"
@@ -306,10 +353,11 @@ actions:
                     option: "{{ 'off' if cleaning_mode == '仅扫地' else mop_intensity }}"
                   continue_on_error: true
 
+                # 拖地模式是可选的：有些设备没有这个实体，推导为空就跳过。
                 - if:
                     - condition: template
                       value_template: >-
-                        {{ mop_route_entity | default('', true) not in ['', none]
+                        {{ mop_route_entity not in ['', none]
                            and cleaning_mode != '仅扫地' }}
                   then:
                     - action: select.select_option

@@ -1,7 +1,7 @@
 # 扫地机分区定时清扫蓝图 — 设计
 
 日期：2026-10-09
-状态：待评审
+状态：已实施（蓝图已导入 HA，待用户建实例）
 阶段：第二阶段（第一阶段柜门状态机已完成并部署）
 
 ## 需求
@@ -88,18 +88,58 @@ class CleanRoutes(RoborockModeEnum):
 
 ### 蓝图输入
 
+只有三个实体型输入，其余都是值。三个实体各有不能推导的理由：
+
 | 输入 | 选择器 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `vacuum_entity` | entity（vacuum 域） | ✅ | 目标扫地机 |
+| `vacuum_entity` | entity（vacuum 域） | ✅ | 目标扫地机。**另外三个实体由它推导** |
 | `start_time` | time | ✅ | 每天/每周几的启动时间 |
 | `weekdays` | select（多选 mon–sun） | ✅ | 哪几天执行；全选即每天 |
 | `areas` | area（多选） | ✅ | 要清扫的 HA 区域 |
-| `mop_intensity` | select | ✅ | 拖地强度；选 `off` 即干扫 |
-| `mop_route` | select | ⬜ | 拖地路线；默认 `standard` |
+| `cleaning_mode` | select | ✅ | 意图：仅扫地 / 扫拖一体 / 仅拖地 |
+| `mop_intensity` | select | ✅ | 拖地强度**值**；仅扫地时被强制 `off` |
+| `mop_route` | select | ⬜ | 拖地路线**值**；默认 `standard` |
 | `presence_sensors` | entity（多选，binary_sensor） | ⬜ | 本任务房间的人体传感器；**留空=不检查** |
-| `retry_window_minutes` | number（0–120，默认 30） | ⬜ | 重试窗口；0 = 不重试 |
+| `retry_window_minutes` | number（0–180，默认 30） | ⬜ | 重试窗口；0 = 只试一次 |
 | `retry_interval_minutes` | number（1–30，默认 5） | ⬜ | 重试间隔 |
 | `notify_script` | entity（script） | ✅ | 告警脚本，默认 `script.alert_notify` |
+
+### 三个实体从扫地机推导（不再手选）
+
+初版让用户手选「任务进行中传感器」「拖地强度实体」「拖地模式实体」。
+问题是**三者都挂在同一台设备上**，而且其中两个的名字只差一个后缀：
+
+```
+select.sao_di_ji_v2      拖地强度   (water_box_mode)
+select.sao_di_ji_v2_2    拖地模式   (mop_mode)      ← 只差 "_2"
+```
+
+选反的后果很隐蔽：**参数设错，但清扫照样跑**，看起来一切正常。
+
+HA 的蓝图选择器**不支持**"跟随另一个输入"（`filter` 只能写静态条件，
+不能引用 `!input`），所以改成运行时推导：
+
+```jinja
+{% set device_entities_list = device_entities(device_id(vacuum_entity)) | default([], true) %}
+```
+
+| 要找 | 判据 | 为什么用这个判据 |
+| --- | --- | --- |
+| 任务进行中 | `device_class: running` 且 id 含 `task_active` | 该设备上唯一的 running 型任务传感器 |
+| 拖地强度 | options 同时含 `off` 与 `extreme` | `off` = 干扫，是"仅扫地"的实现方式 |
+| 拖地模式 | options 含 `deep_plus` | 该选项为它独有 |
+
+**判据全部取自设备实际能力，不靠名字** —— 这正是要绕开后缀歧义的原因。
+
+**找不到时告警并停止**（`stop: 推导失败`），不猜。告警里会列出设备上实际
+有哪些 select / binary_sensor，便于诊断（比如集成升级改了命名）。
+`device_entities` 对不存在的设备返回空列表，所以填错实体走的是告警路径，
+不会抛异常。
+
+**拖地模式仍可选**：设备没有这个实体时跳过那一步。
+
+**`variables:` 的书写顺序是必须的**：HA 逐条渲染，`device_entities_list`
+必须写在三个使用者之前，`vacuum_entity` 又必须在它之前。
 
 ### 触发
 
@@ -178,6 +218,39 @@ DEFAULT_CLEAN_COMMAND_WATCH_TIMEOUT = 60
 **不告警**的情况：
 - 正常运行（避免每天三条无意义通知）
 
+## 已知限制
+
+### 人体传感器选择器过滤不干净（HA 的固有限制）
+
+`presence_sensors` 加了 `device_class: motion / occupancy / presence` 过滤，
+把 215 个 `binary_sensor` 降到 35 个。**但剩下的里面仍混着无关实体**：
+
+```
+frigate 摄像头      aqara_g5_pro_motion / *_occupancy
+frigate 门禁电梯    elevator_* / door_* / home_door_*
+KNX 测试点位        zaozuo_mini_*_presence_test
+```
+
+**原因是它们的 `device_class` 也是 `motion`/`occupancy`**，所以按 device_class
+区分不了。HA 的选择器只支持"包含某集成"，**不支持排除**，所以无法再收窄。
+
+**实际用法**：用搜索框。打 `presense`（集成里的原始拼法，少一个 e）就能筛出
+房间级传感器；打 `联合` 得到「XX联合人在传感器」。
+
+**为什么不把这些实体 id 写进蓝图**：那会把某套房子的配置硬编码进一个公开蓝图。
+
+### 可用的聚合传感器是反向语义
+
+用户已有：
+
+```
+binary_sensor.nobody_in_livingroom_dinnerroom_kitchen_by_presence
+binary_sensor.nobody_home_by_presence
+```
+
+**它们是 `on` = 没人**，而本蓝图检查的是 `on` = 有人，直接用会反掉。
+**不用**，而是直接用房间级的正向传感器 —— 少一层转换、少一个出错点。
+
 ## 非目标
 
 - **不做 App 启动的支持。** 从 Roborock App 发起的清扫不经过本蓝图；集成的 `garage_guard` 已保证门先开。
@@ -186,11 +259,17 @@ DEFAULT_CLEAN_COMMAND_WATCH_TIMEOUT = 60
 - **不做每任务独立的开关。** 第一版靠"启用/禁用该自动化"控制。
 - **不碰 `configuration.yaml` 里的旧 helper。** 见"遗留"。
 
-## 未决问题（实施前需实测确认）
+## 已解决的原未决问题
 
-1. **`拖地强度 = off` 是否等于"仅扫地"？** 决定蓝图怎么表达"扫地/拖地/扫拖"。需要实际下发一次并观察行为（用户实测）。
-2. **`app_segment_clean` 的参数形状。** 集成内部发 `[{"segments": [3]}]`，而已有脚本发 `[3]`。走 `clean_area` 则不涉及（HA 会调 `async_clean_segments`），但要确认集成那条路是通的。
-3. **重试窗口内任务已成功的判定是否够快。** 集成默认 watch 超时 60 秒，蓝图的等待需要 ≥90 秒才能覆盖。
+1. ~~拖地强度 `off` 是否等于"仅扫地"~~ → **是**。python-roborock 官方的
+   [`CleaningMode`](https://python-roborock.github.io/python-roborock/roborock/data/v1/v1_clean_modes.html)
+   抽象里 `CleaningMode.VACUUM` 对应的底层参数是
+   `(VacuumModes.BALANCED, WaterModes.OFF, CleanRoutes.STANDARD)` ——
+   水量 `off` 就是干扫。[HA 社区](https://community.home-assistant.io/t/how-to-script-roborock-xiaomi-to-vacuum-only-no-mop/832194/6)
+   也确认了同样做法。
+2. ~~三个实体要不要手选~~ → **改为从扫地机推导**，见上文。
+3. 重试窗口内"任务已成功"的判定 → 用集成的 `task_active` 传感器，
+   等 90 秒（覆盖集成默认 60 秒的 watch 超时）。
 
 ## 遗留（与本蓝图无关，但已确认）
 
@@ -205,11 +284,3 @@ DEFAULT_CLEAN_COMMAND_WATCH_TIMEOUT = 60
 ```
 
 删除必须编辑 `configuration.yaml` 并 reload。**`vacuum_garage_flow_lock` 名字不像已退休蓝图的东西，在确认归属前不动任何一个。**
-
-## 待用户确认
-
-1. 上表"未决问题 1"需要实测：你希望**先跑一次实验确认"拖地强度 off = 干扫"**，还是**蓝图先只提供拖地路线、不提供扫地/拖地选择**（更保守，第一版不猜）？
-2. 公区具体包含哪些房间？（客厅/餐厅/玄关/厨房/电梯间/设备阳台 里选）
-3. 三个任务各自的时间点？
-
-确认后进入实施计划（`docs/plans/*-plan-*.md`），再动代码。

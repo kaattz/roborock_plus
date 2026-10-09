@@ -79,9 +79,29 @@ to your existing automations as well."*
 反过来的代价:**不兼容的改动能改坏已运行的自动化**。文档专门警告了这点。
 所以改蓝图时不要改输入的名字或含义 —— 改了会让已有实例的参数失配。
 
-**顺序不能反:先 push,再从 URL 导入。** 反过来的话 HA 装到的是上一次
-推送的版本 —— 这一点踩过一次:改了文件名却先导入了,结果 HA 里同时存在
-新旧两份。
+### ⚠️ raw.githubusercontent.com 有 CDN 缓存
+
+**push 完立刻从 raw URL 导入,可能拿到旧版本。** 这一点踩过:
+commit 和 push 都成功了,`git show origin/main:...` 也确认远端是新内容,
+但连续两次导入装到的都是旧版。
+
+**判断方法**(别只看导入"成功"):
+
+```powershell
+git show "origin/main:blueprints/扫地机分区定时清扫.yaml" | Select-String 'my_trigger'
+```
+
+**绕开方法:用 commit SHA 代替 `main`。** 带 SHA 的 URL 是内容寻址的,
+不吃 `main` 那个缓存键:
+
+```
+https://raw.githubusercontent.com/kaattz/roborock_plus/<40位SHA>/blueprints/扫地机分区定时清扫.yaml
+```
+
+也可以等几分钟,或者用 `github.com/.../raw/...` 形式。
+
+**每次导入后要验证装到的内容** —— 比对 `source_url` 里的 SHA,或看
+blueprint 的描述是不是你刚改的那版。
 
 ### 为什么文件名用中文
 

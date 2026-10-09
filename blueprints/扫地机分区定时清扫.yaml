@@ -54,13 +54,21 @@ blueprint:
           name: 扫地机实体
           selector:
             entity:
-              domain: vacuum
+              filter:
+                - integration: roborock_plus
+                  domain: vacuum
         task_active_entity:
           name: 任务进行中传感器
-          description: 集成的「任务进行中」二元传感器，用来确认清扫真的启动了。
+          description: >-
+            集成的「任务进行中」二元传感器（`binary_sensor.<扫地机>_task_active`）。
+            回答的是「任务还活着吗」——暂停、回基站、洗拖布时它仍然是 on。
+            本蓝图只用它确认清扫真的启动了：服务调用返回 200 不代表机器人动了。
           selector:
             entity:
-              domain: binary_sensor
+              filter:
+                - integration: roborock_plus
+                  domain: binary_sensor
+                  device_class: running
 
     schedule:
       name: 时间
@@ -126,10 +134,13 @@ blueprint:
                 - 仅拖地
         mop_intensity_entity:
           name: 拖地强度实体
-          description: 形如「扫地机 拖地强度」的 select 实体。仅扫地时会被设为 off。
+          description: 集成里那个「拖地强度」select（`select.<扫地机>_mop_intensity`）。
+            仅扫地时会被设为 off。
           selector:
             entity:
-              domain: select
+              filter:
+                - integration: roborock_plus
+                  domain: select
         mop_intensity:
           name: 拖地强度
           description: 扫拖一体／仅拖地时使用的水量。仅扫地时忽略（强制 off）。
@@ -145,11 +156,13 @@ blueprint:
                 - extreme
         mop_route_entity:
           name: 拖地模式实体（可选）
-          description: 形如「扫地机 拖地模式」的 select 实体。留空则不设置。
+          description: 集成里那个「拖地模式」select。留空则不设置。
           default: ""
           selector:
             entity:
-              domain: select
+              filter:
+                - integration: roborock_plus
+                  domain: select
         mop_route:
           name: 拖地模式
           description: 拖地走几遍的路线，与扫地/拖地无关。
@@ -169,12 +182,21 @@ blueprint:
       input:
         presence_sensors:
           name: 本区域人体传感器
-          description: 留空＝不检查，到点就扫。填了就只在全部无人时扫。
+          description: >-
+            留空＝不检查，到点就扫。填了就只在全部无人时扫。
+            只看本任务房间的传感器——例如「午饭后餐厨」填厨房和餐厅，
+            人在卧室不应该阻掉这一轮。
           default: []
           selector:
             entity:
-              domain: binary_sensor
               multiple: true
+              filter:
+                - domain: binary_sensor
+                  device_class: motion
+                - domain: binary_sensor
+                  device_class: occupancy
+                - domain: binary_sensor
+                  device_class: presence
 
     retry:
       name: 失败重试

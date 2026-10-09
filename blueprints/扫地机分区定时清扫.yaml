@@ -1,16 +1,26 @@
 blueprint:
   name: 扫地机分区定时清扫
   description: |
-    到点用 HA 指定的房间清扫，支持按星期、扫地/拖地意图、以及"区域内有人则跳过并重试"。
+    用 HA 指定的房间清扫，触发方式由你选，支持按星期、扫地/拖地意图、
+    以及"区域内有人则跳过并重试"。
 
     ## 这个蓝图解决什么
 
-    - **时间**：每天某个时刻触发；用「星期」输入限定每周哪几天（全选＝每天）。
+    - **触发**：蓝图不预设，你自己配。每天定时、每周固定几天、
+      或者设备事件（例如洗碗机洗完）都行。
     - **区域**：直接选 HA 区域（客厅/餐厅…），不依赖设备里的例程。
     - **扫地还是拖地**：见下面「扫地/拖地怎么表达」。
     - **有人跳过**：填了人体传感器就只在无人时扫；没填就是到点就扫。
     - **失败重试**：触发时如果因为有人、扫地机正忙、门打不开等原因没扫成，
       会在指定窗口内反复重试；窗口内始终不成才告警。
+
+    ## 三种典型配法
+
+    1. **公区，每天** — 触发器「时间」= 你希望的时刻；星期留空。
+    2. **卧室，每周三天** — 触发器「时间」= 时刻；星期勾选那三天。
+    3. **午饭后餐厨** — 触发器「状态」= 洗碗机的
+       `binary_sensor.<dishwasher>_program_finished`，`off` → `on`。
+       这个信号只有 60 秒，但实测 4/4 都抓到了；星期留空。
 
     ## 扫地/拖地怎么表达
 
@@ -76,24 +86,32 @@ blueprint:
                   domain: vacuum
 
     schedule:
-      name: 时间
+      name: 触发
       icon: mdi:clock-outline
       input:
-        start_time:
-          name: 启动时间
+        my_trigger:
+          name: 何时清扫
+          description: >-
+            **在这里自己配触发器**，蓝图不预设。常见三种：
+
+            · **每天定时** — 触发器选「时间」，填个时刻。
+
+            · **定时 + 每周固定几天** — 先按上面配时间，再到下面「星期」里选。
+
+            · **洗碗机洗完就扫** — 触发器选「状态」，实体选洗碗机的
+            `program_finished`，从 `off` 变 `on`。这个传感器只亮 60 秒，
+            但实测 4/4 都捕获到了。
+
+            用「状态」触发时，下面的「星期」留空即可（不限制）。
           selector:
-            time:
+            trigger:
         weekdays:
           name: 星期
-          description: 只在这些星期执行。全选＝每天。
-          default:
-            - mon
-            - tue
-            - wed
-            - thu
-            - fri
-            - sat
-            - sun
+          description: >-
+            额外的星期过滤，对上面配的任何触发器都生效。
+            **留空＝不限制**（洗碗机那类触发应该留空）。
+            全选也等于不限制。
+          default: []
           selector:
             select:
               multiple: true
@@ -239,6 +257,7 @@ variables:
   mop_intensity: !input mop_intensity
   mop_route: !input mop_route
   areas: !input areas
+  weekdays: !input weekdays
   retry_window: !input retry_window_minutes
   retry_interval: !input retry_interval_minutes
   notify_script: !input notify_script
@@ -290,13 +309,23 @@ variables:
   # 窗口 0 时 deadline 就是起始时刻；第一次尝试由下面的 repeat.index == 1 保证。
   deadline: "{{ now() + timedelta(minutes=retry_window | int(0)) }}"
 
-triggers:
-  - trigger: time
-    at: !input start_time
+# 触发器由每个实例自己配（trigger 选择器），蓝图不预设。
+#
+# 为什么不用「两个触发器 + enabled: !input」：HA 的
+# async_validate_trigger_config 会校验**每一个**触发器，包括 enabled 为 false 的
+# —— 只有 async_initialize_triggers 阶段才跳过禁用的。所以"时间"实例里留空的
+# entity_id 会在校验阶段就报错，把整个自动化标成 failed_triggers。
+# trigger 选择器是官方为此提供的做法，且不用留空任何输入。
+triggers: !input my_trigger
 
 conditions:
-  - condition: time
-    weekday: !input weekdays
+  # 星期过滤。留空＝不限制：洗碗机那类事件触发不该被星期挡住。
+  # 用 template 而不是 condition: time，因为 condition: time 的 weekday
+  # 不接受空列表（会变成"永不匹配"）。
+  - condition: template
+    value_template: >-
+      {% set days = weekdays | default([], true) %}
+      {{ days | count == 0 or now().strftime('%a') | lower in days }}
 
 actions:
   # 推导失败就告警并停止，不猜、不半途而废。

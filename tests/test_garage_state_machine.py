@@ -399,8 +399,41 @@ class TestDoorWaitsOutlastTheEcho:
             )
 
     def test_the_paused_wait_is_not_given_a_door_delay(self) -> None:
-        """The `paused` wait is about the vacuum, not the door."""
-        for _, step, _ in _door_waits():
-            assert "is_state" not in step["wait_template"], (
-                "a vacuum-state wait was misidentified as a door wait"
+        """The `paused` wait is about the vacuum, not the door.
+
+        Checked against the raw config rather than through `_door_waits()`: that
+        helper only returns steps whose template already contains
+        `current_position`, so asserting on its output would be a tautology and
+        would not notice the `paused` wait gaining a delay.
+        """
+        sequence = _branch(_config(), 0)["sequence"]
+        paused = [
+            (index, step)
+            for index, step in enumerate(sequence)
+            if "wait_template" in step and "is_state" in step["wait_template"]
+        ]
+        assert paused, "the pause-confirmation wait is missing from branch 0"
+
+        for index, _step in paused:
+            neighbours = sequence[max(0, index - 1) : index + 1]
+            assert not any("delay" in step for step in neighbours), (
+                "the paused wait is about the vacuum, not the door; giving it the "
+                "door settle delay would stall every departure for no reason"
+            )
+
+    def test_every_door_wait_keeps_a_budget_for_a_slow_door(self) -> None:
+        """The settle must be followed by time to observe arrival.
+
+        The settle alone is not enough: the door still has to be seen reaching
+        the position. Reverting the budget to the old 60s would leave only 15s
+        after the 45s settle, so the timeout is pinned here -- an in-memory
+        mutation showed it was otherwise unguarded.
+        """
+        settle = _echo_settle_seconds()
+        for path, step, _ in _door_waits():
+            budget = _delay_seconds(step["timeout"])
+            assert budget >= settle + 30, (
+                f"{path} allows only {budget}s total, which leaves "
+                f"{budget - settle}s to observe the door after the {settle}s "
+                "settle; a genuinely slow door would be reported as a failure"
             )

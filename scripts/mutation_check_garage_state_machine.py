@@ -68,6 +68,16 @@ MUTATIONS = [
         "drop the task-end guard so a mid-task dock visit closes the door",
         lambda c: _drop_mentioning(c, 2, "sensor.sao_di_ji_v2_timestamp_2"),
     ),
+    (
+        # The defect fixed on 2026-10-10: a door wait satisfied by the command
+        # echo, so the anti-crush guards in the closing phases never held.
+        "drop the settle delay in front of the door waits",
+        lambda c: _drop_door_wait_delays(c),
+    ),
+    (
+        "shrink the door settle back inside the echo window",
+        lambda c: _shrink_door_settle(c, 5),
+    ),
 ]
 
 
@@ -140,6 +150,69 @@ def _drop_delay(config: dict, branch: int) -> None:
     config["actions"][0]["choose"][branch]["sequence"] = [
         step for step in sequence if "delay" not in step
     ]
+
+
+def _shrink_door_settle(config: dict, seconds: int) -> None:
+    """Shorten every settle delay to `seconds`, restoring the echo window.
+
+    Before 2026-10-10 the door waits had no delay at all, so the device's
+    immediate echo of the command satisfied them. Five seconds is the delay the
+    auto-unlock used while it was parking the door part-way open; it is inside
+    the echo window just as surely as zero is.
+    """
+    for node in _walk(config):
+        if "delay" in node and isinstance(node["delay"], str):
+            parts = [int(p) for p in node["delay"].split(":")]
+            total = parts[0] * 3600 + parts[1] * 60 + parts[2]
+            if total > seconds:
+                node["delay"] = f"00:00:{seconds:02d}"
+
+
+def _drop_door_wait_delays(config: dict) -> None:
+    """Remove the delay that sits in front of each door position wait.
+
+    Recursive, because the parking branch keeps its door wait inside `if/then`.
+    An earlier version walked only `branch["sequence"]`, so it removed two of the
+    three delays -- the parking anti-crush guard stayed in place and the mutation
+    escaped, which is the same blind spot the test's scan had.
+
+    Targets only a delay immediately preceding a `wait_template`, so the
+    unrelated 8-second settle before the parking re-check survives and this
+    mutation tests exactly one thing.
+    """
+
+    def is_door_wait(step: object) -> bool:
+        return (
+            isinstance(step, dict)
+            and "wait_template" in step
+            and "current_position" in step["wait_template"]
+        )
+
+    def visit_list(items: list) -> list:
+        keep = []
+        for index, step in enumerate(items):
+            if (
+                isinstance(step, dict)
+                and "delay" in step
+                and index + 1 < len(items)
+                and is_door_wait(items[index + 1])
+            ):
+                continue
+            keep.append(step)
+        for step in keep:
+            visit(step)
+        return keep
+
+    def visit(node: object) -> None:
+        if isinstance(node, dict):
+            for key, value in list(node.items()):
+                if isinstance(value, list):
+                    node[key] = visit_list(value)
+                elif isinstance(value, dict):
+                    visit(value)
+
+    for branch in config["actions"][0]["choose"]:
+        branch["sequence"] = visit_list(branch["sequence"])
 
 
 def _drop_mentioning(config: dict, branch: int, needle: str) -> None:

@@ -614,24 +614,51 @@ def _shrink_door_settle(config: dict, seconds: int) -> None:
 def _drop_door_wait_delays(config: dict) -> None:
     """Remove the delay that sits in front of each door position wait.
 
-    Targets only the delays immediately preceding a `wait_template`, so the
+    Recursive, because the parking branch keeps its door wait inside `if/then`.
+    An earlier version walked only `branch["sequence"]`, so it removed two of the
+    three delays -- the parking anti-crush guard stayed in place and the mutation
+    escaped, which is the same blind spot the test's scan had.
+
+    Targets only a delay immediately preceding a `wait_template`, so the
     unrelated 8-second settle before the parking re-check survives and this
     mutation tests exactly one thing.
     """
-    for branch in config["actions"][0]["choose"]:
-        sequence = branch["sequence"]
+
+    def is_door_wait(step: object) -> bool:
+        return (
+            isinstance(step, dict)
+            and "wait_template" in step
+            and "current_position" in step["wait_template"]
+        )
+
+    def visit_list(items: list) -> list:
         keep = []
-        for index, step in enumerate(sequence):
+        for index, step in enumerate(items):
             if (
-                "delay" in step
-                and index + 1 < len(sequence)
-                and "wait_template" in sequence[index + 1]
-                and "current_position" in json.dumps(sequence[index + 1], ensure_ascii=False)
+                isinstance(step, dict)
+                and "delay" in step
+                and index + 1 < len(items)
+                and is_door_wait(items[index + 1])
             ):
                 continue
             keep.append(step)
-        branch["sequence"] = keep
+        for step in keep:
+            visit(step)
+        return keep
+
+    def visit(node: object) -> None:
+        if isinstance(node, dict):
+            for key, value in list(node.items()):
+                if isinstance(value, list):
+                    node[key] = visit_list(value)
+                elif isinstance(value, dict):
+                    visit(value)
+
+    for branch in config["actions"][0]["choose"]:
+        branch["sequence"] = visit_list(branch["sequence"])
 ```
+
+**注意变异必须递归。** 我核对过：分支 2 的门等待在 `sequence[5].then[1]`，只扫顶层只会删掉 2 个 delay，第 3 个（停靠阶段那个防夹守卫）留着不动 —— 变异就逃逸了，而它会伪装成「变异被捕获」。这与测试扫描曾经的盲区是同一个错误。上面的版本递归进 `if/then`。
 
 **Step 2: 加进 `MUTATIONS`**
 

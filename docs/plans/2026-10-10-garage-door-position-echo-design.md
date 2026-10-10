@@ -1,8 +1,9 @@
 # 车库门 position 回声 —— 设计与止血
 
 日期：2026-10-10
-状态：待实施
+状态：已实施（代码与仓库内自动化就绪；HA 侧需人工粘贴，物理验证待用户执行）
 相关：[2026-10-08 柜门状态机设计](2026-10-08-garage-door-state-machine-design.md)
+实施计划：[2026-10-10 修复计划](2026-10-10-garage-door-position-echo-fix-plan.md)
 
 ## 症状
 
@@ -74,7 +75,9 @@ service siid=2  Window Opener
 
 集成读的是 `current-position`（`cover.py:277`），那条「没有 current-position 就假定等于 target」的回退分支（`cover.py:268-276`）**未被触发**。
 
-**所以是固件在收到命令时把 target 的值写进了 current-position。** HA 侧改不了这一点，只能绕开它的污染窗口。
+**所以是固件在收到命令时把 target 的值写进了 current-position。** 这一点 HA 侧改不了，只能绕开它的污染窗口（见下方「什么时候读数才是真的」）。
+
+**但请注意措辞**：回声本身是个并存的次要现象，**不是**用户所遇「position 不准」的根因。真正的根因是 `auto_unlock` 在回声上触发、把行进中的门按停（见「根因」一节）。早期排查把它当成根因是错的，第 238 行有记录。
 
 ### 关键推论：state 也被污染
 
@@ -203,19 +206,32 @@ BLE 掉线若被当成「门没开」，反而制造危险。
 
 - **不删 `auto_unlock`。** 它的意图（释放离合）合理，只是时机错了。
 - **不用 `state: closed` 判断到位。** 实测它同样被回声污染（见上）。
-- **不指望固件修复。** 米家 App 显示同样的行为，是设备侧设计。
+- **不指望固件改掉回声。** 米家 App 显示同样的行为，是设备侧设计。回声只能靠时间绕开，且这只是次要现象 —— 真正要修的是消费它的自动化（本设计第 1 节）。
 - **不缩短行程等待来「优化体验」。** 少等几秒换来的是一扇可能只开了一半的门。
 
 ## 验证方法
 
 按 `AGENTS.md`，实际动作由用户执行，助手负责仿真与回放。
 
-1. **回放**：用本次实测时序（回声 + 35 秒行程 + stop_cover）构造输入，喂给状态机回放脚本，断言修复后不再产生半停。
-2. **变异测试**：把 `delay` 改回 5 秒、去掉校验，测试必须变红。
+1. **回放**：用本次实测时序（回声 + 35 秒行程 + stop_cover）构造输入，喂给状态机回放脚本，断言修复后不再产生半停。✅ 已做（`replay_docked_flapping.py` 全 PASS）。
+2. **变异测试**：把 `delay` 改回 5 秒、去掉校验，测试必须变红。✅ 已做（`mutation_check_garage_state_machine.py` 覆盖；`garage_guard` 的两个变异也实测被捕获）。
 3. **用户实测**（预期结果写清楚）：
    - `auto_unlock` 开启 + 关到底 → 门应停在 **0**，不再出现中途值
    - 门在行进中被手动停 → 应出现真实中途值，且 `auto_unlock` **不**再补一脚
 4. **秒表复核**：请用户再计 2～3 次行程，取最大值更新 `DOOR_TRAVEL_SECONDS`。
+
+## 已落地的改动（2026-10-10）
+
+| 改动 | 位置 |
+| --- | --- |
+| 行程/回声常量单一来源 | `custom_components/roborock_plus/door_timing.py` |
+| guard 加行程闸门（前置检查不等、命令后等待等） | `custom_components/roborock_plus/garage_guard.py` |
+| 状态机三处门等待各加 45 秒 settle，超时放宽到 90 秒 | `scripts/garage_state_machine/build.py` |
+| `auto_unlock` 等过回声窗口 + 复查后才发 PAUSE | `automations/vacuum_garage_door_auto_unlock.yaml` |
+| 防漂移：粘贴用 YAML 必须与生成物 actions 一致 | `tests/test_system_composition.py` |
+| 教训 | `lessons.md` |
+
+**尚未完成（依赖用户）**：HA 里的自动化是人工粘贴的，所以线上仍是旧的。见实施计划末尾的「部署」与「物理验证」两节。
 
 ## 遗留风险
 

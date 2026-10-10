@@ -398,7 +398,10 @@ PHASE_PARK = {
 }
 
 CONFIG = {
-    "alias": "扫地机柜门状态机",
+    # The alias is the English name chosen on 2026-10-09. build.py owns it so the
+    # generated JSON and the hand-paste YAML cannot disagree about it; the
+    # unique_id is `id` and lives only in the YAML.
+    "alias": "Roborock Garage Door State Machine",
     "description": DESCRIPTION,
     "mode": "queued",
     "max": 5,

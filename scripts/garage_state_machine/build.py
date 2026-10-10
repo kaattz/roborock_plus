@@ -57,9 +57,6 @@ IS_PARKED = "{{ states('" + VACUUM + "') in ['docked', 'charging'] }}"
 # A genuine return holds the state for tens of seconds, so 10 s removes the
 # blip and still leaves the door open well before the robot arrives.
 RETURN_SUSTAIN_SECONDS = 10
-DOOR_OPEN = (
-    "{{ (state_attr('" + COVER + "', 'current_position') | float(0)) > 5 }}"
-)
 DOOR_CLOSED = (
     "{{ (state_attr('" + COVER + "', 'current_position') | float(100)) < 5 }}"
 )

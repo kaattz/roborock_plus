@@ -294,9 +294,21 @@ git commit -m "fix(guard): wait out the position echo before releasing the robot
 
 ---
 
-## Task 3: 状态机的四个 `wait_template` 越过污染窗口
+## Task 3: 状态机的三处 `wait_template` 越过污染窗口
 
-阶段 A/C 用 `>= 95` 判断门开了、B/D 用 `< 5` 判断门关了。回声让它们 0.5 秒就通过，**防夹保护等于不存在**。
+阶段 B/D 用 `< 5` 判断门关了、C 用 `>= 95` 判断门开了。回声让它们 0.5 秒就通过，**防夹保护等于不存在**。
+
+**已核对的真实结构**（`state_machine.json`，`actions[0].choose[i].sequence`）：
+
+| 分支 | 位置 | 判据 |
+| --- | --- | --- |
+| 0（离开/关门） | `sequence[4]`，**顶层** | `< 5` |
+| 1（返回/开门） | `sequence[1]`，**顶层** | `>= 95` |
+| 2（停靠/关门） | `sequence[5].then[1]`，**嵌套在 `if/then` 里** | `< 5` |
+
+**注意分支 2 是嵌套的** —— 只扫顶层会漏掉它，那样测试就形同虚设。下面的测试用**递归查找**，并额外断言「找到的门等待数量 == 3」，防止将来结构变化导致漏扫。
+
+另外 `branch 0 sequence[1]` 那个 `wait_template`（等 `paused`）**不是门等待**，不要给它加 delay。
 
 **Files:**
 - Modify: `scripts/garage_state_machine/build.py:60-65,242-380`
@@ -304,54 +316,7 @@ git commit -m "fix(guard): wait out the position echo before releasing the robot
 
 **Step 1: 写失败的测试**
 
-追加到 `tests/test_garage_state_machine.py`：
-
-```python
-class TestDoorWaitsOutlastTheEcho:
-    """A wait that is satisfied by the command echo proves nothing.
-
-    The device writes the target position into `current-position` within half a
-    second of any motor command, while the door is still at the old position. A
-    wait keyed only on position therefore passes instantly, and the anti-crush
-    waits in phases B and D never actually hold.
-    """
-
-    def test_every_door_wait_has_a_settle_delay_before_it(self) -> None:
-        """Each wait_template on cover position must be preceded by a delay."""
-        config = _config()
-        for branch_index in (0, 1, 2):
-            sequence = _branch(config, branch_index)["sequence"]
-            for index, step in enumerate(sequence):
-                if "wait_template" not in step:
-                    continue
-                if "current_position" not in json.dumps(step, ensure_ascii=False):
-                    continue
-                previous = sequence[index - 1]
-                assert "delay" in previous, (
-                    f"branch {branch_index} step {index} reads current_position "
-                    "with no settle delay in front of it, so the echo satisfies it"
-                )
-
-    def test_the_settle_delay_is_at_least_the_echo_window(self) -> None:
-        settle = _echo_settle_seconds()
-
-        config = _config()
-        for branch_index in (0, 1, 2):
-            sequence = _branch(config, branch_index)["sequence"]
-            for index, step in enumerate(sequence):
-                if "wait_template" not in step:
-                    continue
-                if "current_position" not in json.dumps(step, ensure_ascii=False):
-                    continue
-                delay = sequence[index - 1]["delay"]
-                seconds = _delay_seconds(delay)
-                assert seconds >= settle, (
-                    f"branch {branch_index} waits only {seconds}s before reading "
-                    f"position; the echo window is {settle}s"
-                )
-```
-
-并在测试文件顶部加辅助函数（同样**按路径加载，不 import 包**）：
+追加到 `tests/test_garage_state_machine.py` 末尾：
 
 ```python
 def _delay_seconds(delay: object) -> int:
@@ -382,12 +347,102 @@ def _echo_settle_seconds() -> int:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.ECHO_SETTLE_SECONDS
+
+
+def _door_waits() -> list[tuple[str, dict, object]]:
+    """Return (path, wait_step, preceding_step) for every door-position wait.
+
+    Recursive, because the parking branch keeps its door wait inside `if/then`.
+    `preceding_step` is the sibling immediately before the wait in the same
+    list, which is where the settle delay must be inserted.
+
+    Verified against the current config: finds 3 waits
+    (`choose[0].sequence[4]`, `choose[1].sequence[1]`,
+    `choose[2].sequence[5].then[1]`), none of which has a delay yet.
+    """
+    config = _config()
+    found: list[tuple[str, dict, object]] = []
+
+    def visit_list(items: list, path: str) -> None:
+        for index, item in enumerate(items):
+            child = f"{path}[{index}]"
+            if (
+                isinstance(item, dict)
+                and "wait_template" in item
+                and "current_position" in item["wait_template"]
+            ):
+                found.append((child, item, items[index - 1] if index else None))
+            visit(item, child)
+
+    def visit(node: object, path: str) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if isinstance(value, list):
+                    visit_list(value, f"{path}.{key}")
+                elif isinstance(value, dict):
+                    visit(value, f"{path}.{key}")
+        elif isinstance(node, list):
+            visit_list(node, path)
+
+    visit(config["actions"][0]["choose"], "choose")
+    return found
+
+
+class TestDoorWaitsOutlastTheEcho:
+    """A wait that is satisfied by the command echo proves nothing.
+
+    The device writes the target position into `current-position` within half a
+    second of any motor command, while the door is still at the old position. A
+    wait keyed only on position therefore passes instantly, and the anti-crush
+    waits in the closing phases never actually hold.
+    """
+
+    def test_all_three_door_waits_are_found(self) -> None:
+        """Guard the scan itself: a structural change must not silently skip one."""
+        paths = [path for path, _, _ in _door_waits()]
+        assert len(paths) == 3, (
+            f"expected 3 door-position waits, found {len(paths)}: {paths}. "
+            "If the automation legitimately changed, update this count -- but "
+            "check you are not just failing to see a nested wait."
+        )
+
+    def test_the_nested_parking_wait_is_included(self) -> None:
+        """The regression this test exists for: branch 2's wait is inside if/then."""
+        paths = [path for path, _, _ in _door_waits()]
+        assert any("branch2" in path for path in paths), (
+            "the parking branch's door wait is nested in if/then and was not "
+            f"found by the scan; found only {paths}"
+        )
+
+    def test_every_door_wait_has_a_settle_delay_before_it(self) -> None:
+        for path, _, previous in _door_waits():
+            assert previous is not None, f"{path} has no preceding step"
+            assert "delay" in previous, (
+                f"{path} reads current_position with no settle delay in front of "
+                "it, so the device's echo of the command satisfies it"
+            )
+
+    def test_the_settle_delay_is_at_least_the_echo_window(self) -> None:
+        settle = _echo_settle_seconds()
+        for path, _, previous in _door_waits():
+            seconds = _delay_seconds(previous["delay"])
+            assert seconds >= settle, (
+                f"{path} waits only {seconds}s before reading position; the echo "
+                f"window is {settle}s"
+            )
+
+    def test_the_paused_wait_is_not_given_a_door_delay(self) -> None:
+        """The `paused` wait is about the vacuum, not the door."""
+        for _, step, _ in _door_waits():
+            assert "is_state" not in step["wait_template"], (
+                "a vacuum-state wait was misidentified as a door wait"
+            )
 ```
 
 **Step 2: 跑测试确认失败**
 
 Run: `python -m pytest tests/test_garage_state_machine.py -q --no-header`
-Expected: FAIL — 第一个测试报「no settle delay in front of it」
+Expected: FAIL — `test_every_door_wait_has_a_settle_delay_before_it` 报「no settle delay in front of it」
 
 **Step 3: 写最小实现**
 
@@ -420,16 +475,18 @@ def door_wait(template: str) -> list[dict]:
     return [{"delay": DOOR_SETTLE}, wait_for(template, DOOR_WAIT_TIMEOUT)]
 ```
 
-把四处替换掉（注意用 `*` 展开，`sequence` 列表里要展开成两个元素）：
+把三处替换掉（注意用 `*` 展开，`sequence` 列表里要展开成两个元素）：
 
-- 阶段 B 关门（原 261 行）：`wait_for(DOOR_CLOSED, "00:01:00"),` → `*door_wait(DOOR_CLOSED),`
-- 阶段 C 开门（原 293-296 行）：`wait_for("... >= 95", "00:01:00"),` → `*door_wait("... >= 95"),`
-- 阶段 D 关门（原 343 行）：`wait_for(DOOR_CLOSED, "00:01:00"),` → `*door_wait(DOOR_CLOSED),`
+- 分支 0（离开/关门），`sequence[4]`：`wait_for(DOOR_CLOSED, "00:01:00"),` → `*door_wait(DOOR_CLOSED),`
+- 分支 1（返回/开门），`sequence[1]`：`wait_for("... >= 95", "00:01:00"),` → `*door_wait("... >= 95"),`
+- 分支 2（停靠/关门），`sequence[5]["then"][1]`：`wait_for(DOOR_CLOSED, "00:01:00"),` → `*door_wait(DOOR_CLOSED),`
 
-阶段 B/D 的告警文案里「60 秒内」要跟着改成「90 秒内」，否则告警会撒谎：
+分支 2 的替换在 `then` 列表内部，改动时要保持 `if/then/else` 的缩进结构。
 
-- 阶段 B：`"但柜门未能在 60 秒内完全关闭"` → `"但柜门未能在 90 秒内完全关闭"`
-- 阶段 D：同类文案一并检查
+分支 0/2 的告警文案里「60 秒内」要跟着改成「90 秒内」，否则告警会撒谎：
+
+- 分支 0：`"但柜门未能在 60 秒内完全关闭"` → `"但柜门未能在 90 秒内完全关闭"`
+- 分支 2：同类文案一并检查
 
 重建配置：
 
@@ -441,6 +498,8 @@ python scripts/garage_state_machine/build.py
 
 Run: `python -m pytest tests/test_garage_state_machine.py -q --no-header`
 Expected: PASS
+
+再跑全量：`python -m pytest tests -q --no-header`
 
 **Step 5: 提交**
 

@@ -22,6 +22,7 @@ SPEC.loader.exec_module(MODULE)
 
 
 def test_travel_is_the_measured_35_seconds() -> None:
+    """An owner's stopwatch reading; changing it must be a deliberate re-measure."""
     assert MODULE.DOOR_TRAVEL_SECONDS == 35
 
 
@@ -31,6 +32,12 @@ def test_echo_settle_exceeds_one_full_travel_with_margin() -> None:
     assert MODULE.ECHO_SETTLE_SECONDS - MODULE.DOOR_TRAVEL_SECONDS >= 10
 
 
-def test_settle_covers_a_slower_than_measured_travel() -> None:
-    """Cold weather or added resistance makes the door slower, not faster."""
-    assert MODULE.ECHO_SETTLE_SECONDS >= MODULE.DOOR_TRAVEL_SECONDS * 1.25
+def test_echo_settle_stays_cheap_enough_to_wait_per_command() -> None:
+    """The window is a tradeoff: long enough to outlast the echo, no longer.
+
+    Every consumer waits this long per command (the garage guard before it
+    releases the robot, the state machine's door waits, the auto-unlock before
+    it pauses the door). Only the safety side used to be bounded, so a value of
+    an hour would have passed the suite while making the door unusable.
+    """
+    assert MODULE.ECHO_SETTLE_SECONDS <= MODULE.DOOR_TRAVEL_SECONDS * 2

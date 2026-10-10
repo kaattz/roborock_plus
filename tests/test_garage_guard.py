@@ -69,8 +69,16 @@ def test_min_travel_outlasts_the_echo_window() -> None:
 
 
 def test_timeout_leaves_room_for_the_settle_plus_the_wait() -> None:
-    """A timeout shorter than travel + wait would fail a door that is opening fine."""
-    assert MODULE.DEFAULT_GARAGE_DOOR_TIMEOUT > MODULE.DEFAULT_GARAGE_DOOR_MIN_TRAVEL
+    """The timeout must cover the settle *and* still leave time to observe arrival.
+
+    Asserting only `TIMEOUT > MIN_TRAVEL` would accept a value one second above
+    the gate, which leaves no room to ever see the door arrive and would time out
+    on a door that is opening perfectly well.
+    """
+    assert (
+        MODULE.DEFAULT_GARAGE_DOOR_TIMEOUT - MODULE.DEFAULT_GARAGE_DOOR_MIN_TRAVEL
+        >= 30
+    ), "the settle must be followed by a real wait, not an instant timeout"
 
 
 def test_elapsed_time_alone_is_not_enough() -> None:

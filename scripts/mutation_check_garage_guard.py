@@ -19,7 +19,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 VACUUM = REPO / "custom_components" / "roborock_plus" / "vacuum.py"
 GUARD = REPO / "custom_components" / "roborock_plus" / "garage_guard.py"
-TESTS = ["tests/test_garage_guard_integration_points.py"]
+TESTS = [
+    "tests/test_garage_guard_integration_points.py",
+    "tests/test_garage_guard.py",
+]
 TIMEOUT_SECONDS = 120
 
 
@@ -54,10 +57,73 @@ def drop_spot_from_guard_set(vacuum: str, guard: str) -> tuple[str, str]:
     return vacuum, guard.replace('    "APP_SPOT",\n', "").replace('    "app_spot",\n', "")
 
 
+def feed_the_wait_a_constant_elapsed(vacuum: str, guard: str) -> tuple[str, str]:
+    """Pass a fixed elapsed time instead of measuring it.
+
+    This is the mutation that escapes a source-text assertion: the wait still
+    *calls* `door_reached_open_position` and the function still records
+    `started = time.monotonic()`, so a check for those substrings passes while
+    the gate is effectively disabled.
+    """
+    return vacuum, guard.replace(
+        "                time.monotonic() - started,\n", "                999,\n"
+    )
+
+
+def drop_the_echo_gate_from_the_wait(vacuum: str, guard: str) -> tuple[str, str]:
+    """Revert the post-command wait to a bare position check (the original defect)."""
+    return (
+        vacuum,
+        guard.replace(
+            "            while not door_reached_open_position(\n"
+            "                time.monotonic() - started,\n"
+            "                _configured_cover_position(hass, cover_entity_id),\n"
+            "            ):\n",
+            "            while not is_garage_door_open_enough(\n"
+            "                _configured_cover_position(hass, cover_entity_id)\n"
+            "            ):\n",
+        ),
+    )
+
+
+def gate_the_precommand_check_too(vacuum: str, guard: str) -> tuple[str, str]:
+    """Apply the settle gate before any command is issued.
+
+    No command has been sent yet, so there is no echo to outlast; gating here
+    would idle every start for 45 seconds even with the door already open.
+    """
+    return (
+        vacuum,
+        guard.replace(
+            "    if is_garage_door_open_enough(\n"
+            "        _configured_cover_position(hass, cover_entity_id)\n"
+            "    ):\n",
+            "    if door_reached_open_position(\n"
+            "        999, _configured_cover_position(hass, cover_entity_id)\n"
+            "    ):\n",
+        ),
+    )
+
+
 MUTATIONS = [
     ("clean_spot sends without the guard (the original defect)", revert_clean_spot),
     ("goto sends without the guard", revert_goto),
     ("APP_SPOT missing from the guarded command set", drop_spot_from_guard_set),
+    (
+        # The defect fixed on 2026-10-10: the device echoes the target position
+        # the instant it is commanded, so a position-only wait released the
+        # robot at a door that had barely started moving.
+        "the post-command wait reads the echo instead of the door",
+        drop_the_echo_gate_from_the_wait,
+    ),
+    (
+        "the wait is fed a constant elapsed time",
+        feed_the_wait_a_constant_elapsed,
+    ),
+    (
+        "the pre-command check is gated behind the settle window",
+        gate_the_precommand_check_too,
+    ),
 ]
 
 

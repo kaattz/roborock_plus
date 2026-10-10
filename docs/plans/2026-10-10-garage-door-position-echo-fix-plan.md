@@ -231,9 +231,23 @@ def door_reached_open_position(elapsed: float, position: Any) -> bool:
     return is_garage_door_open_enough(position)
 ```
 
-改 `async_guard_garage_open` 的等待循环：
+改 `async_guard_garage_open`。**注意这里有两次位置读取，语义不同，不能共用一个函数**：
+
+- **前置检查**（原第 69 行）问的是「门现在是不是已经开着」—— 此时**我们还没发任何命令，没有回声要等**。它必须保持「只看位置」。
+- **命令后的等待循环**问的是「门开好了没」—— 这里必须加时间闸门，否则回声让它在 0.5 秒放行。
+
+所以我原先把 `elapsed` 塞进 `_is_configured_cover_open` 是错的：它会让前置检查那一行（原第 69 行）抛 `TypeError`，而且前置检查本来就不该等时间。改成拆出位置读取，两处各用各的判据：
 
 ```python
+    cover_entity_id = str(options[CONF_GARAGE_DOOR_ENTITY_ID])
+    # No command has been issued yet, so this reading is not an echo and can be
+    # trusted on its own. Waiting here would stall every start behind 45s even
+    # when the door is already open.
+    if is_garage_door_open_enough(
+        _configured_cover_position(hass, cover_entity_id)
+    ):
+        return
+
     await hass.services.async_call(
         "cover",
         "open_cover",
@@ -246,8 +260,9 @@ def door_reached_open_position(elapsed: float, position: Any) -> bool:
     started = time.monotonic()
     try:
         async with asyncio.timeout(DEFAULT_GARAGE_DOOR_TIMEOUT):
-            while not _is_configured_cover_open(
-                hass, cover_entity_id, time.monotonic() - started
+            while not door_reached_open_position(
+                time.monotonic() - started,
+                _configured_cover_position(hass, cover_entity_id),
             ):
                 await asyncio.sleep(0.5)
     except TimeoutError as err:
@@ -258,12 +273,16 @@ def door_reached_open_position(elapsed: float, position: Any) -> bool:
         ) from err
 ```
 
-改 `_is_configured_cover_open` 签名：
+把 `_is_configured_cover_open` **改名并去掉判据**，只负责读位置（读不到仍然抛错）：
 
 ```python
-def _is_configured_cover_open(
-    hass: Any, cover_entity_id: str, elapsed: float
-) -> bool:
+def _configured_cover_position(hass: Any, cover_entity_id: str) -> Any:
+    """Return the configured cover's raw position attribute.
+
+    Deliberately does not decide whether the door is "open enough": the
+    pre-command check and the post-command wait need different judgements, and
+    the post-command one additionally needs elapsed time.
+    """
     from homeassistant.exceptions import HomeAssistantError
 
     state = hass.states.get(cover_entity_id)
@@ -273,17 +292,69 @@ def _is_configured_cover_open(
             translation_key="garage_guard_cover_not_found",
             translation_placeholders={"entity_id": cover_entity_id},
         )
-    return door_reached_open_position(
-        elapsed, state.attributes.get("current_position")
-    )
+    return state.attributes.get("current_position")
 ```
 
 并在文件顶部加 `import time`。
+
+**Step 3b: 补一个测试，钉住前置检查不等时间**
+
+上面的 `TypeError` 不会有任何现有测试发现它（原测试只测纯函数）。同时要防止另一个错误改法：把时间闸门也加到前置检查上，那样门已经开着时每次启动还要白等 45 秒。
+
+追加到 `tests/test_garage_guard.py`：
+
+```python
+def _guard_body() -> str:
+    """Return the body of async_guard_garage_open, up to the next top-level def."""
+    source = MODULE_PATH.read_text(encoding="utf-8")
+    body = source.split("async def async_guard_garage_open", 1)[1]
+    return body.split("\ndef ", 1)[0]
+
+
+def test_precheck_reads_position_without_waiting() -> None:
+    """An already-open door must not be stalled behind the settle window.
+
+    The pre-command check runs before any command is issued, so its reading is
+    not an echo. If the elapsed-time gate were applied here, every clean start
+    with the door already open would idle for 45 seconds.
+    """
+    precheck = _guard_body().split("await hass.services.async_call", 1)[0]
+
+    assert "door_reached_open_position" not in precheck, (
+        "the pre-command check must not apply the elapsed-time gate: no command "
+        "has been issued yet, so there is no echo to outlast"
+    )
+    assert "elapsed" not in precheck and "monotonic" not in precheck, (
+        "the pre-command check must not measure time"
+    )
+    assert "position" in precheck, (
+        "the pre-command check must still read the door position"
+    )
+
+
+def test_postcommand_wait_applies_the_time_gate() -> None:
+    """The wait after the command must require elapsed time as well as position."""
+    post = _guard_body().split("await hass.services.async_call", 1)[1]
+
+    assert "door_reached_open_position" in post, (
+        "the post-command wait must use the elapsed-time gate, or the device's "
+        "echo of open_cover satisfies it in half a second"
+    )
+    assert "monotonic()" in post, "the wait must measure real elapsed time"
+```
 
 **Step 4: 跑测试确认通过**
 
 Run: `python -m pytest tests/test_garage_guard.py tests/test_garage_guard_integration_points.py -q --no-header`
 Expected: PASS
+
+再跑全量：`python -m pytest tests -q --no-header`
+Expected: 361 passed 以上（357 + 本任务新增 6）
+
+**Step 4b: 确认改名没有漏掉调用点**
+
+Run: `grep -rn "_is_configured_cover_open" custom_components tests scripts`
+Expected: 无输出（旧名字已彻底消失）。若有残留，说明有调用点没改到。
 
 **Step 5: 提交**
 

@@ -109,17 +109,49 @@ def is_closed(self) -> Optional[bool]:
 
 依赖 `cover.vacuum_garage_door` 的 6 条自动化 + 1 处集成代码：
 
-| 位置 | 用的信号 | 污染后果 |
-| --- | --- | --- |
-| `automation.vacuum_garage_door_auto_unlock` | position < 1 for 1s | **门被按停在半路**（本次根因） |
-| `automation.roborock_garage_door_statemachine` 阶段 A/C | `wait_template` position ≥ 95 | 瞬间放行，防撞保护形同虚设 |
-| 同上 阶段 B/D | `wait_template` position < 5 | 瞬间放行，可能夹机 |
-| `custom_components/roborock_plus/garage_guard.py` | `position ≥ 95` | 开门后立刻放行扫地机，门可能只开了一小半 |
-| `automation.che_ku_men_dan_jian_xun_huan_ble_an_jian` | position 比较 | 按键可能在门还在动时反向 |
-| `automation.garage_door_sync_folding_door` | 无（只发 open） | 无 |
-| `automation.che_ku_men_chang_shi_jian_wu_ren_zi_dong_guan_bi` | `state: open` | 状态被污染，可能误判 |
+| 位置 | 用的信号 | 污染后果 | 状态 |
+| --- | --- | --- | --- |
+| `automation.vacuum_garage_door_auto_unlock` | position < 1 for 1s | **门被按停在半路**（本次根因） | ✅ 已修 |
+| `automation.roborock_garage_door_statemachine` 阶段 B/D | `wait_template` position < 5 | 瞬间放行，可能夹机 | ✅ 已修 |
+| 同上 阶段 C | `wait_template` position ≥ 95 | 瞬间放行，防撞保护形同虚设 | ✅ 已修 |
+| `custom_components/roborock_plus/garage_guard.py` | `position ≥ 95` | 开门后立刻放行扫地机，门可能只开了一小半 | ✅ 已修 |
+| `automation.garage_door_sync_folding_door` | 无（只发 open） | 无 | — 无需改 |
+| `automation.che_ku_men_chang_shi_jian_wu_ren_zi_dong_guan_bi` | `state: open` | 状态被污染 → 可能**漏关**（失败方向安全） | ⚠️ 未修，风险低 |
+| `automation.che_ku_men_dan_jian_xun_huan_ble_an_jian` | `state: opening/closing` + position | **按键反向**（失败方向危险） | ⚠️ **未修，见下** |
 
 **最危险的是 `garage_guard.py`**：它开门后等 `position >= 95` 才下发清扫命令，而回声让它瞬间通过——扫地机会在门只开了一小半时就出发。
+
+### ⚠️ 尚未修复：BLE 按键单键循环
+
+`automation.che_ku_men_dan_jian_xun_huan_ble_an_jian`（当前 `off`，处于潜伏状态）的分支顺序是：
+
+```
+门在动（opening/closing） → stop
+position ≤ 1（已关）      → open
+position ≥ 2（未关到底）  → close
+```
+
+**两个前提都被回声破坏了：**
+
+1. 这台设备在 MIoT spec 里**没有 status 属性**，所以 `opening`/`closing` 来自集成自己下的「乐观标志」，而
+   `_position_changed_handler` 在 `current_position` 变化时**会把它清掉** —— 而回声在 ~0.5 秒内就会改变它。
+   实测 7 天历史：`opening`/`closing` 平均只持续 **0.79 秒**（最大 1.71 秒，n=20），其余 ~35 秒行程里实体报的是**回声后的终态**。
+2. 于是「停止」分支**实际上永远不可达**，按键会落到「反向」分支：
+
+| 按键时机 | 实体上报 | 自动化实际执行 | 用户意图 |
+| --- | --- | --- | --- |
+| 关门途中 | `closed` / 0 | `open_cover` | 停住 |
+| 开门途中 | `open` / 100 | `close_cover` | 停住 |
+
+**失败方向是危险的**：开门途中被按键会下发 `close_cover`，若此时扫地机在门口，这是唯一可能撞到它的方向。目前该自动化是 `off`，所以是潜伏的而非活跃的。
+
+**为什么本设计不顺手改**：修它需要「门还在动」的可靠判据，而这台设备给不出。可选路径各有代价：
+
+- 加一个「上次命令时间」辅助实体 → 与「不留第二个更滞后的真相来源」的既有决定冲突（`scripts/garage_button_cycle/README.md` 记录过退休 `input_datetime` 的理由）
+- 改用物理限位开关 → 与门磁方案同一件事，等硬件
+- 接受「按键只做开/关切换，不支持中途停止」→ 语义降级，需要用户确认
+
+**在用户决定之前，保持它 `off`**，并已记入遗留风险表。
 
 ## 设计
 
@@ -164,10 +196,10 @@ trigger: position < 1 for 1s
 - action: cover.open_cover
 - delay: "00:00:45"                       # 先越过污染窗口
 - wait_template: "{{ pos >= 95 }}"        # 此时才是真值
-  timeout: "00:00:30"
+  timeout: "00:01:30"
 ```
 
-超时值相应放宽：原 60 秒在「先等 45 秒」之后只剩 15 秒余量，改为 45 + 30。
+超时值相应放宽：原 60 秒在「先等 45 秒」之后只剩 15 秒余量，改为 **90 秒**（45 秒 settle + 45 秒观察）。
 
 超时行为不变：**只告警，不强行动作**（门与扫地机状态不一致时没有安全的自动恢复方式）。
 
@@ -213,8 +245,19 @@ BLE 掉线若被当成「门没开」，反而制造危险。
 
 按 `AGENTS.md`，实际动作由用户执行，助手负责仿真与回放。
 
-1. **回放**：用本次实测时序（回声 + 35 秒行程 + stop_cover）构造输入，喂给状态机回放脚本，断言修复后不再产生半停。✅ 已做（`replay_docked_flapping.py` 全 PASS）。
-2. **变异测试**：把 `delay` 改回 5 秒、去掉校验，测试必须变红。✅ 已做（`mutation_check_garage_state_machine.py` 覆盖；`garage_guard` 的两个变异也实测被捕获）。
+1. **时序回放** —— **未做，且 `replay_docked_flapping.py` 不覆盖本 bug。**
+   该脚本回放的是 2026-10-08 的「停靠中抖动」时序（01:26 装拖布、19:41 抖动），
+   **没有**回声模型、没有 35 秒行程、没有 `stop_cover`，也不涉及 `auto_unlock`。
+   它全 PASS 是真实的，但那是上一个 bug 的回归网。本次修复的回归网是：
+   - `tests/test_door_timing.py`（常量与上下界）
+   - `tests/test_garage_guard.py`（虚拟时钟驱动真实协程：回声不能放行扫地机、已开的门不空等、卡住的门超时）
+   - `tests/test_auto_unlock_waits_for_travel.py`（45 秒延时、**顺序**在 stop 之前、复查守卫）
+   - `tests/test_garage_state_machine.py`（三处门等待都有 settle、预算 90 秒、递归扫到嵌套那处）
+   - `tests/test_system_composition.py`（粘贴用 YAML 与生成物的 actions/triggers/mode 一致）
+
+   给状态机补一个真正带回声模型与 35 秒行程的回放，仍是**未完成事项**。
+2. **变异测试**：✅ 已做。`mutation_check_garage_state_machine.py` 12/12、
+   `mutation_check_garage_guard.py` 6/6（含「把 elapsed 换成常量」这个原本会逃逸的变异）。
 3. **用户实测**（预期结果写清楚）：
    - `auto_unlock` 开启 + 关到底 → 门应停在 **0**，不再出现中途值
    - 门在行进中被手动停 → 应出现真实中途值，且 `auto_unlock` **不**再补一脚

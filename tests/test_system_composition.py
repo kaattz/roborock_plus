@@ -94,6 +94,40 @@ class TestStateMachineUsesTheIntegration:
             "mirror, or HA will run steps the repo does not test"
         )
 
+    def test_the_mirror_carries_the_same_triggers_as_the_generated_config(self) -> None:
+        """Triggers drift too, and they carry the anti-flap guards.
+
+        Comparing only `actions` left the trigger half unprotected: `from: off`
+        on the departure trigger and `for: seconds: 10` on the return trigger are
+        exactly the guards that stop one departure being counted repeatedly, and
+        dropping either from the mirror used to leave the whole suite green.
+        """
+        generated = json.loads(
+            (
+                ROOT / "scripts" / "garage_state_machine" / "state_machine.json"
+            ).read_text(encoding="utf-8")
+        )
+        mirror = _config(STATEMACHINE)
+
+        assert mirror.get("triggers") == generated["triggers"], (
+            "the pasted YAML's triggers differ from the generated config; the "
+            "departure `from:` and the return `for:` are load-bearing guards"
+        )
+
+    def test_the_mirror_carries_the_same_scalar_settings(self) -> None:
+        """Mode and bounds decide how bursts of triggers are handled."""
+        generated = json.loads(
+            (
+                ROOT / "scripts" / "garage_state_machine" / "state_machine.json"
+            ).read_text(encoding="utf-8")
+        )
+        mirror = _config(STATEMACHINE)
+
+        for key in ("mode", "max", "max_exceeded", "conditions"):
+            assert mirror.get(key) == generated.get(key), (
+                f"the pasted YAML's {key!r} differs from the generated config"
+            )
+
     def test_it_resumes_with_the_integration_service(self) -> None:
         """Closing the door requires pausing, and only resume_task continues the
         original task -- plain vacuum.start would restart it."""
@@ -228,9 +262,26 @@ class TestAutomationsReadmeIsAccurate:
         assert "人工" in text
 
     def test_it_records_every_unique_id(self) -> None:
+        """Every automation in the directory must appear in the README table.
+
+        Derived from the files rather than hardcoded: the README is the paste
+        instruction the whole deployment depends on, and a new automation it does
+        not mention is one nobody will deploy.
+        """
         text = _text(AUTOMATIONS / "README.md")
-        for unique_id in ("1791392186966", "1791390713215", "1791372324572"):
-            assert unique_id in text
+        files = sorted(AUTOMATIONS.glob("*.yaml"))
+        assert files, "expected automations in the directory"
+
+        missing = []
+        for path in files:
+            config = _config(path)
+            unique_id = str(config.get("id", ""))
+            if not unique_id or unique_id not in text:
+                missing.append(f"{path.name} (id {unique_id or 'missing'})")
+        assert not missing, (
+            "these automations exist but their unique_id is not in the README, so "
+            "the paste instructions do not cover them: " + ", ".join(missing)
+        )
 
     def test_it_documents_the_blueprint_url(self) -> None:
         text = _text(AUTOMATIONS / "README.md")

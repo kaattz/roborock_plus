@@ -37,20 +37,48 @@ def _echo_settle() -> int:
     return module.ECHO_SETTLE_SECONDS
 
 
+def _delay_seconds(delay: object) -> int:
+    """Read a HA delay, which may be {seconds: N} or 'HH:MM:SS'."""
+    if isinstance(delay, dict):
+        return int(delay["seconds"])
+    hours, minutes, seconds = (int(p) for p in str(delay).split(":"))
+    return hours * 3600 + minutes * 60 + seconds
+
+
 def _first_delay() -> int:
     for action in _config()["actions"]:
         if "delay" in action:
-            delay = action["delay"]
-            if isinstance(delay, dict):
-                return int(delay["seconds"])
-            hours, minutes, seconds = (int(p) for p in str(delay).split(":"))
-            return hours * 3600 + minutes * 60 + seconds
+            return _delay_seconds(action["delay"])
     raise AssertionError("no delay in the automation")
 
 
 def test_unique_id_is_preserved() -> None:
     """`id` is the HA unique_id; changing it orphans the entity's history."""
     assert _config()["id"] == "1788771256556"
+
+
+def test_the_delay_comes_before_the_stop() -> None:
+    """Order matters, and it is the whole fix.
+
+    Asserting only that *some* delay is long enough is not enough: moving the
+    delay to after the guarded stop leaves `_first_delay()` still >= 45 while the
+    PAUSE lands at t~0, which is the original defect in a new shape. That escape
+    was measured -- the suite stayed green. This pins the order.
+    """
+    actions = _config()["actions"]
+    delay_indexes = [i for i, step in enumerate(actions) if "delay" in step]
+    stop_indexes = [
+        i
+        for i, step in enumerate(actions)
+        if "cover.stop_cover" in json.dumps(step, ensure_ascii=False)
+    ]
+    assert delay_indexes, "the automation must wait out the echo window"
+    assert stop_indexes, "the automation must still pause the door"
+
+    assert min(delay_indexes) < min(stop_indexes), (
+        "the settle delay must run BEFORE the stop; otherwise the door is paused "
+        f"while still travelling (delay at {delay_indexes}, stop at {stop_indexes})"
+    )
 
 
 def test_pause_happens_after_a_full_travel() -> None:

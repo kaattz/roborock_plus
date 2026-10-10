@@ -1,17 +1,24 @@
 # 仓库里的自动化与蓝图
 
-## 三个扫地机自动化
+## 四个自动化
 
 | 文件 | HA unique_id | entity_id |
 | --- | --- | --- |
 | `roborock_garage_door_statemachine.yaml` | `1791392186966` | `automation.roborock_garage_door_statemachine` |
 | `roborock_stuck_or_error_stop.yaml` | `1791390713215` | `automation.roborock_stuck_or_error_stop` |
 | `roborock_clean_command_not_started.yaml` | `1791372324572` | `automation.roborock_clean_command_not_started` |
+| `vacuum_garage_door_auto_unlock.yaml` | `1788771256556` | `automation.vacuum_garage_door_auto_unlock` |
 
-**这两个目录是给人看的版本管理,不是自动同步源。**
+**这个目录是给人看的版本管理,不是自动同步源。**
 
 HA 那边**人工添加、人工更新** —— 在 UI 里粘贴本文件的 YAML 内容即可。
 没有同步脚本,也不需要。
+
+> **`roborock_garage_door_statemachine.yaml` 必须与 `scripts/garage_state_machine/state_machine.json` 保持一致。**
+> JSON 是 `build.py` 的产物,是逻辑的源头;YAML 是要粘进 HA 的那一份。改了一边忘了另一边,
+> 粘贴时就会把已修的 bug 贴回线上 —— 2026-10-10 的 position 回声修复就踩过这个坑。
+> `tests/test_system_composition.py` 现在会比对两者的 `actions`/`triggers`/`mode` 等,不一致就红。
+> 重新生成:先 `python scripts/garage_state_machine/build.py`,再把新的 YAML 补上。
 
 > **`id` 不能改。** 它是 HA 的 unique_id,改了等于换一个自动化:历史断掉、
 > 实体注册表的身份丢失。2026-10-09 改成英文名时只改了 alias 和 entity_id,

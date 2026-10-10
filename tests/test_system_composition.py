@@ -18,6 +18,7 @@ never fires. These tests pin the links so a rename fails the build instead.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -66,6 +67,32 @@ def _config(path: Path) -> dict:
 
 class TestStateMachineUsesTheIntegration:
     """It closes the door; it needs the integration for three separate things."""
+
+    def test_the_mirror_carries_the_same_steps_as_the_generated_config(self) -> None:
+        """The YAML is what gets pasted into HA, so it must not drift.
+
+        `scripts/garage_state_machine/build.py` generates `state_machine.json`,
+        and `automations/roborock_garage_door_statemachine.yaml` is the
+        hand-paste mirror of it. On 2026-10-10 the door waits gained a settle
+        delay in the JSON while the mirror kept the old steps, so pasting the
+        mirror would have shipped the position-echo bug back into HA -- the same
+        half-second wait the fix exists to remove.
+
+        Only `id` may differ: it is HA's unique_id and exists only in the YAML.
+        """
+        generated = json.loads(
+            (
+                ROOT / "scripts" / "garage_state_machine" / "state_machine.json"
+            ).read_text(encoding="utf-8")
+        )
+        mirror = _config(STATEMACHINE)
+        mirror.pop("id", None)
+
+        assert mirror.get("actions") == generated["actions"], (
+            "the pasted YAML's actions differ from the generated config; "
+            "re-run scripts/garage_state_machine/build.py and regenerate the "
+            "mirror, or HA will run steps the repo does not test"
+        )
 
     def test_it_resumes_with_the_integration_service(self) -> None:
         """Closing the door requires pausing, and only resume_task continues the

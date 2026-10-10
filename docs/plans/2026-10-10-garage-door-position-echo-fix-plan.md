@@ -349,7 +349,7 @@ Run: `python -m pytest tests/test_garage_guard.py tests/test_garage_guard_integr
 Expected: PASS
 
 再跑全量：`python -m pytest tests -q --no-header`
-Expected: 361 passed 以上（357 + 本任务新增 6）
+Expected: 363 passed（357 + 本任务新增 6）
 
 **Step 4b: 确认改名没有漏掉调用点**
 

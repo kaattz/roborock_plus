@@ -740,12 +740,39 @@ def test_pause_happens_after_a_full_travel() -> None:
 
 
 def test_stop_is_guarded_by_a_position_recheck() -> None:
-    """The door may not have shut; do not fire PAUSE at an unknown position."""
-    blob = json.dumps(_config(), ensure_ascii=False)
-    assert "condition" in blob, "the stop must be conditional on a fresh recheck"
-    assert blob.index('"condition"') < blob.index("stop_cover"), (
-        "the recheck must come before stop_cover"
+    """The door may not have shut; do not fire PAUSE at an unknown position.
+
+    Structural rather than string-search: the recheck must be the `if` of the
+    step that stops the cover, and the stop must live in its `then` branch. A
+    substring scan for "condition" would also pass if the recheck sat in the
+    `else`, or in some unrelated step.
+    """
+    actions = _config()["actions"]
+    stops = [
+        step
+        for step in actions
+        if "cover.stop_cover" in json.dumps(step.get("then", []), ensure_ascii=False)
+    ]
+    assert stops, "stop_cover must be inside a then branch, not an unconditional step"
+
+    step = stops[0]
+    assert step.get("if"), "the stop must be conditional"
+    conditions = json.dumps(step["if"], ensure_ascii=False)
+    assert "current_position" in conditions, (
+        "the condition guarding the stop must be a fresh position recheck"
     )
+    assert "below" in conditions, (
+        "the recheck must require the door to be shut, not merely positioned"
+    )
+
+
+def test_the_stop_is_not_unconditional() -> None:
+    """A bare stop_cover action would fire even when the door never shut."""
+    for step in _config()["actions"]:
+        assert step.get("action") != "cover.stop_cover", (
+            "stop_cover must sit behind the recheck; an unconditional stop is "
+            "the original defect in a new place"
+        )
 ```
 
 **Step 2: 跑测试确认失败**
@@ -807,13 +834,12 @@ actions:
         data:
           level: warning
           title: 车库门解锁：门未关好
-          message: >-
-            门在 45 秒后仍未完全关闭（position={{
-            state_attr('cover.vacuum_garage_door', 'current_position') }}），
-            因此没有发送停止命令 —— 对没关好的门发 PAUSE 只会把它再停在一个
-            新的中途位置。请检查门是否被卡住。
+          # 用引号包住整条消息，避免折叠标量在中文标点后插入多余空格。
+          message: "门在 45 秒后仍未完全关闭（position={{ state_attr('cover.vacuum_garage_door', 'current_position') }}），因此没有发送停止命令 —— 对没关好的门发 PAUSE 只会把它再停在一个新的中途位置。请检查门是否被卡住。"
 mode: restart
 ```
+
+**注意消息用双引号包成单行。** 我实测过折叠标量（`>-`）：YAML 会把折行处替换成空格，中文标点后面就会多出空格（`）， 因此`、`一个 新的`）。单行加引号没有这个问题。
 
 **Step 4: 跑测试确认通过**
 

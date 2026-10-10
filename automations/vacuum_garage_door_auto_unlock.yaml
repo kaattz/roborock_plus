@@ -1,0 +1,51 @@
+# 车库门完全关闭后自动解锁
+#
+# 目的（用户确认）：门关到底之后释放电机离合，让门能手动推开（门是手自一体）。
+#
+# stop_cover 在**静止**的门上执行才是「松劲」。在门还在走的时候执行，效果相反 ——
+# 它把门停在半路。2026-10-10 实测两次，门分别停在 77 和 38：
+#
+#   15:09:22.464  close_cover 下发
+#   15:09:23.233  HA 报 closed / 0        ← 设备回声，门物理上还在 100% 处
+#   15:09:24.240  本自动化触发             ← 被回声骗了
+#   15:09:29.24   stop_cover 发出          ← 门只走了约 7 秒
+#   15:09:32.741  设备上报真实位置 77      ← 被按停
+#
+# 对照：把本自动化关掉，同一条 close_cover 让门干净地关到底，并稳定 9 分钟没有翻转。
+#
+# 真实行程 35 秒（用户秒表计时），所以触发后必须等过回声窗口再发 PAUSE，
+# 并且用一次新鲜的位置复查确认门真的关好了。复查不通过就不发命令：
+# 门没关好时发 PAUSE 没有意义，只会制造一个新的中途位置。
+#
+# id 不能改。它是 HA 的 unique_id，改了等于换一个自动化：历史断掉、
+# 实体注册表的身份丢失。
+id: '1788771256556'
+alias: vacuum_garage_door_auto_unlock
+description: 车库门完全关闭后自动解锁
+triggers:
+- trigger: numeric_state
+  entity_id: cover.vacuum_garage_door
+  attribute: current_position
+  below: 1
+  for:
+    seconds: 1
+conditions: []
+actions:
+- delay:
+    seconds: 45
+- if:
+  - condition: numeric_state
+    entity_id: cover.vacuum_garage_door
+    attribute: current_position
+    below: 5
+  then:
+  - action: cover.stop_cover
+    target:
+      entity_id: cover.vacuum_garage_door
+  else:
+  - action: script.alert_notify
+    data:
+      level: warning
+      title: 车库门解锁：门未关好
+      message: "门在 45 秒后仍未完全关闭（position={{ state_attr('cover.vacuum_garage_door', 'current_position') }}），因此没有发送停止命令 —— 对没关好的门发 PAUSE 只会把它再停在一个新的中途位置。请检查门是否被卡住。"
+mode: restart

@@ -130,3 +130,173 @@ def test_postcommand_wait_applies_the_time_gate() -> None:
         "echo of open_cover satisfies it in half a second"
     )
     assert "monotonic()" in post, "the wait must measure real elapsed time"
+
+
+# --- Behavioural coverage for the wait ---------------------------------------
+#
+# The two assertions above are source-text checks, and they are NOT sufficient:
+# replacing the real `time.monotonic() - started` with a constant still leaves
+# both substrings present (`started = time.monotonic()` supplies `monotonic()`),
+# so the wiring of real elapsed time into the predicate was unenforced. Measured
+# escaping mutation: `time.monotonic() - started` -> `999`, 10 tests still green.
+#
+# The tests below drive the real coroutine against a virtual clock instead, so
+# the echo cannot release the robot and a constant cannot fake the wait.
+
+
+class _Clock:
+    """A virtual clock standing in for time.monotonic and asyncio.sleep."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+
+class _FakeTime:
+    def __init__(self, clock: _Clock) -> None:
+        self._clock = clock
+
+    def monotonic(self) -> float:
+        return self._clock.now
+
+
+class _FakeAsyncio:
+    """The subset of asyncio the guard uses, against a virtual clock.
+
+    `sleep` raises TimeoutError once the deadline set by `timeout()` would be
+    crossed, which is what real asyncio.timeout achieves by cancelling the task.
+    """
+
+    def __init__(self, clock: _Clock) -> None:
+        self._clock = clock
+        self.deadline: float | None = None
+
+    def timeout(self, seconds: float):
+        fake = self
+
+        class _Timeout:
+            async def __aenter__(self):
+                fake.deadline = fake._clock.now + seconds
+                return self
+
+            async def __aexit__(self, *exc) -> bool:
+                fake.deadline = None
+                return False
+
+        return _Timeout()
+
+    async def sleep(self, seconds: float) -> None:
+        if self.deadline is not None and self._clock.now + seconds > self.deadline:
+            raise TimeoutError
+        self._clock.sleeps.append(seconds)
+        self._clock.now += seconds
+
+
+class _State:
+    def __init__(self, position) -> None:
+        self.attributes = {"current_position": position}
+
+
+class _Hass:
+    """Minimal hass: a cover whose reported position is scripted."""
+
+    def __init__(self, position) -> None:
+        self._position = position
+        self.service_calls: list[tuple] = []
+        outer = self
+
+        class _States:
+            def get(self, entity_id):
+                return _State(outer._position())
+
+        class _Services:
+            async def async_call(self, domain, service, data, blocking=False):
+                outer.service_calls.append((domain, service, data))
+
+        self.states = _States()
+        self.services = _Services()
+
+
+def _run_guard(hass: _Hass, clock: _Clock) -> str:
+    """Run the real guard coroutine. Returns 'returned' or 'raised'."""
+    import asyncio as real_asyncio
+    import sys
+    import types
+
+    # homeassistant.exceptions is imported lazily inside the guard; the real
+    # package is not installed in the test environment.
+    if "homeassistant.exceptions" not in sys.modules:
+        pkg = types.ModuleType("homeassistant")
+        exc = types.ModuleType("homeassistant.exceptions")
+
+        class HomeAssistantError(Exception):
+            def __init__(self, *args, **kwargs) -> None:
+                super().__init__(*args)
+
+        exc.HomeAssistantError = HomeAssistantError
+        pkg.exceptions = exc
+        sys.modules.setdefault("homeassistant", pkg)
+        sys.modules["homeassistant.exceptions"] = exc
+
+    options = {
+        MODULE.CONF_GARAGE_GUARD_ENABLED: True,
+        MODULE.CONF_GARAGE_DOOR_ENTITY_ID: "cover.vacuum_garage_door",
+    }
+
+    real_time, real_asyncio_mod = MODULE.time, MODULE.asyncio
+    MODULE.time = _FakeTime(clock)
+    MODULE.asyncio = _FakeAsyncio(clock)
+    try:
+        real_asyncio.run(MODULE.async_guard_garage_open(hass, options))
+    except Exception as err:  # noqa: BLE001 - the timeout path is expected
+        return f"raised:{type(err).__name__}"
+    finally:
+        MODULE.time, MODULE.asyncio = real_time, real_asyncio_mod
+    return "returned"
+
+
+def test_echo_cannot_release_the_robot() -> None:
+    """The core safety property, behaviourally.
+
+    The door is shut, so the pre-check declines; the instant open_cover is
+    issued the device echoes 100 while the door has not moved. The guard must not
+    accept that echo -- it must wait out the whole settle window.
+    """
+    clock = _Clock()
+    hass = _Hass(lambda: 100 if hass.service_calls else 0)
+
+    outcome = _run_guard(hass, clock)
+
+    assert outcome == "returned"
+    assert len(hass.service_calls) == 1, "the guard must open the door exactly once"
+    assert clock.now >= MODULE.DEFAULT_GARAGE_DOOR_MIN_TRAVEL, (
+        f"the guard released the robot after only {clock.now}s of simulated time; "
+        "an echoed position must not satisfy the wait"
+    )
+    assert clock.sleeps, "the guard must actually wait, not fall straight through"
+
+
+def test_already_open_door_is_not_stalled() -> None:
+    """The pre-check must not impose the settle window on an already-open door."""
+    clock = _Clock()
+    hass = _Hass(lambda: 100)
+
+    outcome = _run_guard(hass, clock)
+
+    assert outcome == "returned"
+    assert hass.service_calls == [], "an open door must not be re-commanded"
+    assert clock.sleeps == [], "an open door must not wait at all"
+
+
+def test_obstructed_door_times_out_rather_than_releasing() -> None:
+    """Time alone is not enough: a door that never opens must raise."""
+    clock = _Clock()
+    hass = _Hass(lambda: 20 if hass.service_calls else 0)
+
+    outcome = _run_guard(hass, clock)
+
+    assert outcome == "raised:HomeAssistantError", (
+        "a door that echoes nothing and never reaches the position must raise, "
+        "not release the robot"
+    )
+    assert clock.now >= MODULE.DEFAULT_GARAGE_DOOR_MIN_TRAVEL

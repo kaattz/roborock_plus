@@ -120,8 +120,11 @@
               }
             },
             {
+              "delay": "00:00:45"
+            },
+            {
               "continue_on_timeout": true,
-              "timeout": "00:01:00",
+              "timeout": "00:01:30",
               "wait_template": "{{ (state_attr('cover.vacuum_garage_door', 'current_position') | float(100)) < 5 }}"
             },
             {
@@ -137,7 +140,7 @@
                   "data": {
                     "level": "warning",
                     "title": "柜门状态机：关门失败",
-                    "message": "扫地机已暂停、不再移动，但柜门未能在 60 秒内完全关闭。扫地机保持暂停，请手动处理。"
+                    "message": "扫地机已暂停、不再移动，但柜门未能在 90 秒内完全关闭。扫地机保持暂停，请手动处理。"
                   }
                 },
                 {
@@ -197,8 +200,11 @@
               }
             },
             {
+              "delay": "00:00:45"
+            },
+            {
               "continue_on_timeout": true,
-              "timeout": "00:01:00",
+              "timeout": "00:01:30",
               "wait_template": "{{ (state_attr('cover.vacuum_garage_door', 'current_position') | float(0)) >= 95 }}"
             },
             {
@@ -214,7 +220,7 @@
                   "data": {
                     "level": "critical",
                     "title": "柜门打开失败",
-                    "message": "扫地机正在回基站（{{ trigger.to_state.state }}），但柜门未能在 60 秒内完全打开，有撞门风险。"
+                    "message": "扫地机正在回基站（{{ trigger.to_state.state }}），但柜门未能在 90 秒内完全打开，有撞门风险。"
                   }
                 },
                 {
@@ -300,8 +306,11 @@
                   }
                 },
                 {
+                  "delay": "00:00:45"
+                },
+                {
                   "continue_on_timeout": true,
-                  "timeout": "00:01:00",
+                  "timeout": "00:01:30",
                   "wait_template": "{{ (state_attr('cover.vacuum_garage_door', 'current_position') | float(100)) < 5 }}"
                 },
                 {

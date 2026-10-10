@@ -284,3 +284,123 @@ class TestClockDiscipline:
         # No template may decide which service runs.
         assert "service: {{" not in blob
         assert '"action": "{{' not in blob
+
+
+def _delay_seconds(delay: object) -> int:
+    """Read a HA delay, which may be 'HH:MM:SS' or {seconds: N}."""
+    if isinstance(delay, dict):
+        return int(delay["seconds"])
+    hours, minutes, seconds = (int(part) for part in str(delay).split(":"))
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def _echo_settle_seconds() -> int:
+    """Load the shared timing constant by path.
+
+    `custom_components.roborock_plus` cannot be imported here: its
+    `__init__.py` pulls in the `roborock` library, which is not installed in the
+    test environment. Loading the module file directly avoids that.
+    """
+    import importlib.util
+
+    path = (
+        Path(__file__).resolve().parent.parent
+        / "custom_components"
+        / "roborock_plus"
+        / "door_timing.py"
+    )
+    spec = importlib.util.spec_from_file_location("door_timing_for_state_machine", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.ECHO_SETTLE_SECONDS
+
+
+def _door_waits() -> list[tuple[str, dict, object]]:
+    """Return (path, wait_step, preceding_step) for every door-position wait.
+
+    Recursive, because the parking branch keeps its door wait inside `if/then`.
+    `preceding_step` is the sibling immediately before the wait in the same
+    list, which is where the settle delay must be inserted.
+
+    Verified against the pre-fix config: finds 3 waits
+    (`choose[0].sequence[4]`, `choose[1].sequence[1]`,
+    `choose[2].sequence[5].then[1]`), none of which has a delay yet.
+    """
+    config = _config()
+    found: list[tuple[str, dict, object]] = []
+
+    def visit_list(items: list, path: str) -> None:
+        for index, item in enumerate(items):
+            child = f"{path}[{index}]"
+            if (
+                isinstance(item, dict)
+                and "wait_template" in item
+                and "current_position" in item["wait_template"]
+            ):
+                found.append((child, item, items[index - 1] if index else None))
+            visit(item, child)
+
+    def visit(node: object, path: str) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if isinstance(value, list):
+                    visit_list(value, f"{path}.{key}")
+                elif isinstance(value, dict):
+                    visit(value, f"{path}.{key}")
+        elif isinstance(node, list):
+            visit_list(node, path)
+
+    visit(config["actions"][0]["choose"], "choose")
+    return found
+
+
+class TestDoorWaitsOutlastTheEcho:
+    """A wait that is satisfied by the command echo proves nothing.
+
+    The device writes the target position into `current-position` within half a
+    second of any motor command, while the door is still at the old position. A
+    wait keyed only on position therefore passes instantly, and the anti-crush
+    waits in the closing phases never actually hold.
+    """
+
+    def test_all_three_door_waits_are_found(self) -> None:
+        """Guard the scan itself: a structural change must not silently skip one."""
+        paths = [path for path, _, _ in _door_waits()]
+        assert len(paths) == 3, (
+            f"expected 3 door-position waits, found {len(paths)}: {paths}. "
+            "If the automation legitimately changed, update this count -- but "
+            "check you are not just failing to see a nested wait."
+        )
+
+    def test_the_nested_parking_wait_is_included(self) -> None:
+        """The regression this test exists for: branch 2's wait is inside if/then."""
+        paths = [path for path, _, _ in _door_waits()]
+        assert any("choose[2]" in path for path in paths), (
+            "the parking branch's door wait is nested in if/then and was not "
+            f"found by the scan; found only {paths}"
+        )
+
+    def test_every_door_wait_has_a_settle_delay_before_it(self) -> None:
+        for path, _, previous in _door_waits():
+            assert previous is not None, f"{path} has no preceding step"
+            assert "delay" in previous, (
+                f"{path} reads current_position with no settle delay in front of "
+                "it, so the device's echo of the command satisfies it"
+            )
+
+    def test_the_settle_delay_is_at_least_the_echo_window(self) -> None:
+        settle = _echo_settle_seconds()
+        for path, _, previous in _door_waits():
+            seconds = _delay_seconds(previous["delay"])
+            assert seconds >= settle, (
+                f"{path} waits only {seconds}s before reading position; the echo "
+                f"window is {settle}s"
+            )
+
+    def test_the_paused_wait_is_not_given_a_door_delay(self) -> None:
+        """The `paused` wait is about the vacuum, not the door."""
+        for _, step, _ in _door_waits():
+            assert "is_state" not in step["wait_template"], (
+                "a vacuum-state wait was misidentified as a door wait"
+            )

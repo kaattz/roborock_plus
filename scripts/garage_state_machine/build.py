@@ -64,6 +64,15 @@ DOOR_CLOSED = (
     "{{ (state_attr('" + COVER + "', 'current_position') | float(100)) < 5 }}"
 )
 
+# The device echoes the commanded position immediately, so a wait keyed on
+# position alone is satisfied by the echo. Every door wait therefore sits behind
+# a settle delay longer than one full travel.
+DOOR_SETTLE = "00:00:45"
+
+# Settle plus room for a genuinely slow door: the old 60s budget now has to
+# cover the settle as well.
+DOOR_WAIT_TIMEOUT = "00:01:30"
+
 DESCRIPTION = "\n".join(
     [
         "合并原先三个 *_plus 自动化，用 mode: queued 串行化，避免它们同时抢柜门和 pause。",
@@ -157,6 +166,19 @@ def wait_for(template: str, timeout: str) -> dict:
         "timeout": timeout,
         "wait_template": template,
     }
+
+
+def door_wait(template: str) -> list[dict]:
+    """Wait for a door position, past the window where the reading is an echo.
+
+    The delay is not cosmetic. Without it the device's immediate echo of the
+    command satisfies the wait, so the anti-crush guards in the closing phases
+    never hold and the door can be moved while the robot is in the doorway.
+
+    Returns a *list* because HA allows one action key per step: the delay and the
+    wait must be separate list items. Splice it in with `*door_wait(...)`.
+    """
+    return [{"delay": DOOR_SETTLE}, wait_for(template, DOOR_WAIT_TIMEOUT)]
 
 
 def condition_status_in(states: tuple[str, ...]) -> dict:
@@ -258,10 +280,10 @@ PHASE_LEAVE = {
             "离开阶段暂停失败",
         ),
         {"action": "cover.close_cover", "target": {"entity_id": COVER}},
-        wait_for(DOOR_CLOSED, "00:01:00"),
+        *door_wait(DOOR_CLOSED),
         guard(
             "柜门状态机：关门失败",
-            "扫地机已暂停、不再移动，但柜门未能在 60 秒内完全关闭。"
+            "扫地机已暂停、不再移动，但柜门未能在 90 秒内完全关闭。"
             "扫地机保持暂停，请手动处理。",
             "离开阶段关门失败",
         ),
@@ -290,9 +312,8 @@ PHASE_RETURN = {
     ],
     "sequence": [
         {"action": "cover.open_cover", "target": {"entity_id": COVER}},
-        wait_for(
-            "{{ (state_attr('" + COVER + "', 'current_position') | float(0)) >= 95 }}",
-            "00:01:00",
+        *door_wait(
+            "{{ (state_attr('" + COVER + "', 'current_position') | float(0)) >= 95 }}"
         ),
         {
             "if": [
@@ -306,7 +327,7 @@ PHASE_RETURN = {
                     "critical",
                     "柜门打开失败",
                     "扫地机正在回基站（{{ trigger.to_state.state }}），"
-                    "但柜门未能在 60 秒内完全打开，有撞门风险。",
+                    "但柜门未能在 90 秒内完全打开，有撞门风险。",
                 ),
                 {"stop": "返回阶段开门失败"},
             ],
@@ -340,7 +361,7 @@ PHASE_PARK = {
             ],
             "then": [
                 {"action": "cover.close_cover", "target": {"entity_id": COVER}},
-                wait_for(DOOR_CLOSED, "00:01:00"),
+                *door_wait(DOOR_CLOSED),
                 {
                     "if": [
                         {

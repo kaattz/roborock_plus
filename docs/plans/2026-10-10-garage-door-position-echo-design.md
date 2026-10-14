@@ -299,14 +299,39 @@ BLE 掉线若被当成「门没开」，反而制造危险。
 - 让 guard 记录「门是何时变的」，只接受**本次调用之后**变化的位置 → 需要一个跨调用状态，集成里目前没有
 - 用物理限位开关，前置检查直接读触点 → 与门磁方案同一件事
 
-### ⚠️ 本次修复**未部署**
+### 部署状态：状态机已部署（本节曾写着「未部署」）
 
-仓库里的代码、状态机、自动化都改好了，但 HA 里的自动化是**人工粘贴**的（见 `automations/README.md`），所以线上仍是旧配置：
+**这一节在 2026-10-10 写的时候是对的，现在过时了。**
 
-- `automation.vacuum_garage_door_auto_unlock` 仍是 `delay: 5` + 无条件 `stop_cover`（**原缺陷原样存在**）
-- `automation.roborock_garage_door_statemachine` 仍是 `timeout: 00:01:00`、三处门等待都没有 45 秒 settle
+判据是仓库里那份**从 HA 读回**的副本 `scripts/garage_state_machine/deployed_state_machine.json`：
 
-**在粘贴之前，用户的原始问题在线上并没有被修好。** 这是当前最重要的一步，不是代码问题。
+- 它有 `id` 字段（`1791392186966`）—— `build.py` 的产物**从不写 `id`**，
+  所以有 `id` 就证明它来自 `automations.yaml`，不是构建输出
+- 读取时间 **2026-10-14 02:06**
+- 内容已含：`00:00:45` settle、`00:01:30` 门等待超时、resume 前置检查、
+  恢复失败告警、英文 alias
+- 与当前 `state_machine.json` 的 `actions` **逐字段一致**
+
+时间线：
+
+```
+10-10          写本节，此时确实未部署
+10-13 21:47    集成掉线（pypi 装不上 python-roborock==5.5.1）
+10-14 01:18    网络恢复，集成重新加载
+10-14 02:06    从 HA 读回配置 —— 已含全部修复
+10-14 13:30    把当时仍未提交的这轮工作提交（e342b1d）
+```
+
+**所以 `automation.roborock_garage_door_statemachine` 在 10-14 02:06 时已经是修复版。**
+
+### 仍未核实：`auto_unlock`
+
+**没有** `auto_unlock` 的读回副本，所以线上那一条的状态**无法从仓库判断**。
+文档此前断言它「仍是 `delay: 5` + 无条件 `stop_cover`」—— 那个断言写于 10-10，
+**此后没有再核实过，不应继续当作事实**。
+
+要确认它，需要重新 `fetch_deployed.py`（读 `automations.yaml`），或直接在
+HA 里打开那条自动化看 actions。
 
 ## 过程记录
 

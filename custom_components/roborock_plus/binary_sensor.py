@@ -390,11 +390,20 @@ class RoborockStuckBinarySensorEntity(RoborockCoordinatedEntityV1, BinarySensorE
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        """Expose how long the robot has been stuck."""
+        """Expose how long, and by which rule, the robot was judged stuck.
+
+        The two rules mean different things and need different wording: "stopped"
+        is a robot that has not moved, "trapped" is one that keeps moving but
+        never gets away from where it started. Surfacing the reason here is what
+        lets a glance at the entity tell them apart.
+        """
         seconds = self.coordinator.stuck_seconds
         if seconds is None:
             return None
-        return {"seconds_stuck": int(seconds)}
+        return {
+            "seconds_stuck": int(seconds),
+            "reason": "trapped" if self.coordinator.stuck_is_backstop else "stopped",
+        }
 
 
 def _fresh_vacuum_position(

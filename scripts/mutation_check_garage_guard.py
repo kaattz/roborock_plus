@@ -89,19 +89,58 @@ def drop_the_echo_gate_from_the_wait(vacuum: str, guard: str) -> tuple[str, str]
 def gate_the_precommand_check_too(vacuum: str, guard: str) -> tuple[str, str]:
     """Apply the settle gate before any command is issued.
 
-    No command has been sent yet, so there is no echo to outlast; gating here
-    would idle every start for 45 seconds even with the door already open.
+    Gating here would idle every start for 45 seconds even with the door already
+    open. The pre-command check decides from the reading's age instead.
     """
     return (
         vacuum,
         guard.replace(
-            "    if is_garage_door_open_enough(\n"
-            "        _configured_cover_position(hass, cover_entity_id)\n"
+            "    if window.trusts(\n"
+            "        time.monotonic(),\n"
+            "        _configured_cover_position(hass, cover_entity_id),\n"
+            "        _configured_cover_changed_at(hass, cover_entity_id),\n"
             "    ):\n",
             "    if door_reached_open_position(\n"
             "        999, _configured_cover_position(hass, cover_entity_id)\n"
             "    ):\n",
         ),
+    )
+
+
+def trust_the_precommand_reading_blindly(vacuum: str, guard: str) -> tuple[str, str]:
+    """THE GAP THIS CLOSES: trust any high position in the pre-check.
+
+    The check reasoned "this call issued no command, so the reading is not an
+    echo". That is about the call, not the device: the state machine's phase C
+    commands the same door, the device echoes 100 while the door is physically at
+    5%, and this guard then reads 100 and releases the robot at a nearly-closed
+    door -- returning without calling a single service.
+    """
+    return (
+        vacuum,
+        guard.replace(
+            "    if window.trusts(\n"
+            "        time.monotonic(),\n"
+            "        _configured_cover_position(hass, cover_entity_id),\n"
+            "        _configured_cover_changed_at(hass, cover_entity_id),\n"
+            "    ):\n",
+            "    if is_garage_door_open_enough(\n"
+            "        _configured_cover_position(hass, cover_entity_id)\n"
+            "    ):\n",
+        ),
+    )
+
+
+def ignore_another_automations_command(vacuum: str, guard: str) -> tuple[str, str]:
+    """Never record that a command for this door was seen.
+
+    The window then always takes its "no command since start-up" path, which is
+    the same as the blind trust above but keeps the plumbing in place -- so it
+    catches a test that only checks `trusts` is called.
+    """
+    return (
+        vacuum,
+        guard.replace("    window.note_command(time.monotonic())\n", ""),
     )
 
 
@@ -123,6 +162,16 @@ MUTATIONS = [
     (
         "the pre-command check is gated behind the settle window",
         gate_the_precommand_check_too,
+    ),
+    (
+        # The gap closed on 2026-10-14: the pre-check trusted a position that a
+        # command it did not issue had just produced.
+        "the pre-command check trusts another automation's echo",
+        trust_the_precommand_reading_blindly,
+    ),
+    (
+        "another automation's command is never recorded",
+        ignore_another_automations_command,
     ),
 ]
 

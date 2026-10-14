@@ -285,19 +285,39 @@ BLE 掉线若被当成「门没开」，反而制造危险。
 | 时间方案的固有代价 | 每次开关门多等 45 秒 | 安全优先，用户已确认取此方向 |
 | `stop_cover` 是否真能「释放离合」 | 未经验证：PAUSE 打在静止电机上是否有效果未知 | 修复后请用户手动试一次门能否轻松推开 |
 | **guard 前置检查的竞态** | 见下 | 需门磁，或让 guard 也校验门是「本次命令之后」才变的 |
-| **BLE 按键反向** | 见「尚未修复」一节 | 保持该自动化 `off`，等用户决定 |
+| **BLE 按键反向** | 见「尚未修复」一节 | ✅ 已修（2026-10-14：改用「距上次命令的时间」+ 门磁） |
+| **门卡住但电机还在转** | 全开位装不了门磁，position 停在回声值 | ✅ 有兜底（2026-10-14：长时间 + 大范围判「动但去不了」→ `vacuum.stop`） |
 
-### ⚠️ guard 前置检查仍可能被「别的自动化刚发的命令」骗到
+### ✅ guard 前置检查的竞态已修（2026-10-14）
 
-`async_guard_garage_open` 的前置检查读一次位置、`>= 95` 就直接返回，理由是「我还没发命令，所以这不是回声」。**这个理由只对本次调用成立，对设备状态不成立。**
+`async_guard_garage_open` 的前置检查曾经读一次位置、`>= 95` 就直接返回，理由是「我还没发命令，所以这不是回声」。**这个理由只对本次调用成立，对设备状态不成立。**
 
 实测构造出的路径：状态机阶段 C 先发了 `cover.open_cover` → 设备立刻把 `current_position` 回声成 100（门物理上还在 5%）→ 35 秒内来了一条 HA 发起的清扫命令 → guard 前置检查读到 100，**0.003 秒返回、一个服务都不发**，扫地机被放行到一扇几乎还关着的门。
 
-**失败方向是危险的**，而且路径真实（状态机确实会发 `open_cover`）。本设计**没有关闭这个缺口**。
+**修法**（`DoorEchoWindow`）：把「这扇门最近被命令过吗」记在 coordinator 上（跨调用存活），前置检查只在读数**足够旧**时才相信它：
 
-可行的修法（都还没做）：
-- 让 guard 记录「门是何时变的」，只接受**本次调用之后**变化的位置 → 需要一个跨调用状态，集成里目前没有
-- 用物理限位开关，前置检查直接读触点 → 与门磁方案同一件事
+```python
+def trusts(self, now, position, changed_at) -> bool:
+    if self._last_command_at is None:          # 启动后没见过命令
+        return is_garage_door_open_enough(position)
+    if now - self._last_command_at >= SETTLE:  # 设备早该走完了
+        return is_garage_door_open_enough(position)
+    if changed_at is None:                     # 时间戳读不到 → 不安全
+        return False
+    return now - changed_at >= SETTLE and is_garage_door_open_enough(position)
+```
+
+`changed_at` 用 HA 的 `last_updated_timestamp`。选它而不是 `last_changed` 是因为 `current_position` 是**属性**：core 在「state 和 attributes 完全相同」时直接 return，所以轮询重复上报同一个位置不会刷新它 —— 这正是「这个读数已经稳定」的证据。
+
+**为什么 `None` 按不安全处理**：这条路径唯一的职责就是别把扫地机放到一扇还在动的门前，所以读不到时间戳时必须拒绝，不能当成「很久以前」。
+
+**为什么不是「一律等 45 秒」**：那会让每次清扫在门本来就开着的情况下多等 45 秒，换不到任何安全收益。
+
+覆盖：`tests/test_garage_guard.py` 行为测试用虚拟时钟驱动真实协程（「别人命令的回声不能放行」+「已开且稳定的门不等待」），`mutation_check_garage_guard.py` 8/8，其中一条就是把这个缺口原样放回去。
+
+### 仍未关闭：门卡住但电机还在转
+
+这一条**补不了**，需要硬件在**全开位**装限位开关，而用户已确认那个位置装不了门磁。见上一节的已知边界。
 
 ### 部署状态：状态机已部署（本节曾写着「未部署」）
 

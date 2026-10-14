@@ -277,6 +277,151 @@ def test_reset_clears_everything() -> None:
     assert tracker.seconds_stuck(T0 + timedelta(seconds=200)) is None
 
 
+# --- the last-resort backstop ---------------------------------------------
+#
+# The short window answers "has it stopped moving?". It cannot answer "is it
+# moving but getting nowhere", because its anchor resets as soon as the robot
+# travels further than `radius` from it. Measured with the real tracker before
+# the backstop existed:
+#
+#     oscillation amplitude  30 -> stuck after 120s
+#     oscillation amplitude 190 -> stuck after 120s
+#     oscillation amplitude 300 -> NEVER stuck
+#
+# 300 units is under a second of travel at cleaning speed, so a robot rubbing
+# against a door that did not open exceeds the radius on every swing and resets
+# the anchor forever. The backstop judges over a much longer window and region.
+
+
+def _oscillate(tracker, *, amplitude, seconds=1800, step=5, start=0):
+    """Rub back and forth within `amplitude`, returning the verdicts.
+
+    ``start`` offsets the clock so consecutive calls continue one timeline rather
+    than replaying it -- reusing timestamps would be treated as a repeated sample
+    and correctly ignored.
+    """
+    verdicts = []
+    for tick in range(seconds // step):
+        t = start + tick * step
+        x = 0.0 if tick % 2 == 0 else amplitude
+        verdicts.append(_observe(tracker, t, x=x, y=0.0))
+    return verdicts
+
+
+def test_oscillation_beyond_the_short_radius_is_caught_by_the_backstop() -> None:
+    """The gap this closes: rubbing wider than the short radius, forever.
+
+    Before the backstop this returned False for every sample, whatever the
+    duration -- the short window's anchor resets on each swing.
+    """
+    tracker = _tracker(window_s=120, radius=200.0)
+
+    verdicts = _oscillate(tracker, amplitude=300.0)
+
+    assert any(verdicts), "a robot rubbing at amplitude 300 must eventually be caught"
+    assert tracker.is_backstopped(), (
+        "the verdict must be the backstop's; the short window cannot see this"
+    )
+
+
+def test_the_backstop_fires_at_its_window_not_earlier() -> None:
+    """It must not fire so early that ordinary work trips it."""
+    tracker = _tracker(window_s=120, radius=200.0)
+    window_s = int(MODULE.BACKSTOP_WINDOW.total_seconds())
+
+    early = _oscillate(tracker, amplitude=300.0, seconds=window_s - 30)
+    assert not any(early), "the backstop must not fire before its window elapses"
+
+    later = _oscillate(tracker, amplitude=300.0, seconds=60, start=window_s - 30)
+    assert any(later), "it must fire once the window has elapsed"
+    assert tracker.is_backstopped()
+
+
+def test_genuine_travel_never_trips_the_backstop() -> None:
+    """A robot that actually goes somewhere must not be reported stuck.
+
+    900s of cleaning at ~300 units/s covers ~270000 units, so a robot moving in a
+    straight line leaves the backstop region almost immediately.
+    """
+    tracker = _tracker(window_s=120, radius=200.0)
+
+    verdicts = [_observe(tracker, i * 5, x=i * 500.0, y=0.0) for i in range(360)]
+
+    assert not any(verdicts)
+    assert not tracker.is_stuck
+
+
+def test_working_a_room_does_not_trip_the_backstop() -> None:
+    """Moving around inside a room must not look like being trapped.
+
+    The robot travels far between samples -- well beyond the backstop radius --
+    so its anchor keeps moving with it.
+    """
+    tracker = _tracker(window_s=120, radius=200.0)
+
+    verdicts = [
+        _observe(tracker, i * 5, x=i * 2000.0, y=(i % 3) * 1500.0)
+        for i in range(360)
+    ]
+
+    assert not any(verdicts)
+
+
+def test_escaping_the_region_clears_the_backstop_verdict() -> None:
+    """It is not stuck any more once it gets out, so the verdict must clear."""
+    tracker = _tracker(window_s=120, radius=200.0)
+
+    _oscillate(tracker, amplitude=300.0)
+    assert tracker.is_backstopped()
+
+    # Leaves the region for good.
+    assert not _observe(tracker, 2000, x=50_000.0)
+    assert not tracker.is_stuck
+    assert not tracker.is_backstopped()
+
+
+def test_an_idle_state_clears_the_backstop_too() -> None:
+    """A pause or a mop wash means not moving is correct, so both must clear."""
+    tracker = _tracker(window_s=120, radius=200.0)
+
+    _oscillate(tracker, amplitude=300.0)
+    assert tracker.is_backstopped()
+
+    assert not _observe(tracker, 1900, should_move=False)
+    assert not tracker.is_stuck
+    assert not tracker.is_backstopped()
+
+
+def test_the_backstop_radius_exceeds_the_short_one_by_a_wide_margin() -> None:
+    """Both numbers are safety margins, so pin their relationship.
+
+    The user can raise the short window's radius to `MAX_V1_STUCK_RADIUS`, so a
+    backstop at or below that would measure nothing the short window had not
+    already measured -- and once the short radius equals the backstop's, the
+    backstop can never fire at all.
+    """
+    assert MODULE.BACKSTOP_RADIUS > MODULE.MAX_V1_STUCK_RADIUS, (
+        "the backstop radius must stay clear of the largest configurable short "
+        "radius, or raising the short radius silently disables the backstop"
+    )
+    assert MODULE.BACKSTOP_WINDOW > timedelta(
+        seconds=MODULE.MAX_V1_STUCK_WINDOW
+    ), "the backstop must outlast the longest configurable short window"
+
+
+def test_oscillation_inside_the_short_radius_uses_the_short_window() -> None:
+    """The fast path must still work; the backstop is not the only rule."""
+    tracker = _tracker(window_s=120, radius=200.0)
+
+    verdicts = _oscillate(tracker, amplitude=100.0, seconds=200)
+
+    assert any(verdicts)
+    assert not tracker.is_backstopped(), (
+        "a tight oscillation is the short window's job; using the backstop would "
+        "delay the report by 15 minutes for no reason"
+    )
+
+
 # --- event payload --------------------------------------------------------
 
 
@@ -317,3 +462,44 @@ def test_event_payload_omits_unknown_identifiers() -> None:
     assert "y" not in data
     assert data["state"] == "cleaning"
     assert data["seconds_stuck"] is None
+
+
+def test_event_payload_carries_the_reason() -> None:
+    """A notification has to be able to tell the two verdicts apart.
+
+    "It stopped" sends someone to look at the door; "it has been rubbing against
+    something for fifteen minutes" explains why nothing looked wrong. Conflating
+    them is what let the gap go unnoticed.
+    """
+    stopped = MODULE.build_stuck_event_data(
+        entity_id=None,
+        x=None,
+        y=None,
+        state="cleaning",
+        seconds_stuck=130,
+        reason="stopped",
+    )
+    trapped = MODULE.build_stuck_event_data(
+        entity_id=None,
+        x=None,
+        y=None,
+        state="cleaning",
+        seconds_stuck=910,
+        reason="trapped",
+    )
+
+    assert stopped["reason"] == "stopped"
+    assert trapped["reason"] == "trapped"
+
+
+def test_event_payload_omits_the_reason_when_unknown() -> None:
+    """An older call site must not emit a null reason an automation would print."""
+    data = MODULE.build_stuck_event_data(
+        entity_id=None,
+        x=None,
+        y=None,
+        state="cleaning",
+        seconds_stuck=10,
+    )
+
+    assert "reason" not in data

@@ -48,6 +48,7 @@ from .const import (
     V1_CLOUD_NOT_CLEANING_INTERVAL,
     V1_LOCAL_NOT_CLEANING_INTERVAL,
 )
+from .garage_guard import DoorEchoWindow
 from .models import DeviceState, get_device_info
 from .server_url import is_official_cloud_url
 from .v1_diagnostics import install_v1_raw_message_diagnostics
@@ -153,6 +154,12 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
             radius=self._stuck_options.radius,
         )
         self._stuck_event_sent = False
+        # Remembers when the garage door was last commanded, so the guard's
+        # pre-command check can tell "still open from before" apart from "echoing
+        # a command another automation just issued". Lives on the coordinator so
+        # it survives between calls; a per-call object cannot see the other
+        # automation's command at all.
+        self.garage_door_echo_window = DoorEchoWindow()
         # Tracks the last successful update to control when we report failure
         # to the base class. This is reset on successful data update.
         self._last_update_success_time: datetime | None = None
@@ -455,6 +462,11 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
                 state=status.state,
                 seconds_stuck=self._stuck_tracker.seconds_stuck(dt_util.utcnow()),
                 entry_id=getattr(self.config_entry, "entry_id", None),
+                reason=(
+                    "trapped"
+                    if self._stuck_tracker.is_backstopped()
+                    else "stopped"
+                ),
             ),
         )
 
@@ -491,6 +503,18 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
     def stuck_seconds(self) -> float | None:
         """Return how long the robot has been stuck, if it is."""
         return self._stuck_tracker.seconds_stuck(dt_util.utcnow())
+
+    @property
+    def stuck_is_backstop(self) -> bool:
+        """Return whether the current verdict came from the long-horizon rule.
+
+        False means the short window fired: the robot simply stopped. True means
+        it kept moving but never left the region it started in -- rubbing against
+        something, which the short window cannot see because each swing resets it.
+        """
+        if not self._stuck_options.enabled:
+            return False
+        return self._stuck_tracker.is_backstopped()
 
     def is_map_position_fresh(self) -> bool:
         """Return whether the last sampled vacuum position may be trusted."""

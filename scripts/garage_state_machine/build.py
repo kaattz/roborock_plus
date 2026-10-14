@@ -70,6 +70,14 @@ DOOR_SETTLE = "00:00:45"
 # cover the settle as well.
 DOOR_WAIT_TIMEOUT = "00:01:30"
 
+# How long the vacuum gets to leave `paused` after the resume command. Unlike
+# the door waits this needs no settle delay in front of it: the vacuum's state
+# comes from the device's own status, not from an echo of the command, so there
+# is no window in which a commanded-but-not-yet-happened change reads as done.
+# A minute covers the slowest polling (the official cloud is 60s); the local
+# server this house runs polls every second.
+RESUME_WAIT_TIMEOUT = "00:01:00"
+
 DESCRIPTION = "\n".join(
     [
         "合并原先三个 *_plus 自动化，用 mode: queued 串行化，避免它们同时抢柜门和 pause。",
@@ -83,6 +91,9 @@ DESCRIPTION = "\n".join(
         "B 离开：outside_danger_zone 从 off 变 on（扫地机真的走出危险区）后，暂停 → 关门 → 恢复。",
         "   暂停只在清扫状态里做，并确认真的进入 paused 才关门；否则只告警不关门，",
         "   因为「暂停没生效」意味着它可能还在往门口方向移动。",
+        "   恢复之后要确认它真的离开了 paused 才算成功 —— 失败（集成没加载、",
+        "   或暂停中重启导致恢复命令推导不出来）时只告警不假装成功，因为此时",
+        "   扫地机停在关着的柜门后，静默等于让你以为它在正常工作。",
         "C 返回：状态变成回基站/洗拖布，且扫地机确实不在基站上，才开门。",
         "   这个「不在基站」的守卫是必须的：2026-10-08 01:26 扫地机全程停在基站上",
         "   装拖布，状态却跳了 docking，把门白白开了又关、关了又开共 5 次。",
@@ -257,6 +268,92 @@ def guard(fail_title: str, fail_message: str, stop_reason: str) -> dict:
     }
 
 
+def resume_step() -> dict:
+    """Resume the task, and prove the resume actually took.
+
+    Phase B closes the door behind a paused robot, so this step is what puts it
+    back to work. It is also the only step here that calls an action the
+    integration owns, which makes it the only one that can fail for a reason the
+    automation cannot see coming.
+
+    Two failures were observed or are documented, and a bare call handles
+    neither:
+
+    * **The integration is not loaded.** On 2026-10-13 21:47 -> 2026-10-14 01:18
+      HA could not install `python-roborock==5.5.1` (pypi unreachable), so
+      `async_setup` never ran, no `roborock_plus.*` action existed, and the
+      vacuum entities read `unavailable`. `continue_on_error` does **not** cover
+      this: `homeassistant/helpers/script.py` re-raises `ServiceNotFound`
+      regardless, because a call to an action that does not exist is treated as
+      a broken script rather than a runtime error. The only defence is to not
+      call it -- hence the `unavailable` pre-check.
+    * **The resume command cannot be derived.** `vacuum.py` raises
+      `resume_not_available` when the device state cannot say which command
+      continues the task; README documents this as the consequence of a restart
+      while paused, because `last_resume_command` lives in memory.
+      `continue_on_error` does cover this one, and it must be set, or the run
+      ends before anything can tell the owner.
+
+    And "the action did not raise" is not evidence that the robot moved, which
+    is the same trap `task_active` exists to close for starting a clean. So the
+    resume is followed by a wait on the vacuum leaving `paused`, and the success
+    notice sits *after* this block, where no failure path can reach it.
+    """
+    return {
+        "if": [
+            {
+                "condition": "template",
+                # `states()` answers `unknown` for an entity that is absent
+                # entirely and `unavailable` for one whose integration is not
+                # loaded; both mean the action is not there to call.
+                "value_template": (
+                    "{{ states('" + VACUUM + "')"
+                    " not in ['unavailable', 'unknown'] }}"
+                ),
+            }
+        ],
+        "then": [
+            {
+                "action": "roborock_plus.resume_task",
+                "target": {"entity_id": VACUUM},
+                # `resume_not_available` is a HomeAssistantError, so this is
+                # what lets the guard below report it instead of the run dying
+                # here. It cannot cover ServiceNotFound; the `if` above does.
+                "continue_on_error": True,
+            },
+            wait_for(
+                "{{ not is_state('" + VACUUM + "', 'paused')"
+                " and states('" + VACUUM + "')"
+                " not in ['unavailable', 'unknown'] }}",
+                RESUME_WAIT_TIMEOUT,
+            ),
+            guard(
+                "柜门状态机：恢复任务失败",
+                "扫地机已暂停、柜门已关闭，但恢复命令没有让它动起来"
+                "（仍在 paused）。它停在柜门后不会自行移动，"
+                "请手动恢复任务或重新发起清扫。"
+                "vacuum={{ states('" + VACUUM + "') }}，"
+                "status={{ states('" + STATUS + "') }}",
+                "离开阶段恢复任务失败",
+            ),
+        ],
+        # Fail safe and say so. The robot is paused and the door is shut, which
+        # is a stable state -- but nothing will move again until somebody looks,
+        # so this must never be silent, and it must never reach the success
+        # notice below.
+        "else": [
+            alert(
+                "warning",
+                "柜门状态机：集成未加载或设备离线，任务未恢复",
+                "扫地机已暂停、柜门已关闭，但 roborock_plus 集成不可用或扫地机离线"
+                "（vacuum={{ states('" + VACUUM + "') }}），恢复命令没有下发。"
+                "扫地机停在柜门后不会自行移动，请先确认集成为何未加载。",
+            ),
+            {"stop": "离开阶段集成不可用"},
+        ],
+    }
+
+
 # Phase B: the robot has genuinely left the danger zone.
 PHASE_LEAVE = {
     "conditions": [
@@ -284,7 +381,7 @@ PHASE_LEAVE = {
             "扫地机保持暂停，请手动处理。",
             "离开阶段关门失败",
         ),
-        {"action": "roborock_plus.resume_task", "target": {"entity_id": VACUUM}},
+        resume_step(),
         alert(
             "info",
             "扫地机已出门",

@@ -78,6 +78,28 @@ MUTATIONS = [
         "shrink the door settle back inside the echo window",
         lambda c: _shrink_door_settle(c, 5),
     ),
+    (
+        # The gap found on 2026-10-13: the resume had no failure handling, so a
+        # resume that did not happen was announced as success and the robot sat
+        # paused behind a closed door with nobody told.
+        "announce a resume that was never verified",
+        lambda c: _drop_resume_verification(c),
+    ),
+    (
+        "let a resume failure end the run without telling the owner",
+        lambda c: _drop_resume_alert(c),
+    ),
+    (
+        # `continue_on_error` cannot cover ServiceNotFound -- HA re-raises it --
+        # so removing the pre-check is what makes an unloaded integration abort
+        # the run before any alert.
+        "call the resume without checking the integration is loaded",
+        lambda c: _drop_resume_precheck(c),
+    ),
+    (
+        "drop continue_on_error so a resume refusal kills the run",
+        lambda c: _drop_resume_continue_on_error(c),
+    ),
 ]
 
 
@@ -237,6 +259,76 @@ def _drop_continue_on_timeout(config: dict) -> None:
     for node in _walk(config):
         if "wait_template" in node:
             node.pop("continue_on_timeout", None)
+
+
+def _find_resume_block(config: dict) -> dict:
+    """Return phase B's guarded resume step.
+
+    Raises when it is gone, so a mutation that cannot find its target fails
+    loudly instead of silently reporting a caught mutation. The harness having
+    its own bug is a recorded failure mode here: an earlier `_walk` missed dicts
+    inside lists and reported "no target" for a mutation that should have run.
+    """
+    for step in config["actions"][0]["choose"][0]["sequence"]:
+        if "roborock_plus.resume_task" in json.dumps(step, ensure_ascii=False):
+            return step
+    raise AssertionError("phase B no longer has a roborock_plus.resume_task step")
+
+
+def _drop_resume_verification(config: dict) -> None:
+    """Remove the wait that proves the robot actually left `paused`.
+
+    This is the defect itself: the notice then reports a resume on the strength
+    of the action not having raised, which is exactly what a paused robot that
+    never moved also looks like.
+    """
+    block = _find_resume_block(config)["then"]
+    remaining = [step for step in block if "wait_template" not in step]
+    if len(remaining) == len(block):
+        raise AssertionError("no verification wait found inside the resume block")
+    _find_resume_block(config)["then"] = remaining
+
+
+def _drop_resume_alert(config: dict) -> None:
+    """Strip the alert from the verification failure path.
+
+    Leaves the wait and the stop: the run still refuses to claim success, so
+    only the "tell the owner" half is removed. That is the difference between a
+    silent failure and a reported one, and it is the half that keeps a paused
+    robot from looking like a working one.
+    """
+    block = _find_resume_block(config)["then"]
+    guards = [step for step in block if "if" in step]
+    if not guards:
+        raise AssertionError("no guard found inside the resume block")
+    guards[-1]["then"] = [
+        step
+        for step in guards[-1]["then"]
+        if "alert_notify" not in json.dumps(step, ensure_ascii=False)
+    ]
+
+
+def _drop_resume_precheck(config: dict) -> None:
+    """Keep the call but drop the `unavailable` check in front of it.
+
+    `continue_on_error` does not cover `ServiceNotFound`, so without this the
+    run dies at the call and never reaches the alert that would have said the
+    integration is missing.
+    """
+    _find_resume_block(config).pop("if", None)
+
+
+def _drop_resume_continue_on_error(config: dict) -> None:
+    """Remove `continue_on_error` from the resume call.
+
+    `resume_not_available` is raised when the device state cannot say how to
+    continue the task -- the documented consequence of a restart while paused.
+    """
+    for step in _find_resume_block(config)["then"]:
+        if step.get("action") == "roborock_plus.resume_task":
+            step.pop("continue_on_error", None)
+            return
+    raise AssertionError("no resume call found to unprotect")
 
 
 def main() -> int:

@@ -271,6 +271,136 @@ class TestTheAutomationNeverClosesOnATimeout:
             )
 
 
+def _resume_block() -> dict:
+    """Return the guarded resume step in phase B.
+
+    Phase B pauses, closes the door, and then has to start the task again. The
+    resume is the one step in the automation that calls a service the
+    integration owns, so it is also the one step that can fail for a reason the
+    automation cannot see coming: the integration not being loaded.
+    """
+    for step in _branch(_config(), 0)["sequence"]:
+        if "roborock_plus.resume_task" in json.dumps(step, ensure_ascii=False):
+            return step
+    raise AssertionError(
+        "phase B no longer has a guarded roborock_plus.resume_task step"
+    )
+
+
+class TestTheResumeStepProvesItTook:
+    """A resume that did not happen must not be announced as success.
+
+    On 2026-10-13 21:47 -> 2026-10-14 01:18 the integration was down for about
+    three and a half hours: HA could not install `python-roborock==5.5.1`, so
+    `async_setup` never ran, none of the `roborock_plus.*` actions existed, and
+    the vacuum entities read `unavailable`. Spook said so in as many words ("the
+    automation references an action Home Assistant does not recognise"), and it
+    was describing a real outage rather than a mistake in the automation.
+
+    A bare call would have been worse than useless in that window. `resume_task`
+    raises `resume_not_available` when the device state cannot say which command
+    to resume with -- a documented consequence of a restart while paused -- and
+    a missing action raises `ServiceNotFound`. The first aborts the run, the
+    second is *deliberately* not swallowed by `continue_on_error`
+    (`helpers/script.py`: `ServiceNotFound` is re-raised). Either way the run
+    stops before the success notice, and the owner is never told that the robot
+    is sitting paused behind a closed door.
+    """
+
+    SERVICE = "roborock_plus.resume_task"
+
+    def test_the_call_is_tolerated_so_a_refusal_does_not_kill_the_run(self) -> None:
+        """`resume_not_available` must reach the guard, not end the run."""
+        step = next(
+            s for s in _resume_block()["then"] if s.get("action") == self.SERVICE
+        )
+        assert step.get("continue_on_error") is True, (
+            "without continue_on_error a resume_not_available refusal (restart "
+            "while paused) aborts the automation before any alert is reached"
+        )
+
+    def test_the_resume_is_verified_by_observation(self) -> None:
+        """Not erroring is not the same as working; wait for the state to move."""
+        then = _resume_block()["then"]
+        call_index = next(
+            i for i, s in enumerate(then) if s.get("action") == self.SERVICE
+        )
+        wait = next((s for s in then[call_index + 1 :] if "wait_template" in s), None)
+        assert wait is not None, (
+            "the resume must be followed by a wait on the vacuum's state; "
+            "'the action did not raise' cannot tell a resumed robot from a "
+            "paused one"
+        )
+        assert wait.get("continue_on_timeout") is True
+        template = wait["wait_template"]
+        assert "is_state" in template and "paused" in template, (
+            "the wait must require the vacuum to have left `paused`, which is "
+            f"the state phase B confirmed before closing the door; got {template!r}"
+        )
+        assert "not " in template, (
+            f"the wait must be satisfied by leaving `paused`, not by being in "
+            f"it; got {template!r}"
+        )
+
+    def test_a_failed_resume_alerts_and_stops(self) -> None:
+        then = _resume_block()["then"]
+        guards = [s for s in then if "if" in s]
+        assert guards, "the resume has no timeout guard"
+        failure = json.dumps(guards[-1]["then"], ensure_ascii=False)
+        assert "alert_notify" in failure, (
+            "a resume that did not take must reach the owner; the door is shut "
+            "and the robot is paused, so silence looks like success"
+        )
+        assert "stop" in failure, "the failure path must stop, not fall through"
+
+    def test_an_unavailable_integration_is_refused_before_the_call(self) -> None:
+        """`continue_on_error` cannot save a run from a missing action.
+
+        HA re-raises `ServiceNotFound` even when `continue_on_error` is set, so
+        the only way to warn about an unloaded integration is to not call the
+        action at all. When the component is not set up, its entities are
+        `unavailable` -- the same condition, visible from the automation.
+        """
+        block = _resume_block()
+        conditions = json.dumps(block["if"], ensure_ascii=False)
+        assert "unavailable" in conditions, (
+            "the resume must first check the integration is actually present; "
+            "calling a missing action aborts the run before the alert"
+        )
+        else_branch = json.dumps(block.get("else"), ensure_ascii=False)
+        assert "alert_notify" in else_branch, (
+            "an unavailable integration must be reported, not skipped silently"
+        )
+        assert "stop" in else_branch, (
+            "the refusal path must stop before the success notice, or the "
+            "automation claims a resume it never attempted"
+        )
+
+    def test_success_is_announced_only_after_the_verification(self) -> None:
+        """The notice must not be reachable from the failure paths."""
+        sequence = _branch(_config(), 0)["sequence"]
+        assert not any(
+            "已恢复" in json.dumps(step, ensure_ascii=False)
+            for step in _resume_block()["then"]
+        ), "the success notice sits inside the resume block, where a failed resume can reach it"
+
+        resume_index = next(
+            i
+            for i, step in enumerate(sequence)
+            if "roborock_plus.resume_task" in json.dumps(step, ensure_ascii=False)
+        )
+        notice_index = next(
+            (
+                i
+                for i, step in enumerate(sequence)
+                if "已恢复" in json.dumps(step, ensure_ascii=False)
+            ),
+            None,
+        )
+        assert notice_index is not None, "the success notice is missing entirely"
+        assert notice_index > resume_index
+
+
 class TestClockDiscipline:
     def test_automation_is_queued_with_a_bound(self) -> None:
         """Overlapping runs must queue, but not without limit."""

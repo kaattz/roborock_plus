@@ -409,6 +409,13 @@ python scripts/mutation_check_blueprint.py   # 确认上面的检查真的能抓
   判定会明显变粗。这是限流约束带来的固有限制，调参解决不了。
 - **App 发起的清扫不受保护。** 从 Roborock App 启动的命令不经过 HA，
   `garage_guard` 拦不到，柜门不会自动打开。这是架构限制，不是 bug。
+- **依赖装不上时整个集成不会加载。** `manifest.json` 声明的
+  `python-roborock==5.5.1` 由 HA 在启动时从 pypi 安装；网络不通时
+  `async_setup` 根本不会执行，所有 `roborock_plus.*` 服务和实体一起消失。
+  2026-10-13 那晚就发生了约 3.5 小时。此时 Spook 会报自动化引用了
+  「未知动作」—— 那是**掉线的症状，不是配置错误**，不要按它的建议删掉动作。
+  柜门状态机已经对这种情况做了前置检查（见
+  [scripts/garage_state_machine/README.md](scripts/garage_state_machine/README.md) 守卫 4）。
 
 ## 致谢
 

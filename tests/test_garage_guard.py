@@ -1,13 +1,8 @@
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
-
-MODULE_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "custom_components"
-    / "roborock_plus"
-    / "garage_guard.py"
-)
+REPO = Path(__file__).resolve().parents[1]
+MODULE_PATH = REPO / "custom_components" / "roborock_plus" / "garage_guard.py"
 SPEC = spec_from_file_location("roborock_plus_garage_guard", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = module_from_spec(SPEC)
@@ -100,24 +95,32 @@ def _guard_body() -> str:
     return body.split("\ndef ", 1)[0]
 
 
-def test_precheck_reads_position_without_waiting() -> None:
-    """An already-open door must not be stalled behind the settle window.
+def test_precheck_does_not_wait_out_the_settle() -> None:
+    """An already-open, settled door must not be stalled behind the settle.
 
-    The pre-command check runs before any command is issued, so its reading is
-    not an echo. If the elapsed-time gate were applied here, every clean start
-    with the door already open would idle for 45 seconds.
+    The pre-command check runs before *this* call issues a command, so it must not
+    simply sleep for the travel window -- that would stall every clean behind 45
+    seconds for no safety gain.
+
+    It does read the clock now, which the earlier version of this test forbade. The
+    reading is what makes it safe: a position that changed because another
+    automation just commanded the door is an echo, and time is the only thing that
+    distinguishes "still open from before" from "echoing a fresh command". The
+    behavioural tests below are the real guard; this only pins that the check
+    decides rather than sleeps.
     """
     precheck = _guard_body().split("await hass.services.async_call", 1)[0]
 
     assert "door_reached_open_position" not in precheck, (
-        "the pre-command check must not apply the elapsed-time gate: no command "
-        "has been issued yet, so there is no echo to outlast"
+        "the pre-command check must not apply the post-command elapsed gate as a "
+        "blanket wait; it decides from the reading's age instead"
     )
-    assert "elapsed" not in precheck and "monotonic" not in precheck, (
-        "the pre-command check must not measure time"
+    assert "sleep" not in precheck, (
+        "the pre-command check must not wait at all when the door is already open"
     )
-    assert "position" in precheck, (
-        "the pre-command check must still read the door position"
+    assert "trusts" in precheck, (
+        "the pre-command check must go through the echo window, which compares the "
+        "reading's age against the last command for this door"
     )
 
 
@@ -193,21 +196,33 @@ class _FakeAsyncio:
 
 
 class _State:
-    def __init__(self, position) -> None:
+    def __init__(self, position, updated_at: float = 0.0) -> None:
         self.attributes = {"current_position": position}
+        # HA exposes the epoch seconds of the last real change. The guard reads it
+        # to tell a settled reading from a fresh echo of someone else's command.
+        self.last_updated_timestamp = updated_at
 
 
 class _Hass:
     """Minimal hass: a cover whose reported position is scripted."""
 
-    def __init__(self, position) -> None:
+    def __init__(self, position, updated_at=0.0) -> None:
         self._position = position
+        self._updated_at = updated_at
         self.service_calls: list[tuple] = []
+        # Commands issued by something other than this guard, e.g. the state
+        # machine. Kept separate from `service_calls` so a test can assert on what
+        # the guard itself did without counting the scenario's setup.
+        self.external_commands: list[str] = []
         outer = self
 
         class _States:
             def get(self, entity_id):
-                return _State(outer._position())
+                at = outer._updated_at
+                return _State(
+                    outer._position(),
+                    at() if callable(at) else at,
+                )
 
         class _Services:
             async def async_call(self, domain, service, data, blocking=False):
@@ -217,7 +232,7 @@ class _Hass:
         self.services = _Services()
 
 
-def _run_guard(hass: _Hass, clock: _Clock) -> str:
+def _run_guard(hass: _Hass, clock: _Clock, echo_window=None) -> str:
     """Run the real guard coroutine. Returns 'returned' or 'raised'."""
     import asyncio as real_asyncio
     import sys
@@ -247,7 +262,9 @@ def _run_guard(hass: _Hass, clock: _Clock) -> str:
     MODULE.time = _FakeTime(clock)
     MODULE.asyncio = _FakeAsyncio(clock)
     try:
-        real_asyncio.run(MODULE.async_guard_garage_open(hass, options))
+        real_asyncio.run(
+            MODULE.async_guard_garage_open(hass, options, echo_window)
+        )
     except Exception as err:  # noqa: BLE001 - the timeout path is expected
         return f"raised:{type(err).__name__}"
     finally:
@@ -300,3 +317,172 @@ def test_obstructed_door_times_out_rather_than_releasing() -> None:
         "not release the robot"
     )
     assert clock.now >= MODULE.DEFAULT_GARAGE_DOOR_MIN_TRAVEL
+
+
+# --- The pre-command check must not trust someone else's echo -----------------
+#
+# The check used to return early whenever it read a high position, reasoning that
+# "this call issued no command, so the reading is not an echo". That is about the
+# call, not the device. Measured path: the state machine's phase C issues
+# `open_cover`, the device writes 100 into `current-position` while the door is
+# physically at 5%, and a clean command arrives inside the travel window -- the
+# guard read 100, returned without calling a single service, and released the
+# robot at a nearly-closed door.
+#
+# The trace below reproduces that ordering honestly: the position jumps the
+# instant another automation's command lands, exactly as the device behaves.
+
+
+def _other_automation_opens(hass: "_Hass", clock: "_Clock", at: float) -> None:
+    """Model phase C: a command from elsewhere, and the echo that follows it."""
+    hass.external_commands.append("open_cover")
+    hass._updated_at = lambda: at  # the device echoes; the entity changes now
+
+
+def test_another_automations_echo_does_not_release_the_robot() -> None:
+    """The gap this closes: a fresh echo read by a later, unrelated command.
+
+    The door is physically nearly shut, but a command another automation issued a
+    moment ago makes the device report 100. The guard must not treat that as an
+    open door and wave the robot through.
+    """
+    clock = _Clock()
+    # The door reads 100 because of the *other* automation's echo; its entity was
+    # updated at t=5, and this guard call happens at t=10 -- inside the window.
+    hass = _Hass(lambda: 100, updated_at=lambda: 5.0)
+    clock.now = 10.0
+
+    window = MODULE.DoorEchoWindow()
+    window.note_command(5.0)
+
+    outcome = _run_guard(hass, clock, window)
+
+    assert outcome == "returned"
+    assert len(hass.service_calls) == 1, (
+        "the guard must issue its own open_cover rather than trusting the "
+        "position another automation's command produced"
+    )
+    assert clock.now >= MODULE.DEFAULT_GARAGE_DOOR_MIN_TRAVEL, (
+        "the guard released the robot after only "
+        f"{clock.now - 10.0}s of simulated time; the echo of a command it did not "
+        "issue must not satisfy the check"
+    )
+
+
+def test_a_settled_open_door_is_still_not_stalled() -> None:
+    """The fix must not impose a wait on a door that is genuinely, stably open.
+
+    Without this the previous test could be satisfied by simply always waiting,
+    which would stall every clean behind 45 seconds for no safety gain.
+    """
+    clock = _Clock()
+    # Position 100, entity last changed at t=0, and a command was seen long ago.
+    hass = _Hass(lambda: 100, updated_at=lambda: 0.0)
+    clock.now = 500.0
+
+    window = MODULE.DoorEchoWindow()
+    window.note_command(10.0)
+
+    outcome = _run_guard(hass, clock, window)
+
+    assert outcome == "returned"
+    assert hass.service_calls == [], "a settled open door must not be re-commanded"
+    assert clock.sleeps == [], (
+        "a door that was already open and stable must not wait at all"
+    )
+
+
+# --- DoorEchoWindow, the rule on its own -------------------------------------
+
+
+def test_no_command_seen_trusts_a_high_position() -> None:
+    """Fresh start-up with no observed command: nothing to distrust."""
+    window = MODULE.DoorEchoWindow()
+    assert window.trusts(now=100.0, position=100, changed_at=99.0) is True
+    assert window.trusts(now=100.0, position=10, changed_at=99.0) is False
+
+
+def test_recent_command_requires_a_settled_reading() -> None:
+    window = MODULE.DoorEchoWindow()
+    window.note_command(100.0)
+    settle = window.SETTLE
+
+    # Changed at the same moment as the command -> that change IS the echo.
+    assert (
+        window.trusts(now=100.0 + settle - 1, position=100, changed_at=100.0)
+        is False
+    )
+    # Changed long before the command -> the reading predates it, so it is real.
+    assert (
+        window.trusts(now=100.0 + 1, position=100, changed_at=100.0 - settle)
+        is True
+    )
+
+
+def test_old_command_needs_no_stability_check() -> None:
+    """Once a full travel has passed, the device has finished; trust the value."""
+    window = MODULE.DoorEchoWindow()
+    window.note_command(0.0)
+    assert window.trusts(now=window.SETTLE + 1, position=100, changed_at=10.0) is True
+
+
+def test_an_unreadable_change_time_is_unsafe() -> None:
+    """Never release a robot because a timestamp could not be read."""
+    window = MODULE.DoorEchoWindow()
+    window.note_command(100.0)
+    assert window.trusts(now=101.0, position=100, changed_at=None) is False
+
+
+def test_a_low_position_is_never_trusted() -> None:
+    """Even with a settled, old reading, a shut door is not open enough."""
+    window = MODULE.DoorEchoWindow()
+    assert window.trusts(now=10_000.0, position=10, changed_at=0.0) is False
+    window.note_command(0.0)
+    assert window.trusts(now=10_000.0, position=10, changed_at=0.0) is False
+
+
+def test_the_guard_records_its_own_command() -> None:
+    """The window is only useful if the guard tells it a command happened.
+
+    Without this the window keeps taking its "no command since start-up" path, so
+    the very next clean command would trust whatever position it reads -- the gap
+    reopened with all the plumbing apparently in place. The behavioural test above
+    cannot catch that: it supplies a window it has already primed by hand.
+    """
+    precheck = _guard_body().split("await hass.services.async_call", 1)[0]
+    assert "note_command" in precheck, (
+        "the guard must record its own command, or the echo window never learns "
+        "that a travel window is open"
+    )
+
+
+def test_the_guard_records_before_it_commands() -> None:
+    """Order matters: recording after the call would leave the wait unguarded.
+
+    The position is echoed within ~0.5s of the command, so a window primed after
+    the service call has already missed the moment the echo started.
+    """
+    body = _guard_body()
+    note_at = body.find("note_command")
+    call_at = body.find("await hass.services.async_call")
+    assert note_at != -1 and call_at != -1
+    assert note_at < call_at, "the command must be recorded before it is issued"
+
+
+def test_the_configured_window_reaches_the_guard() -> None:
+    """The guard must be given the caller's window, not a fresh one each call.
+
+    A per-call window cannot see a command issued by another automation, which is
+    the entire reason the window exists.
+    """
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "custom_components"
+        / "roborock_plus"
+        / "vacuum.py"
+    ).read_text(encoding="utf-8")
+    call = source.split("async_guard_garage_open(", 1)[1].split(")", 1)[0]
+    assert "garage_door_echo_window" in call, (
+        "the guard is called without the shared echo window, so it cannot see "
+        "commands issued by anything else"
+    )

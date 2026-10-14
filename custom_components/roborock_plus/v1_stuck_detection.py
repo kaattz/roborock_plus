@@ -42,6 +42,34 @@ DEFAULT_V1_STUCK_RADIUS = 200
 MIN_V1_STUCK_RADIUS = 50
 MAX_V1_STUCK_RADIUS = 2000
 
+# --- Last-resort backstop ----------------------------------------------------
+#
+# The window/radius check above answers "has it stopped moving?". It cannot
+# answer "is it moving but getting nowhere", because its anchor resets the moment
+# the robot travels further than `radius` from it. Measured with the real tracker:
+#
+#      oscillation amplitude  30 -> stuck after 120s
+#     oscillation amplitude 190 -> stuck after 120s
+#     oscillation amplitude 300 -> NEVER stuck
+#
+# 300 units is under a second of travel at cleaning speed, so a robot rubbing
+# against a door that did not open can exceed the radius on every swing and reset
+# the anchor forever. Raising the short window's radius is not the answer: it is
+# the same knob that keeps slow edge work from being called stuck.
+#
+# So the backstop judges over a much longer horizon and a much larger region: the
+# robot may drift this far, but if it has spent this long in a movement state
+# without ever getting further than that from where the stretch began, it is not
+# working -- it is trapped. Both numbers are deliberately far outside anything a
+# genuine clean produces: 900s of cleaning at ~300 units/s covers ~270000 units,
+# so a robot that never exceeds 3000 has effectively not travelled at all.
+#
+# The radius must stay clear of `MAX_V1_STUCK_RADIUS`: the user can raise the
+# short window's radius to 2000, and a backstop at the same value would then be
+# measuring nothing the short window had not already measured.
+BACKSTOP_WINDOW = timedelta(seconds=900)
+BACKSTOP_RADIUS = 3000.0
+
 # States in which the robot is expected to be travelling. Only these are
 # assessed.
 #
@@ -155,6 +183,20 @@ class StuckTracker:
 
     Fed one observation per successful position sample. Kept free of Home
     Assistant imports so the timing rules can be tested directly.
+
+    Two judgements, deliberately independent:
+
+    * the **short window** (``window``/``radius``, default 120s/200) reports a
+      robot that has stopped moving, and is what catches one pressed against a
+      door almost immediately;
+    * the **backstop** (``BACKSTOP_WINDOW``/``BACKSTOP_RADIUS``) reports a robot
+      that keeps moving but never gets away from where it started -- rubbing
+      against an obstruction, where each swing exceeds the short radius and
+      resets its anchor. Measured: oscillation at amplitude 300 never trips the
+      short window, whatever the duration.
+
+    ``stuck_since`` reports whichever fired, so the caller sees how long the
+    robot has been in trouble rather than which rule noticed.
     """
 
     def __init__(self, *, window: timedelta, radius: float) -> None:
@@ -163,11 +205,25 @@ class StuckTracker:
         self._anchor: _Anchor | None = None
         self._stuck_since: datetime | None = None
         self._last_sample_time: datetime | None = None
+        # The backstop's own anchor, independent of the short window's: the short
+        # one is reset by any travel beyond its radius, which is exactly the
+        # movement the backstop needs to keep measuring.
+        self._backstop_anchor: _Anchor | None = None
+        self._backstop_since: datetime | None = None
 
     @property
     def is_stuck(self) -> bool:
         """Return whether the robot is currently believed to be stuck."""
         return self._stuck_since is not None
+
+    def is_backstopped(self) -> bool:
+        """Return whether the verdict came from the long-horizon backstop.
+
+        Exposed so a caller (and the tests) can tell "has not moved at all" from
+        "has moved plenty but never got anywhere" -- they need different wording
+        in a notification, and conflating them hid this gap once already.
+        """
+        return self._backstop_since is not None
 
     def seconds_stuck(self, now: datetime) -> float | None:
         """Return how long the robot has been stuck, if it is."""
@@ -180,6 +236,8 @@ class StuckTracker:
         self._anchor = None
         self._stuck_since = None
         self._last_sample_time = None
+        self._backstop_anchor = None
+        self._backstop_since = None
 
     def observe(
         self,
@@ -219,20 +277,51 @@ class StuckTracker:
 
         if self._anchor is None:
             self._anchor = _Anchor(x=x, y=y, since=observed_at)
+            if self._backstop_anchor is None:
+                self._backstop_anchor = _Anchor(x=x, y=y, since=observed_at)
             return self.is_stuck
 
-        if math.hypot(x - self._anchor.x, y - self._anchor.y) > self._radius:
+        moved_far = math.hypot(x - self._anchor.x, y - self._anchor.y) > self._radius
+        if moved_far:
             # It moved: start a new window from where it is now.
             self._anchor = _Anchor(x=x, y=y, since=observed_at)
             self._stuck_since = None
-            return False
-
-        if observed_at - self._anchor.since >= self._window:
+        elif observed_at - self._anchor.since >= self._window:
             if self._stuck_since is None:
                 self._stuck_since = self._anchor.since
             return True
 
+        self._observe_backstop(x=x, y=y, observed_at=observed_at)
         return self.is_stuck
+
+    def _observe_backstop(
+        self, *, x: float, y: float, observed_at: datetime
+    ) -> None:
+        """Track the long-horizon "moving but going nowhere" case.
+
+        Re-anchored only when the robot genuinely leaves the region, so a robot
+        oscillating inside it keeps accumulating time. The verdict is only
+        cleared by that same escape -- never by the short window resetting, which
+        is what would otherwise erase it on every swing.
+        """
+        if self._backstop_anchor is None:
+            self._backstop_anchor = _Anchor(x=x, y=y, since=observed_at)
+            return
+
+        distance = math.hypot(x - self._backstop_anchor.x, y - self._backstop_anchor.y)
+        if distance > BACKSTOP_RADIUS:
+            # It actually went somewhere: start over from here.
+            self._backstop_anchor = _Anchor(x=x, y=y, since=observed_at)
+            self._backstop_since = None
+            return
+
+        if observed_at - self._backstop_anchor.since >= BACKSTOP_WINDOW:
+            if self._backstop_since is None:
+                self._backstop_since = self._backstop_anchor.since
+            # The short window may never have fired, so record the verdict here
+            # too; `is_stuck` reads this field.
+            if self._stuck_since is None:
+                self._stuck_since = self._backstop_anchor.since
 
 
 def build_stuck_event_data(
@@ -243,12 +332,22 @@ def build_stuck_event_data(
     state: Any,
     seconds_stuck: float | None,
     entry_id: str | None = None,
+    reason: str | None = None,
 ) -> dict[str, Any]:
-    """Build the event payload for a robot that stopped moving."""
+    """Build the event payload for a robot that stopped moving.
+
+    ``reason`` distinguishes the two verdicts: ``"stopped"`` for a robot that has
+    not moved at all, ``"trapped"`` for one that keeps moving but never gets away
+    from where it started. They call for different wording in a notification --
+    "it stopped" invites a look at the door, "it has been rubbing against
+    something for 15 minutes" explains why nothing appeared to be wrong.
+    """
     data: dict[str, Any] = {
         "state": _state_name(state),
         "seconds_stuck": int(seconds_stuck) if seconds_stuck is not None else None,
     }
+    if reason:
+        data["reason"] = reason
     if entity_id:
         data["entity_id"] = entity_id
     if entry_id:

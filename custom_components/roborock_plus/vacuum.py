@@ -390,7 +390,11 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
         if should_guard_clean_command(command):
             if resume_command := select_resume_command_for_clean_command(command):
                 self.coordinator.last_resume_command = resume_command
-            await async_guard_garage_open(self.hass, self.coordinator.config_entry.options)
+            await async_guard_garage_open(
+                self.hass,
+                self.coordinator.config_entry.options,
+                self.coordinator.garage_door_echo_window,
+            )
 
     async def get_maps(self) -> ServiceResponse:
         """Get map information such as map id and room ids."""

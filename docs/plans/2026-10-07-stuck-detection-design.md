@@ -75,6 +75,50 @@ would read that as movement. The default radius of 200 (millimetre-scale units,
 as used by the map) is far above the jitter and far below the roughly 900 units
 the robot covers in three seconds at cleaning speed.
 
+### The radius rule cannot see "moving but going nowhere" (2026-10-14)
+
+The anchor comparison is `hypot(x - anchor.x, y - anchor.y)`: distance **from the
+anchor**, not path length. So any travel beyond the radius re-anchors and clears
+the verdict -- which means a robot rubbing back and forth against an obstruction
+is never reported, however long it does it.
+
+Measured against the real tracker, positions 5s apart:
+
+| oscillation amplitude | verdict |
+| --- | --- |
+| 30 | stuck after 120s |
+| 190 | stuck after 120s |
+| **300** | **never stuck** |
+
+300 units is under a second of travel at cleaning speed, so a door that did not
+open is enough to hide the robot from this rule forever. Raising the short
+window's radius is not the answer -- it is the same knob that stops slow edge
+work from being called stuck.
+
+So a second, independent judgement runs alongside it: the **backstop**. It holds
+its own anchor, re-set only when the robot genuinely leaves the region, and asks
+whether the robot has spent `BACKSTOP_WINDOW` (900s) never getting further than
+`BACKSTOP_RADIUS` (3000) from where that stretch began.
+
+| | short window | backstop |
+| --- | --- | --- |
+| answers | has it stopped moving? | is it moving but getting nowhere? |
+| window | 120s (configurable) | 900s (fixed) |
+| radius | 200 (configurable) | 3000 (fixed) |
+| re-anchors on | any travel beyond 200 | travel beyond 3000 |
+
+The gap between the two radii is what makes them complementary rather than
+redundant, so `BACKSTOP_RADIUS` must stay above `MAX_V1_STUCK_RADIUS`: a user who
+raises the short radius to its 2000 maximum would otherwise silently disable the
+backstop, and at 3000 against 2000 it still measures something new.
+
+A genuine clean cannot trip it: 900s at ~300 units/s covers ~270000 units, so a
+robot that never exceeds 3000 has effectively not travelled at all.
+
+The verdict carries which rule fired, as `reason` on the event
+(`stopped` / `trapped`) and on the entity's attributes. The two need different
+wording in a notification, and conflating them is what let this gap go unnoticed.
+
 ## Reported interface
 
 Entity: `binary_sensor.<vacuum>_stuck` (`on` / `off`, `unknown` when no

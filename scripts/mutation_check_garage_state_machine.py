@@ -20,6 +20,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 CONFIG = REPO / "scripts" / "garage_state_machine" / "state_machine.json"
 TESTS = ["tests/test_garage_state_machine.py"]
+COVER = "cover.vacuum_garage_door"
+CONTACT = "binary_sensor.vacuum_garage_door_contact_state"
 TIMEOUT_SECONDS = 120
 
 MUTATIONS = [
@@ -43,7 +45,7 @@ MUTATIONS = [
     ),
     (
         "drop the door-open condition that makes a repeat harmless",
-        lambda c: _remove_numeric_condition(c, 0, "above"),
+        lambda c: _remove_door_open_condition(c, 0),
     ),
     (
         "close onto the robot when the sensor does not confirm it is inside",
@@ -127,6 +129,35 @@ def _remove_numeric_condition(config: dict, branch: int, key: str) -> None:
     config["actions"][0]["choose"][branch]["conditions"] = [
         c for c in conditions if key not in c
     ]
+
+
+def _remove_door_open_condition(config: dict, branch: int) -> None:
+    """Drop the "the door is open" guard from a branch's conditions.
+
+    The signal moved on 2026-10-14 from `current_position > 5` to the contact
+    sensor reading `on`, so this matches either shape. Looking only for the old
+    numeric form silently matched nothing, and the mutation was reported as
+    escaping when it had in fact never been applied -- a stale anchor reads as a
+    weak test, which is the more misleading of the two failures.
+    """
+    branch_config = config["actions"][0]["choose"][branch]
+    before = branch_config["conditions"]
+    branch_config["conditions"] = [
+        condition
+        for condition in before
+        if not (
+            (condition.get("entity_id") == COVER and condition.get("above") == 5)
+            or (
+                condition.get("condition") == "state"
+                and condition.get("entity_id") == CONTACT
+                and condition.get("state") == "on"
+            )
+        )
+    ]
+    if len(branch_config["conditions"]) == len(before):
+        raise SystemExit(
+            f"no door-open condition found in branch {branch}; update this script"
+        )
 
 
 def _walk(node: object):

@@ -13,31 +13,77 @@
 #
 # 对照：把本自动化关掉，同一条 close_cover 让门干净地关到底，并稳定 9 分钟没有翻转。
 #
-# 真实行程 35 秒（用户秒表计时），所以触发后必须等过回声窗口再发 PAUSE，
-# 并且用一次新鲜的位置复查确认门真的关好了。复查不通过就不发命令：
-# 门没关好时发 PAUSE 没有意义，只会制造一个新的中途位置。
+# ── 判据改用门磁（2026-10-14）────────────────────────────────────────────
+#
+# 以前看 `current_position`，靠「命令后等 45 秒越过回声窗口」补救。现在改用装在
+# **全关位**的门磁，因为它是物理触点，不是设备自报值：
+#
+#   14:21:15.373  门磁  → off        ← 门到达关闭位（物理）
+#   14:21:20.736  cover → closed     ← cover 晚 5.4 秒才跟上
+#
+#   14:15:16.255  cover → opening
+#   14:15:16.976  cover → open       ← 回声：0.7 秒就报到位
+#   14:15:23.499  门磁  → on         ← 门磁 7.2 秒（磁铁一分离就翻转）
+#
+# 两点结论：
+#   · 门磁在**行程结束时**翻转，cover 在**开始时**就被回声污染 → 门磁更可信
+#   · 门磁比 cover 快约 5 秒 → 不必再等固定的 45 秒
+#
+# 所以 45 秒固定等待删掉了。那个常量来自单次秒表测量（35 秒），门更慢时就不够用；
+# 门磁直接回答「门到没到关闭位」，与行程长短无关。用户 2026-10-14 复测开门 34 秒，
+# 与 35 秒一致，但这个判据现在不再依赖它。
+#
+# ── 为什么触发要求 from: "on" ────────────────────────────────────────────
+#
+# 只认「开着 → 关着」这一次真实动作。去掉 from 的话，BLE 掉线恢复
+# （off → unavailable → off）也会触发，而那并不代表门动过。
+#
+# ── 为什么不再复查 position ──────────────────────────────────────────────
+#
+# 门磁报 off 时 cover 可能还在报上一个真实值（上面那次慢 5.4 秒 —— 设备要等电机
+# 停了才报真实位置）。要求两者一致会把正常的关门判成失败。门磁本身已经回答了我们
+# 唯一要问的问题：门在不在关闭位。
+#
+# ── 门磁 unavailable 怎么办 ──────────────────────────────────────────────
+#
+# 当作「不确定」，**不发 stop_cover**，只告警。此时无法确认门在关闭位，而门开着
+# 松开电机会让重门自己落下。失败方向是「不解锁」，不是「在未知位置解锁」。
+#
+# 这不是理论担忧：本屋现有小方门磁历史里反复出现 unavailable，而这扇门的门磁
+# 在 2026-10-14 配对过程中也出现过一次。所以这一步必须显式处理，不能让它落进
+# 任何一个布尔分支。
+#
+# ── 已知边界 ────────────────────────────────────────────────────────────
+#
+# 门磁只说明「磁铁吸合」，而吸合间隙有多大没有实测。门若卡在离关闭位几毫米处，
+# 触点可能已经吸合。这比以前用 `position < 5`（允许 5% 未关）严格，但仍不是
+# 「门框完全贴合」的证明。真正的那一步需要门框上的机械限位，属于硬件。
 #
 # id 不能改。它是 HA 的 unique_id，改了等于换一个自动化：历史断掉、
 # 实体注册表的身份丢失。
 id: '1788771256556'
 alias: vacuum_garage_door_auto_unlock
-description: 车库门完全关闭后自动解锁
+description: >-
+  车库门完全关闭后自动解锁。判据用全关位门磁（物理触点），不再依赖
+  「命令后等 45 秒」的固定等待；门磁不可用时只告警、不解锁。
 triggers:
-- trigger: numeric_state
-  entity_id: cover.vacuum_garage_door
-  attribute: current_position
-  below: 1
+- trigger: state
+  entity_id: binary_sensor.vacuum_garage_door_contact_state
+  # from/to 必须加引号：YAML 1.1 里裸 off/on 会被解析成布尔值，
+  # 那样触发器永远匹配不上 'off' 这个字符串状态。
+  from: 'on'
+  to: 'off'
   for:
-    seconds: 1
+    # 10 秒做两件事：滤掉簧片抖动，并让门走完磁铁吸合后的最后一点行程。
+    # 磁铁在接近关闭位时就吸合，此刻电机可能还在转最后一下 —— 等它停下来，
+    # stop_cover 才落在静止的门上（那才是「松劲」，打在行进中的门上会按停）。
+    seconds: 10
 conditions: []
 actions:
-- delay:
-    seconds: 45
 - if:
-  - condition: numeric_state
-    entity_id: cover.vacuum_garage_door
-    attribute: current_position
-    below: 5
+  - condition: state
+    entity_id: binary_sensor.vacuum_garage_door_contact_state
+    state: 'off'
   then:
   - action: cover.stop_cover
     target:
@@ -46,6 +92,12 @@ actions:
   - action: script.alert_notify
     data:
       level: warning
-      title: 车库门解锁：门未关好
-      message: "门在 45 秒后仍未完全关闭（position={{ state_attr('cover.vacuum_garage_door', 'current_position') }}），因此没有发送停止命令 —— 对没关好的门发 PAUSE 只会把它再停在一个新的中途位置。请检查门是否被卡住。"
+      title: 车库门解锁：门未确认关好
+      message: >-
+        门磁在触发后又变了（现在
+        {{ states('binary_sensor.vacuum_garage_door_contact_state') }}，
+        cover 位置
+        {{ state_attr('cover.vacuum_garage_door', 'current_position') }}），
+        因此没有发送停止命令。此时无法确认门在关闭位，而门开着松开电机会让重门
+        自己落下，所以不解锁。请确认门磁是否掉线，或门是否被卡住。
 mode: restart

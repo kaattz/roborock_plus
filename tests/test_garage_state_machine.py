@@ -32,6 +32,10 @@ STATUS = "sensor.g20s_ultra_status"
 COVER = "cover.vacuum_garage_door"
 TASK_ACTIVE = "binary_sensor.g20s_ultra_task_active"
 CLEAR_OF_GARAGE = "binary_sensor.g20s_ultra_outside_danger_zone"
+# The physical switch at the closed position. It answers "is the door shut" and
+# nothing else: it flips `on` as soon as the door leaves the closed position,
+# 7.2s into a 34s travel, so it says nothing about reaching the *open* position.
+CONTACT = "binary_sensor.vacuum_garage_door_contact_state"
 
 
 def _config() -> dict:
@@ -97,13 +101,22 @@ class TestLeavingRequiresTheRobotToBeAway:
         assert VACUUM in blob, "a docked robot must not count as 'having left'"
 
     def test_phase_b_requires_the_door_to_be_open(self) -> None:
-        """Makes a repeated edge harmless: no second pause behind a shut door."""
+        """Makes a repeated edge harmless: no second pause behind a shut door.
+
+        The signal changed on 2026-10-14. It used to be `current_position > 5`,
+        which the echo satisfies -- the device reports the commanded position the
+        instant it is commanded, so a door that is still shut can read 100. The
+        contact cannot be echoed, so it is the one that can actually answer this.
+        """
         branch = _branch(_config(), 0)
         assert any(
-            condition.get("condition") == "numeric_state"
-            and condition.get("entity_id") == COVER
-            and condition.get("above") == 5
+            condition.get("condition") == "state"
+            and condition.get("entity_id") == CONTACT
+            and condition.get("state") == "on"
             for condition in branch["conditions"]
+        ), (
+            "phase B must confirm the door has physically left the closed "
+            "position before pausing the robot a second time"
         )
 
 
@@ -447,16 +460,37 @@ def _echo_settle_seconds() -> int:
 
 
 def _door_waits() -> list[tuple[str, dict, object]]:
-    """Return (path, wait_step, preceding_step) for every door-position wait.
+    """Return (path, wait_step, preceding_step) for the echo-prone door waits.
 
-    Recursive, because the parking branch keeps its door wait inside `if/then`.
-    `preceding_step` is the sibling immediately before the wait in the same
-    list, which is where the settle delay must be inserted.
+    These are the waits that still read `current_position`, which the device
+    echoes: the moment any motor command is issued it writes the *target* into
+    the attribute, so a position-only wait passes instantly. As of 2026-10-14
+    only the door-*opening* wait works this way -- there is no contact at the open
+    end of the travel -- so this finds one. `_contact_waits()` covers the other
+    side.
 
-    Verified against the pre-fix config: finds 3 waits
-    (`choose[0].sequence[4]`, `choose[1].sequence[1]`,
-    `choose[2].sequence[5].then[1]`), none of which has a delay yet.
+    Recursive, because a wait may sit inside `if/then`. `preceding_step` is the
+    sibling immediately before the wait in the same list, which is where the
+    settle delay must be inserted.
     """
+    return _find_waits(lambda step: "current_position" in step["wait_template"])
+
+
+def _contact_waits() -> list[tuple[str, dict, object]]:
+    """Return (path, wait_step, preceding_step) for the contact-based door waits.
+
+    The mirror of `_door_waits()`: these must NOT carry a settle delay, because
+    the whole reason for moving the judgement to a physical switch is that it
+    cannot be echoed. A 45-second delay in front of one would mean the automation
+    waits for no reason on every close.
+    """
+    return _find_waits(
+        lambda step: CONTACT in step["wait_template"] and "current_position" not in step["wait_template"]
+    )
+
+
+def _find_waits(predicate) -> list[tuple[str, dict, object]]:
+    """Scan every wait_template in the action tree matching `predicate`."""
     config = _config()
     found: list[tuple[str, dict, object]] = []
 
@@ -466,7 +500,7 @@ def _door_waits() -> list[tuple[str, dict, object]]:
             if (
                 isinstance(item, dict)
                 and "wait_template" in item
-                and "current_position" in item["wait_template"]
+                and predicate(item)
             ):
                 found.append((child, item, items[index - 1] if index else None))
             visit(item, child)
@@ -492,23 +526,24 @@ class TestDoorWaitsOutlastTheEcho:
     second of any motor command, while the door is still at the old position. A
     wait keyed only on position therefore passes instantly, and the anti-crush
     waits in the closing phases never actually hold.
+
+    As of 2026-10-14 the closing waits no longer read position at all -- they read
+    the contact at the closed position, which the device cannot echo. Only the
+    door-*opening* wait still needs the settle, because there is no contact at
+    the open end of the travel. `TestContactWaitsNeedNoSettle` covers the rest.
     """
 
-    def test_all_three_door_waits_are_found(self) -> None:
+    def test_the_opening_wait_is_found(self) -> None:
         """Guard the scan itself: a structural change must not silently skip one."""
         paths = [path for path, _, _ in _door_waits()]
-        assert len(paths) == 3, (
-            f"expected 3 door-position waits, found {len(paths)}: {paths}. "
-            "If the automation legitimately changed, update this count -- but "
-            "check you are not just failing to see a nested wait."
+        assert len(paths) == 1, (
+            f"expected 1 echo-prone (position) door wait, found {len(paths)}: "
+            f"{paths}. If the automation legitimately changed, update this count "
+            "-- but check you are not just failing to see a nested wait."
         )
-
-    def test_the_nested_parking_wait_is_included(self) -> None:
-        """The regression this test exists for: branch 2's wait is inside if/then."""
-        paths = [path for path, _, _ in _door_waits()]
-        assert any("choose[2]" in path for path in paths), (
-            "the parking branch's door wait is nested in if/then and was not "
-            f"found by the scan; found only {paths}"
+        assert "choose[1]" in paths[0], (
+            f"the remaining position wait should be the opening one in phase C; "
+            f"found {paths}"
         )
 
     def test_every_door_wait_has_a_settle_delay_before_it(self) -> None:
@@ -527,6 +562,42 @@ class TestDoorWaitsOutlastTheEcho:
                 f"{path} waits only {seconds}s before reading position; the echo "
                 f"window is {settle}s"
             )
+
+
+class TestContactWaitsNeedNoSettle:
+    """The closing waits must trust the contact, not re-add the old wait.
+
+    Moving the judgement to a physical switch is only an improvement if the
+    45-second echo settle goes away with it. Leaving it in place would mean every
+    close stalls for three quarters of a minute waiting on a signal that cannot
+    be wrong -- and worse, it would hide the fact that the contact is what is
+    being trusted.
+    """
+
+    def test_both_closing_waits_use_the_contact(self) -> None:
+        paths = [path for path, _, _ in _contact_waits()]
+        assert len(paths) == 2, (
+            f"expected the two closing waits (phase B and phase D) to read the "
+            f"contact, found {len(paths)}: {paths}"
+        )
+        assert any("choose[0]" in path for path in paths), "phase B is missing"
+        assert any("choose[2]" in path for path in paths), (
+            "phase D's wait is nested inside if/then; the scan must still find it"
+        )
+
+    def test_no_contact_wait_is_preceded_by_an_echo_settle(self) -> None:
+        for path, _, previous in _contact_waits():
+            if previous is None:
+                continue
+            assert "delay" not in previous or _delay_seconds(previous["delay"]) < _echo_settle_seconds(), (
+                f"{path} reads the contact but still waits out the echo window "
+                "first; the contact cannot be echoed, so that delay is dead time"
+            )
+
+    def test_no_closing_wait_reads_the_echoed_position(self) -> None:
+        """The regression: a closing wait that silently reverts to position."""
+        blob = json.dumps(_config(), ensure_ascii=False)
+        assert CONTACT in blob, "the closing judgement left the contact sensor"
 
     def test_the_paused_wait_is_not_given_a_door_delay(self) -> None:
         """The `paused` wait is about the vacuum, not the door.

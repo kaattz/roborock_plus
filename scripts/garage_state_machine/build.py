@@ -57,13 +57,39 @@ IS_PARKED = "{{ states('" + VACUUM + "') in ['docked', 'charging'] }}"
 # A genuine return holds the state for tens of seconds, so 10 s removes the
 # blip and still leaves the door open well before the robot arrives.
 RETURN_SUSTAIN_SECONDS = 10
-DOOR_CLOSED = (
-    "{{ (state_attr('" + COVER + "', 'current_position') | float(100)) < 5 }}"
-)
 
-# The device echoes the commanded position immediately, so a wait keyed on
-# position alone is satisfied by the echo. Every door wait therefore sits behind
-# a settle delay longer than one full travel.
+# The magnet contact mounted at the *closed* position. Unlike `current_position`
+# it is a physical fact: nothing writes to it but the magnet, so the device's
+# habit of echoing a commanded position cannot reach it.
+#
+# Measured 2026-10-14, which is what makes it the better signal for "shut":
+#
+#   14:21:15.373  contact -> off      the door reached the closed position
+#   14:21:20.736  cover   -> closed   the cover reported it 5.4s later
+#
+#   14:15:16.976  cover   -> open     echo: claimed "arrived" after 0.7s
+#   14:15:23.499  contact -> on       the contact flips when the magnet parts
+#
+# Note what the contact does *not* answer: it flips `on` as soon as the door
+# leaves the closed position (7.2s into a 34s travel), so it says nothing about
+# whether the door reached the *open* position. The opening wait therefore keeps
+# the position reading and its settle delay -- there is no contact at that end,
+# which is the known boundary recorded in the design doc.
+CONTACT = "binary_sensor.vacuum_garage_door_contact_state"
+DOOR_CLOSED = "{{ " + f"is_state('{CONTACT}', 'off')" + " }}"
+
+# The magnet makes contact slightly before the motor stops: measured 2026-10-14,
+# contact at 14:21:15.373 and the cover reporting `closed` at 14:21:20.736. Both
+# callers of door_shut_wait() act on something that expects a still door -- one
+# resumes the robot, the other stops the motor to release the clutch -- so a
+# short settle follows the contact rather than acting on the instant.
+CONTACT_SETTLE = {"seconds": 8}
+
+
+# Kept for the one wait that still reads `current_position`: the door *opening*
+# in phase C. The device echoes the commanded position immediately, so a wait
+# keyed on position alone is satisfied by the echo, and every such wait sits
+# behind a settle delay longer than one full travel.
 DOOR_SETTLE = "00:00:45"
 
 # Settle plus room for a genuinely slow door: the old 60s budget now has to
@@ -110,6 +136,13 @@ DESCRIPTION = "\n".join(
         "",
         "任何等待超时都只告警、不强行动作：门与扫地机状态不一致时，扫地机可能在门洞里，",
         "没有安全的自动恢复方式。",
+        "",
+        "门判据（2026-10-14 起）：「门关好了没」改用装在全关位的门磁（物理触点），",
+        "不再依赖「命令后等 45 秒越过回声窗口」那个固定等待 —— 触点不会被回声污染，",
+        "实测比 cover 早约 5 秒报出真实状态（14:21:15.373 门磁 off，14:21:20.736 cover",
+        "才 closed）。开门那一侧仍用 position + settle：全开位装不了门磁，这是已知边界。",
+        "门磁读 unavailable/unknown 时两个方向都不匹配，关门等待会超时并告警，",
+        "而不是把「读数未知」当成「门已关」—— 后者会把扫地机夹在门里。",
     ]
 )
 
@@ -176,17 +209,57 @@ def wait_for(template: str, timeout: str) -> dict:
     }
 
 
-def door_wait(template: str) -> list[dict]:
-    """Wait for a door position, past the window where the reading is an echo.
+def door_open_wait() -> list[dict]:
+    """Wait for the door to be open, past the window where the reading is an echo.
 
     The delay is not cosmetic. Without it the device's immediate echo of the
-    command satisfies the wait, so the anti-crush guards in the closing phases
-    never hold and the door can be moved while the robot is in the doorway.
+    command satisfies the wait, and a robot returning home is let in at a door
+    that has barely started moving.
 
-    Returns a *list* because HA allows one action key per step: the delay and the
-    wait must be separate list items. Splice it in with `*door_wait(...)`.
+    Only the *opening* wait still works this way. There is no contact at the open
+    end of the travel -- the owner could fit one only at the closed position --
+    so "has it opened far enough" has no physical answer and the position reading
+    plus a settle delay is the best available. This is the known boundary in
+    docs/plans/2026-10-10-garage-door-position-echo-design.md.
     """
-    return [{"delay": DOOR_SETTLE}, wait_for(template, DOOR_WAIT_TIMEOUT)]
+    return [
+        {"delay": DOOR_SETTLE},
+        wait_for(
+            "{{ (state_attr('" + COVER + "', 'current_position') | float(0)) >= 95 }}",
+            DOOR_WAIT_TIMEOUT,
+        ),
+    ]
+
+
+def door_shut_wait() -> list[dict]:
+    """Wait until the contact says the door is at the closed position.
+
+    No echo settle here, and that is the point of moving this judgement to the
+    contact: the device cannot echo a physical switch, so the wait is already
+    immune to the pollution that forced a 45-second delay in front of the
+    position-based version. It returns as soon as the magnet makes contact, which
+    on 2026-10-14 was 5.4s *before* the cover admitted the door had closed.
+
+    The contact can make contact slightly before the motor stops (measured:
+    magnet at 14:21:15.373, motor done by 14:21:20.736), and both callers resume
+    or stop something that expects a still door, so a short settle follows.
+    """
+    return [
+        wait_for("{{ " + _contact_is("off") + " }}", DOOR_WAIT_TIMEOUT),
+        {"delay": CONTACT_SETTLE},
+    ]
+
+
+def _contact_is(state: str) -> str:
+    """A template fragment that is true only for an exact contact reading.
+
+    Equality against a literal, never a negated test: `unavailable` must not
+    satisfy "the door is shut" (it would let a robot be shut in) nor "the door is
+    open" (it would report a shut door as ready to receive one). Both directions
+    fail by not matching.
+    """
+    return f"is_state('{CONTACT}', '{state}')"
+
 
 
 def condition_status_in(states: tuple[str, ...]) -> dict:
@@ -217,13 +290,21 @@ def condition_parked() -> dict:
     }
 
 
-def condition_door_above(value: int) -> dict:
-    """Native numeric check on the cover's position attribute."""
+def condition_door_open() -> dict:
+    """The door has physically left its closed position.
+
+    Replaces a `current_position > 5` test, which the echo could satisfy: the
+    device writes the commanded position the moment it is commanded, so a door
+    that is still shut can read 100. The contact cannot be echoed.
+
+    `unavailable` deliberately fails this, which is the safe direction for its
+    one purpose -- making a repeated departure edge harmless by refusing to pause
+    a second time behind a door we cannot confirm is open.
+    """
     return {
-        "condition": "numeric_state",
-        "entity_id": COVER,
-        "attribute": "current_position",
-        "above": value,
+        "condition": "state",
+        "entity_id": CONTACT,
+        "state": "on",
     }
 
 
@@ -360,7 +441,7 @@ PHASE_LEAVE = {
         {"condition": "trigger", "id": ["leave"]},
         condition_status_in(CLEANING_STATES),
         condition_not_parked(),
-        condition_door_above(5),
+        condition_door_open(),
     ],
     "sequence": [
         {"action": "vacuum.pause", "target": {"entity_id": VACUUM}},
@@ -374,10 +455,11 @@ PHASE_LEAVE = {
             "离开阶段暂停失败",
         ),
         {"action": "cover.close_cover", "target": {"entity_id": COVER}},
-        *door_wait(DOOR_CLOSED),
+        *door_shut_wait(),
         guard(
             "柜门状态机：关门失败",
-            "扫地机已暂停、不再移动，但柜门未能在 90 秒内完全关闭。"
+            "扫地机已暂停、不再移动，但柜门未能在 90 秒内确认关闭"
+            "（门磁={{ states('" + CONTACT + "') }}）。"
             "扫地机保持暂停，请手动处理。",
             "离开阶段关门失败",
         ),
@@ -406,9 +488,7 @@ PHASE_RETURN = {
     ],
     "sequence": [
         {"action": "cover.open_cover", "target": {"entity_id": COVER}},
-        *door_wait(
-            "{{ (state_attr('" + COVER + "', 'current_position') | float(0)) >= 95 }}"
-        ),
+        *door_open_wait(),
         {
             "if": [
                 {
@@ -435,7 +515,7 @@ PHASE_PARK = {
         {"condition": "trigger", "id": ["park_task", "park_dock"]},
         {"condition": "state", "entity_id": TASK_ACTIVE, "state": "off"},
         condition_parked(),
-        condition_door_above(5),
+        condition_door_open(),
         # The guard that separates "finished" from "paused at the dock mid-task".
         condition_task_really_ended(),
     ],
@@ -445,7 +525,7 @@ PHASE_PARK = {
         {"delay": "00:00:08"},
         {"condition": "state", "entity_id": TASK_ACTIVE, "state": "off"},
         condition_parked(),
-        condition_door_above(5),
+        condition_door_open(),
         condition_task_really_ended(),
         {
             "if": [
@@ -455,7 +535,7 @@ PHASE_PARK = {
             ],
             "then": [
                 {"action": "cover.close_cover", "target": {"entity_id": COVER}},
-                *door_wait(DOOR_CLOSED),
+                *door_shut_wait(),
                 {
                     "if": [
                         {
@@ -468,7 +548,8 @@ PHASE_PARK = {
                             "warning",
                             "柜门状态机关门失败",
                             "清扫任务已结束、扫地机已在基站，"
-                            "但柜门未能完全关闭，柜门保持开启。",
+                            "但门磁未确认柜门关闭（门磁="
+                            "{{ states('" + CONTACT + "') }}），柜门保持开启。",
                         )
                     ],
                 },

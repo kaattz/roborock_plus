@@ -24,12 +24,18 @@ import with no known parent package". Consumers keep their own literal, kept in
 step by tests that load this file by path.
 """
 
-# One full travel, measured with a stopwatch by the owner on 2026-10-10.
-# A single sample, so treat it as a floor: a cold door or added resistance
-# makes the travel longer, never shorter.
-DOOR_TRAVEL_SECONDS = 35
+# One full travel. First measured with a stopwatch by the owner on 2026-10-10
+# (35s); the owner re-measured on 2026-10-14 and got 34s. The two agree within a
+# second and both are single samples, so treat this as a floor: a cold door or
+# added resistance makes the travel longer, never shorter.
+DOOR_TRAVEL_SECONDS = 34
 
 # One travel plus a 10-second margin, which absorbs the door being slower than
 # measured. Bounded from above by tests/test_door_timing.py -- this window is
 # waited on every command, so an arbitrarily large value costs real latency.
+#
+# Also used by the BLE button cycle as "how long the motor may still be running",
+# which is the same interval described another way: both callers need to know when
+# a commanded move has certainly finished.
 ECHO_SETTLE_SECONDS = 45
+

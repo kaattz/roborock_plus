@@ -1,91 +1,163 @@
 {
   "alias": "车库门单键循环（BLE 按键）",
-  "description": "车库门 BLE 物理按键的单键循环，用门自己上报的 current_position 判断，\n取代原先的「无线窗帘电动窗单键循环控制」蓝图自动化。\n\n为什么换掉蓝图：蓝图是为了给「不报 position 的设备」补一个位置而做的 ——\nZigbee 窗帘电机和米家开窗器只暴露 开/关/停，所以蓝图用 total_duration\n加一个 input_datetime 去推算「还在动」，这是对那类设备合理的变通。\n\n但这扇门不需要：cover.vacuum_garage_door 是 zhenji.wopener.zj1q，\n走原生 xiaomi_home，直接上报真实 position（实测见过 0 / 11 / 77 / 100，\n包含停在半路的中间值）。所以蓝图那套计时器对本门既多余又算错：\n它配的 total_duration 是 40 秒，而门不到 1 秒就报到位。\n\n这个错配就是 2026-10-08 两次「关门 9.5 秒后又被打开」的原因：\n20:53:44.950 状态机关门 → 20:53:55.377 门被打开；21:09 同样。\n蓝图监听 cover 域的每一次 call_service，分不清状态机的命令和按键。\n\n按键行为：\n  门在动（opening/closing） → 停止\n  位置 ≤ 1（已关）          → 打开\n  位置 ≥ 2（未关到底）      → 关闭\n  位置读不到                → 什么都不做，并发通知\n\n最后一条是刻意的：位置未知时不能猜。猜「关闭」是唯一可能夹到扫地机的方向。\n什么都不做至少保持原状，用户看得见也能自己处理。\n\n没有用 input_datetime / input_select 辅助实体 —— 它们只是为了补 position\n而存在，现在只会变成第二个更滞后的真相来源。",
-  "mode": "single",
+  "description": "车库门 BLE 物理按键的单键循环。\n\n怎么判断「门在动」：按「距上次命令的时间」判断，而不是看 cover 的\nopening/closing 状态。这台设备没有 status 属性，那两个状态是集成自己下的\n乐观标志，而设备在 ~0.5 秒内把命令的目标值回声进 current_position，\n触发 _position_changed_handler 把标志清掉。实测 7 天：opening/closing 平均\n只持续 0.79 秒（最大 1.71，n=20），而真实行程 ~34 秒。\n\n所以旧版「门在动 → 停止」这一支永远不可达，行进中按键会落到反向分支：\n  关门途中按 → 实体报 closed → 执行 open_cover（反向）\n  开门途中按 → 实体报 open   → 执行 close_cover（反向）\n第二行是危险的：扫地机在门口时，关门是唯一可能撞到它的方向。\n本自动化一直是 off，所以从未发生。\n\n现在的判据：\n  open_cover / close_cover 命令 → 记录 moving_end = 现在 + 行程窗口\n  stop_cover 命令               → 记录 moving_end = 现在（行程结束）\n\n按键时：\n  moving_end 读不到   → 什么都不做 + 通知（判断不了就不猜）\n  门磁读不到          → 什么都不做 + 通知\n  还在窗口内          → 停止\n  门磁 off（在关闭位）→ 打开\n  门磁 on （未关闭）  → 关闭\n\n开/关判据用 2026-10-14 装在全关位的门磁。它是物理触点，不像\ncurrent_position 会被回声污染，而且比 cover 早约 5 秒报出真实状态\n（实测 14:21:15.373 门磁 off，14:21:20.736 cover 才 closed）。\n\n窗口取 ECHO_SETTLE_SECONDS（一次行程 + 10 秒余量）。偏大是安全的：门停下后\n立刻按会被当成「还在动」而发 stop_cover，那在静止的门上就是松开离合\n（本屋的 vacuum_garage_door_auto_unlock 正是刻意这么做的）。偏小是危险的：\n行程末尾按键会反向。\n\nmode 必须是 queued 而不是 single：本自动化自己发的 cover 命令会触发记录窗口\n的那条 call_service 触发器，single 会把这次重入当重复丢掉，窗口就记不上 ——\n于是行程中按键又变回反向。\n\n没有用 input_select.garage_door_last_action。蓝图用它来判断往哪个方向反向，\n现在门磁直接回答了这个问题，它只会变成第二个更滞后的真相来源。",
+  "mode": "queued",
+  "max": 10,
   "max_exceeded": "silent",
+  "initial_state": false,
   "triggers": [
     {
       "trigger": "state",
       "entity_id": "event.vacuum_garage_door_click",
       "id": "press"
-    }
-  ],
-  "conditions": [
+    },
     {
-      "condition": "state",
-      "entity_id": "event.vacuum_garage_door_click",
-      "attribute": "event_type",
-      "state": "单击"
+      "trigger": "event",
+      "event_type": "call_service",
+      "event_data": {
+        "domain": "cover"
+      },
+      "id": "command"
     }
   ],
+  "conditions": [],
   "actions": [
     {
       "choose": [
         {
           "conditions": [
             {
+              "condition": "trigger",
+              "id": [
+                "command"
+              ]
+            },
+            {
+              "condition": "template",
+              "value_template": "{% set target = trigger.event.data.service_data.entity_id | default([], true) %}{% if target is string %}{{ target == 'cover.vacuum_garage_door' }}{% else %}{{ 'cover.vacuum_garage_door' in target }}{% endif %}"
+            },
+            {
+              "condition": "template",
+              "value_template": "{{ trigger.event.data.service in ['open_cover', 'close_cover', 'stop_cover'] }}"
+            }
+          ],
+          "sequence": [
+            {
+              "action": "input_datetime.set_datetime",
+              "target": {
+                "entity_id": "input_datetime.garage_door_moving_end_time"
+              },
+              "data": {
+                "timestamp": "{% if trigger.event.data.service == 'stop_cover' %}{{ now().timestamp() }}{% else %}{{ (now() + timedelta(seconds=45)).timestamp() }}{% endif %}"
+              }
+            }
+          ]
+        },
+        {
+          "conditions": [
+            {
+              "condition": "trigger",
+              "id": [
+                "press"
+              ]
+            },
+            {
               "condition": "state",
-              "entity_id": "cover.vacuum_garage_door",
-              "state": [
-                "opening",
-                "closing"
+              "entity_id": "event.vacuum_garage_door_click",
+              "attribute": "event_type",
+              "state": "单击"
+            }
+          ],
+          "sequence": [
+            {
+              "variables": {
+                "travel_end": "{{ states('input_datetime.garage_door_moving_end_time') }}",
+                "contact": "{{ states('binary_sensor.vacuum_garage_door_contact_state') }}"
+              }
+            },
+            {
+              "choose": [
+                {
+                  "conditions": [
+                    {
+                      "condition": "template",
+                      "value_template": "{{ travel_end in ['unknown', 'unavailable', 'none', ''] or contact not in ['on', 'off'] }}"
+                    }
+                  ],
+                  "sequence": [
+                    {
+                      "action": "script.alert_notify",
+                      "data": {
+                        "level": "warning",
+                        "title": "车库门按键：读数不可用，未动作",
+                        "message": "按了车库门按键，但判断不出门的状态，为避免误关门夹到扫地机，没有执行任何动作。moving_end={{ travel_end }}，门磁={{ contact }}，cover={{ states('cover.vacuum_garage_door') }}"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "conditions": [
+                    {
+                      "condition": "template",
+                      "value_template": "{{ now().timestamp() < (state_attr('input_datetime.garage_door_moving_end_time', 'timestamp') | float(0)) }}"
+                    }
+                  ],
+                  "sequence": [
+                    {
+                      "action": "cover.stop_cover",
+                      "target": {
+                        "entity_id": "cover.vacuum_garage_door"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "conditions": [
+                    {
+                      "condition": "state",
+                      "entity_id": "binary_sensor.vacuum_garage_door_contact_state",
+                      "state": "off"
+                    }
+                  ],
+                  "sequence": [
+                    {
+                      "action": "cover.open_cover",
+                      "target": {
+                        "entity_id": "cover.vacuum_garage_door"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "conditions": [
+                    {
+                      "condition": "state",
+                      "entity_id": "binary_sensor.vacuum_garage_door_contact_state",
+                      "state": "on"
+                    }
+                  ],
+                  "sequence": [
+                    {
+                      "action": "cover.close_cover",
+                      "target": {
+                        "entity_id": "cover.vacuum_garage_door"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "default": [
+                {
+                  "action": "script.alert_notify",
+                  "data": {
+                    "level": "warning",
+                    "title": "车库门按键：状态意外，未动作",
+                    "message": "按了车库门按键，但没有任何分支匹配，没有执行动作。moving_end={{ travel_end }}，门磁={{ contact }}"
+                  }
+                }
               ]
             }
-          ],
-          "sequence": [
-            {
-              "action": "cover.stop_cover",
-              "target": {
-                "entity_id": "cover.vacuum_garage_door"
-              }
-            }
           ]
-        },
-        {
-          "conditions": [
-            {
-              "condition": "numeric_state",
-              "entity_id": "cover.vacuum_garage_door",
-              "attribute": "current_position",
-              "below": 2
-            }
-          ],
-          "sequence": [
-            {
-              "action": "cover.open_cover",
-              "target": {
-                "entity_id": "cover.vacuum_garage_door"
-              }
-            }
-          ]
-        },
-        {
-          "conditions": [
-            {
-              "condition": "numeric_state",
-              "entity_id": "cover.vacuum_garage_door",
-              "attribute": "current_position",
-              "above": 1
-            }
-          ],
-          "sequence": [
-            {
-              "action": "cover.close_cover",
-              "target": {
-                "entity_id": "cover.vacuum_garage_door"
-              }
-            }
-          ]
-        }
-      ],
-      "default": [
-        {
-          "action": "script.alert_notify",
-          "data": {
-            "level": "warning",
-            "title": "车库门按键：位置未知，未动作",
-            "message": "按了车库门按键，但读不到门的位置，为避免误关门夹到扫地机，没有执行任何动作。cover={{ states('cover.vacuum_garage_door') }}，position={{ state_attr('cover.vacuum_garage_door', 'current_position') }}"
-          }
         }
       ]
     }

@@ -4,6 +4,10 @@ Measured on 2026-10-10: a full travel takes 35 seconds (user, stopwatch), while
 the device echoes the target position within 0.5 seconds of any motor command.
 Anything that reads `current_position` sooner than one travel is reading the
 echo, not the door.
+
+Re-measured 2026-10-14: the owner timed the opening travel at 34 seconds. The two
+readings agree within a second, which is what makes 34 usable rather than a
+correction -- and both are single samples, so the value is a floor either way.
 """
 
 from importlib.util import module_from_spec, spec_from_file_location
@@ -21,9 +25,13 @@ MODULE = module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
-def test_travel_is_the_measured_35_seconds() -> None:
-    """An owner's stopwatch reading; changing it must be a deliberate re-measure."""
-    assert MODULE.DOOR_TRAVEL_SECONDS == 35
+def test_travel_is_the_measured_34_seconds() -> None:
+    """An owner's stopwatch reading; changing it must be a deliberate re-measure.
+
+    Pinned rather than bounded so that a change is always accompanied by a new
+    measurement. The suite going red here is the intended prompt.
+    """
+    assert MODULE.DOOR_TRAVEL_SECONDS == 34
 
 
 def test_echo_settle_exceeds_one_full_travel_with_margin() -> None:

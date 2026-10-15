@@ -6,7 +6,7 @@
 - 2026-04-25: options flow 新增单个运行参数时，不要提交后跳到旧的 drawables 步骤；单参数应一页保存关闭，避免用户二次提交。
 - 2026-04-25: 如果 options flow 已有地图绘制选项，再新增轮询参数时应合并到同一个选项页面；否则旧地图绘制选项会没有入口或需要二次提交。
 - 2026-04-26: running 表示设备当前正在动作，不表示任务仍存在；柜门自动化需要 task_active 这类任务语义实体，pause 状态也应视为任务仍在。
-- 2026-04-27: 用户实测 Roborock V1 只有 status=cleaning 时 APP_PAUSE 才进入可恢复 paused；其他状态下 pause 会停止/取消任务，自动化必须先判断原始 status。
+- 2026-04-27（2026-10-16 修正）: V1 返航暂停后的继续须用 app_resume，旧代码曾用 app_charge 导致重新回充并破坏清扫；现存资料不足以断言 APP_PAUSE 本身必取消。控制器应确认新鲜 paused、原会话及恢复后的原返航，不能用命令回执或 flags 清零单独推断固件能力。
 - 2026-04-27: Roborock V1 pause 后 binary_sensor running 会变 off，因为它映射 in_cleaning；不能用 running 判断任务是否还存在，resume 需要保留 pause 前任务上下文。
 - 2026-04-27: 危险区只能表示位置，不能表示扫地机回基站意图；不能用进入危险区替代 returning_home 触发，否则会在普通清扫靠近柜门时误触发。
 - 2026-04-27: Roborock HA 发起清扫后可能先进入 washing_the_mop，并不会立刻出 dock；柜门开门逻辑不能只绑定清扫命令发送，应绑定实际出 dock/returning 阶段。

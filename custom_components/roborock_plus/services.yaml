@@ -1,3 +1,17 @@
+request_garage_close:
+  name: Request garage closing
+  description: Requests garage closing after rechecking the task, stable dock, trusted position, household permission and manual hold. No force bypass is available.
+  target:
+    entity:
+      integration: roborock_plus
+      domain: vacuum
+reset_garage_control:
+  name: Recheck garage control
+  description: Rechecks garage control and clears recoverable faults or manual hold without moving the door or robot. Active tasks remain recorded.
+  target:
+    entity:
+      integration: roborock_plus
+      domain: vacuum
 get_maps:
   name: Get maps
   description: Retrieves the map and room information of your device.

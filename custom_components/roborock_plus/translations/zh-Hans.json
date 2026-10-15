@@ -24,34 +24,402 @@
   },
   "entity": {
     "binary_sensor": {
-      "clean_box_empty": { "name": "清水箱" },
-      "clean_fluid_empty": { "name": "清洁液" },
-      "detergent_empty": { "name": "洗涤剂" },
-      "dirty_box_full": { "name": "污水箱" },
-      "in_cleaning": { "name": "正在清扫" },
-      "task_active": { "name": "任务进行中" },
-      "mop_attached": { "name": "附有拖把" },
-      "mop_drying_status": { "name": "拖布烘干" },
-      "softener_empty": { "name": "柔顺剂" },
-      "water_box_attached": { "name": "附有水箱" },
-      "water_shortage": { "name": "缺水" },
-      "has_danger_zone": { "name": "已配置危险区" },
-      "in_danger_zone": { "name": "位于危险区" },
-      "outside_danger_zone": { "name": "已离开危险区" },
-      "stuck": { "name": "卡住" }
+      "clean_box_empty": {
+        "name": "清水箱"
+      },
+      "clean_fluid_empty": {
+        "name": "清洁液"
+      },
+      "detergent_empty": {
+        "name": "洗涤剂"
+      },
+      "dirty_box_full": {
+        "name": "污水箱"
+      },
+      "in_cleaning": {
+        "name": "正在清扫"
+      },
+      "task_active": {
+        "name": "任务进行中"
+      },
+      "mop_attached": {
+        "name": "附有拖把"
+      },
+      "mop_drying_status": {
+        "name": "拖布烘干"
+      },
+      "softener_empty": {
+        "name": "柔顺剂"
+      },
+      "water_box_attached": {
+        "name": "附有水箱"
+      },
+      "water_shortage": {
+        "name": "缺水"
+      },
+      "has_danger_zone": {
+        "name": "已配置危险区"
+      },
+      "in_danger_zone": {
+        "name": "位于危险区"
+      },
+      "outside_danger_zone": {
+        "name": "已离开危险区"
+      },
+      "stuck": {
+        "name": "卡住"
+      },
+      "garage_open_confirmed": {
+        "name": "车库门已确认全开",
+        "state_attributes": {
+          "session_id": {
+            "name": "本次任务会话"
+          },
+          "operation_id": {
+            "name": "当前门操作编号"
+          },
+          "phase": {
+            "name": "车库阶段",
+            "state": {
+              "disabled": "未启用",
+              "recovering": "正在核对恢复状态",
+              "idle": "空闲",
+              "opening": "正在开门",
+              "awaiting_start": "等待机器人开始动作",
+              "task_open": "任务进行中，保持开门",
+              "outside_closed": "机器人在外，门已关闭",
+              "returning": "正在返回基站",
+              "docked_intermission": "任务未结束，中途停靠",
+              "closing": "正在关门",
+              "waiting_close_permission": "等待家庭关门许可",
+              "blocked": "故障阻塞",
+              "manual_hold": "人工接管保持"
+            }
+          },
+          "reason": {
+            "name": "阻塞原因"
+          },
+          "cover_entity_id": {
+            "name": "受控门实体"
+          },
+          "task_door_mode": {
+            "name": "任务期间门模式",
+            "state": {
+              "hold_open": "任务期间保持开门",
+              "after_exit": "离库后关门，当前 V1 不支持"
+            }
+          },
+          "open_quality": {
+            "name": "全开证据质量",
+            "state": {
+              "confirmed": "已确认物理到位",
+              "estimated": "预计到位，未确认物理到位",
+              "unknown": "无法判断"
+            }
+          },
+          "close_quality": {
+            "name": "全闭证据质量",
+            "state": {
+              "confirmed": "已确认物理到位",
+              "estimated": "预计到位，未确认物理到位",
+              "unknown": "无法判断"
+            }
+          },
+          "open_source": {
+            "name": "全开判断来源",
+            "state": {
+              "contact": "所选端点触点",
+              "position": "所选位置反馈",
+              "timed": "所选行程计时"
+            }
+          },
+          "close_source": {
+            "name": "全闭判断来源",
+            "state": {
+              "contact": "所选端点触点",
+              "position": "所选位置反馈",
+              "timed": "所选行程计时"
+            }
+          },
+          "open_reason": {
+            "name": "全开证据原因"
+          },
+          "close_reason": {
+            "name": "全闭证据原因"
+          }
+        }
+      },
+      "garage_closed_confirmed": {
+        "name": "车库门已确认全闭",
+        "state_attributes": {
+          "session_id": {
+            "name": "本次任务会话"
+          },
+          "operation_id": {
+            "name": "当前门操作编号"
+          },
+          "phase": {
+            "name": "车库阶段",
+            "state": {
+              "disabled": "未启用",
+              "recovering": "正在核对恢复状态",
+              "idle": "空闲",
+              "opening": "正在开门",
+              "awaiting_start": "等待机器人开始动作",
+              "task_open": "任务进行中，保持开门",
+              "outside_closed": "机器人在外，门已关闭",
+              "returning": "正在返回基站",
+              "docked_intermission": "任务未结束，中途停靠",
+              "closing": "正在关门",
+              "waiting_close_permission": "等待家庭关门许可",
+              "blocked": "故障阻塞",
+              "manual_hold": "人工接管保持"
+            }
+          },
+          "reason": {
+            "name": "阻塞原因"
+          },
+          "cover_entity_id": {
+            "name": "受控门实体"
+          },
+          "task_door_mode": {
+            "name": "任务期间门模式",
+            "state": {
+              "hold_open": "任务期间保持开门",
+              "after_exit": "离库后关门，当前 V1 不支持"
+            }
+          },
+          "open_quality": {
+            "name": "全开证据质量",
+            "state": {
+              "confirmed": "已确认物理到位",
+              "estimated": "预计到位，未确认物理到位",
+              "unknown": "无法判断"
+            }
+          },
+          "close_quality": {
+            "name": "全闭证据质量",
+            "state": {
+              "confirmed": "已确认物理到位",
+              "estimated": "预计到位，未确认物理到位",
+              "unknown": "无法判断"
+            }
+          },
+          "open_source": {
+            "name": "全开判断来源",
+            "state": {
+              "contact": "所选端点触点",
+              "position": "所选位置反馈",
+              "timed": "所选行程计时"
+            }
+          },
+          "close_source": {
+            "name": "全闭判断来源",
+            "state": {
+              "contact": "所选端点触点",
+              "position": "所选位置反馈",
+              "timed": "所选行程计时"
+            }
+          },
+          "open_reason": {
+            "name": "全开证据原因"
+          },
+          "close_reason": {
+            "name": "全闭证据原因"
+          }
+        }
+      },
+      "garage_passage_allowed": {
+        "name": "车库允许通行",
+        "state_attributes": {
+          "session_id": {
+            "name": "本次任务会话"
+          },
+          "operation_id": {
+            "name": "当前门操作编号"
+          },
+          "phase": {
+            "name": "车库阶段",
+            "state": {
+              "disabled": "未启用",
+              "recovering": "正在核对恢复状态",
+              "idle": "空闲",
+              "opening": "正在开门",
+              "awaiting_start": "等待机器人开始动作",
+              "task_open": "任务进行中，保持开门",
+              "outside_closed": "机器人在外，门已关闭",
+              "returning": "正在返回基站",
+              "docked_intermission": "任务未结束，中途停靠",
+              "closing": "正在关门",
+              "waiting_close_permission": "等待家庭关门许可",
+              "blocked": "故障阻塞",
+              "manual_hold": "人工接管保持"
+            }
+          },
+          "reason": {
+            "name": "阻塞原因"
+          },
+          "cover_entity_id": {
+            "name": "受控门实体"
+          },
+          "task_door_mode": {
+            "name": "任务期间门模式",
+            "state": {
+              "hold_open": "任务期间保持开门",
+              "after_exit": "离库后关门，当前 V1 不支持"
+            }
+          },
+          "open_quality": {
+            "name": "全开证据质量",
+            "state": {
+              "confirmed": "已确认物理到位",
+              "estimated": "预计到位，未确认物理到位",
+              "unknown": "无法判断"
+            }
+          },
+          "close_quality": {
+            "name": "全闭证据质量",
+            "state": {
+              "confirmed": "已确认物理到位",
+              "estimated": "预计到位，未确认物理到位",
+              "unknown": "无法判断"
+            }
+          },
+          "open_source": {
+            "name": "全开判断来源",
+            "state": {
+              "contact": "所选端点触点",
+              "position": "所选位置反馈",
+              "timed": "所选行程计时"
+            }
+          },
+          "close_source": {
+            "name": "全闭判断来源",
+            "state": {
+              "contact": "所选端点触点",
+              "position": "所选位置反馈",
+              "timed": "所选行程计时"
+            }
+          },
+          "open_reason": {
+            "name": "全开证据原因"
+          },
+          "close_reason": {
+            "name": "全闭证据原因"
+          }
+        }
+      },
+      "garage_problem": {
+        "name": "车库控制故障",
+        "state_attributes": {
+          "session_id": {
+            "name": "本次任务会话"
+          },
+          "operation_id": {
+            "name": "当前门操作编号"
+          },
+          "phase": {
+            "name": "车库阶段",
+            "state": {
+              "disabled": "未启用",
+              "recovering": "正在核对恢复状态",
+              "idle": "空闲",
+              "opening": "正在开门",
+              "awaiting_start": "等待机器人开始动作",
+              "task_open": "任务进行中，保持开门",
+              "outside_closed": "机器人在外，门已关闭",
+              "returning": "正在返回基站",
+              "docked_intermission": "任务未结束，中途停靠",
+              "closing": "正在关门",
+              "waiting_close_permission": "等待家庭关门许可",
+              "blocked": "故障阻塞",
+              "manual_hold": "人工接管保持"
+            }
+          },
+          "reason": {
+            "name": "阻塞原因"
+          },
+          "cover_entity_id": {
+            "name": "受控门实体"
+          },
+          "task_door_mode": {
+            "name": "任务期间门模式",
+            "state": {
+              "hold_open": "任务期间保持开门",
+              "after_exit": "离库后关门，当前 V1 不支持"
+            }
+          },
+          "open_quality": {
+            "name": "全开证据质量",
+            "state": {
+              "confirmed": "已确认物理到位",
+              "estimated": "预计到位，未确认物理到位",
+              "unknown": "无法判断"
+            }
+          },
+          "close_quality": {
+            "name": "全闭证据质量",
+            "state": {
+              "confirmed": "已确认物理到位",
+              "estimated": "预计到位，未确认物理到位",
+              "unknown": "无法判断"
+            }
+          },
+          "open_source": {
+            "name": "全开判断来源",
+            "state": {
+              "contact": "所选端点触点",
+              "position": "所选位置反馈",
+              "timed": "所选行程计时"
+            }
+          },
+          "close_source": {
+            "name": "全闭判断来源",
+            "state": {
+              "contact": "所选端点触点",
+              "position": "所选位置反馈",
+              "timed": "所选行程计时"
+            }
+          },
+          "open_reason": {
+            "name": "全开证据原因"
+          },
+          "close_reason": {
+            "name": "全闭证据原因"
+          }
+        }
+      }
     },
     "button": {
-      "empty_dustbin": { "name": "倒垃圾盒" },
-      "pause": { "name": "暂停" },
-      "reset_air_filter_consumable": { "name": "重置滤网耗材" },
-      "reset_main_brush_consumable": { "name": "重置主刷耗材" },
-      "reset_sensor_consumable": { "name": "重置传感器耗材" },
-      "reset_side_brush_consumable": { "name": "重置边刷耗材" },
-      "shutdown": { "name": "关机" },
-      "start": { "name": "启动" }
+      "empty_dustbin": {
+        "name": "倒垃圾盒"
+      },
+      "pause": {
+        "name": "暂停"
+      },
+      "reset_air_filter_consumable": {
+        "name": "重置滤网耗材"
+      },
+      "reset_main_brush_consumable": {
+        "name": "重置主刷耗材"
+      },
+      "reset_sensor_consumable": {
+        "name": "重置传感器耗材"
+      },
+      "reset_side_brush_consumable": {
+        "name": "重置边刷耗材"
+      },
+      "shutdown": {
+        "name": "关机"
+      },
+      "start": {
+        "name": "启动"
+      }
     },
     "number": {
-      "volume": { "name": "音量" }
+      "volume": {
+        "name": "音量"
+      }
     },
     "select": {
       "cleaning_mode": {
@@ -62,8 +430,12 @@
           "vacuum": "仅扫地"
         }
       },
-      "detergent_type": { "name": "洗涤剂类型" },
-      "drying_mode": { "name": "烘干模式" },
+      "detergent_type": {
+        "name": "洗涤剂类型"
+      },
+      "drying_mode": {
+        "name": "烘干模式"
+      },
       "dust_collection_mode": {
         "name": "集尘模式",
         "state": {
@@ -73,7 +445,9 @@
           "smart": "智能"
         }
       },
-      "mode": { "name": "运行模式" },
+      "mode": {
+        "name": "运行模式"
+      },
       "mop_intensity": {
         "name": "拖地强度",
         "state": {
@@ -106,61 +480,254 @@
           "standard": "标准"
         }
       },
-      "program": { "name": "洗涤程序" },
-      "rinse_times": { "name": "漂洗次数" },
-      "selected_map": { "name": "所选地图" },
-      "softener_type": { "name": "柔顺剂类型" },
-      "spin_level": { "name": "脱水档位" },
-      "temperature": { "name": "水温" },
-      "water_flow": { "name": "水流量" }
+      "program": {
+        "name": "洗涤程序"
+      },
+      "rinse_times": {
+        "name": "漂洗次数"
+      },
+      "selected_map": {
+        "name": "所选地图"
+      },
+      "softener_type": {
+        "name": "柔顺剂类型"
+      },
+      "spin_level": {
+        "name": "脱水档位"
+      },
+      "temperature": {
+        "name": "水温"
+      },
+      "water_flow": {
+        "name": "水流量"
+      }
     },
     "sensor": {
-      "a01_error": { "name": "错误" },
-      "a01_status": { "name": "状态" },
-      "brush_remaining": { "name": "滚刷剩余时间" },
-      "clean_percent": { "name": "清扫进度" },
-      "cleaning_area": { "name": "清洁区域" },
-      "cleaning_brush_time_left": { "name": "维护刷剩余时间" },
-      "cleaning_time": { "name": "清扫时间" },
-      "countdown": { "name": "倒计时" },
-      "current_room": { "name": "当前房间" },
-      "dock_error": { "name": "基站错误" },
-      "filter_life": { "name": "滤网使用时间" },
-      "filter_time_left": { "name": "滤网剩余时间" },
-      "last_clean_end": { "name": "上次清扫结束" },
-      "last_clean_start": { "name": "上次清扫开始" },
-      "main_brush_life": { "name": "主刷使用时间" },
-      "main_brush_time_left": { "name": "主刷剩余时间" },
-      "mop_drying_remaining_time": { "name": "拖布烘干剩余时间" },
-      "mop_life_time_left": { "name": "拖布剩余时间" },
-      "q7_status": { "name": "状态" },
-      "sensor_life": { "name": "传感器使用时间" },
-      "sensor_time_left": { "name": "传感器剩余时间" },
-      "side_brush_life": { "name": "边刷使用时间" },
-      "side_brush_time_left": { "name": "边刷剩余时间" },
-      "status": { "name": "状态" },
-      "strainer_time_left": { "name": "滤水器剩余时间" },
-      "times_after_clean": { "name": "清洗后次数" },
-      "total_cleaning_area": { "name": "总清洁区域" },
-      "total_cleaning_count": { "name": "总清洁次数" },
-      "total_cleaning_time": { "name": "总清扫时间" },
-      "vacuum_error": { "name": "吸尘出错" },
-      "washing_left": { "name": "剩余洗涤时间" },
-      "zeo_error": { "name": "错误" },
-      "zeo_state": { "name": "状态" }
+      "a01_error": {
+        "name": "错误"
+      },
+      "a01_status": {
+        "name": "状态"
+      },
+      "brush_remaining": {
+        "name": "滚刷剩余时间"
+      },
+      "clean_percent": {
+        "name": "清扫进度"
+      },
+      "cleaning_area": {
+        "name": "清洁区域"
+      },
+      "cleaning_brush_time_left": {
+        "name": "维护刷剩余时间"
+      },
+      "cleaning_time": {
+        "name": "清扫时间"
+      },
+      "countdown": {
+        "name": "倒计时"
+      },
+      "current_room": {
+        "name": "当前房间"
+      },
+      "dock_error": {
+        "name": "基站错误"
+      },
+      "filter_life": {
+        "name": "滤网使用时间"
+      },
+      "filter_time_left": {
+        "name": "滤网剩余时间"
+      },
+      "last_clean_end": {
+        "name": "上次清扫结束"
+      },
+      "last_clean_start": {
+        "name": "上次清扫开始"
+      },
+      "main_brush_life": {
+        "name": "主刷使用时间"
+      },
+      "main_brush_time_left": {
+        "name": "主刷剩余时间"
+      },
+      "mop_drying_remaining_time": {
+        "name": "拖布烘干剩余时间"
+      },
+      "mop_life_time_left": {
+        "name": "拖布剩余时间"
+      },
+      "q7_status": {
+        "name": "状态"
+      },
+      "sensor_life": {
+        "name": "传感器使用时间"
+      },
+      "sensor_time_left": {
+        "name": "传感器剩余时间"
+      },
+      "side_brush_life": {
+        "name": "边刷使用时间"
+      },
+      "side_brush_time_left": {
+        "name": "边刷剩余时间"
+      },
+      "status": {
+        "name": "状态"
+      },
+      "strainer_time_left": {
+        "name": "滤水器剩余时间"
+      },
+      "times_after_clean": {
+        "name": "清洗后次数"
+      },
+      "total_cleaning_area": {
+        "name": "总清洁区域"
+      },
+      "total_cleaning_count": {
+        "name": "总清洁次数"
+      },
+      "total_cleaning_time": {
+        "name": "总清扫时间"
+      },
+      "vacuum_error": {
+        "name": "吸尘出错"
+      },
+      "washing_left": {
+        "name": "剩余洗涤时间"
+      },
+      "zeo_error": {
+        "name": "错误"
+      },
+      "zeo_state": {
+        "name": "状态"
+      },
+      "garage_phase": {
+        "name": "车库控制阶段",
+        "state": {
+          "disabled": "未启用",
+          "recovering": "正在核对恢复状态",
+          "idle": "空闲",
+          "opening": "正在开门",
+          "awaiting_start": "等待机器人开始动作",
+          "task_open": "任务进行中，保持开门",
+          "outside_closed": "机器人在外，门已关闭",
+          "returning": "正在返回基站",
+          "docked_intermission": "任务未结束，中途停靠",
+          "closing": "正在关门",
+          "waiting_close_permission": "等待家庭关门许可",
+          "blocked": "故障阻塞",
+          "manual_hold": "人工接管保持"
+        },
+        "state_attributes": {
+          "session_id": {
+            "name": "本次任务会话"
+          },
+          "operation_id": {
+            "name": "当前门操作编号"
+          },
+          "phase": {
+            "name": "车库阶段",
+            "state": {
+              "disabled": "未启用",
+              "recovering": "正在核对恢复状态",
+              "idle": "空闲",
+              "opening": "正在开门",
+              "awaiting_start": "等待机器人开始动作",
+              "task_open": "任务进行中，保持开门",
+              "outside_closed": "机器人在外，门已关闭",
+              "returning": "正在返回基站",
+              "docked_intermission": "任务未结束，中途停靠",
+              "closing": "正在关门",
+              "waiting_close_permission": "等待家庭关门许可",
+              "blocked": "故障阻塞",
+              "manual_hold": "人工接管保持"
+            }
+          },
+          "reason": {
+            "name": "阻塞原因"
+          },
+          "cover_entity_id": {
+            "name": "受控门实体"
+          },
+          "task_door_mode": {
+            "name": "任务期间门模式",
+            "state": {
+              "hold_open": "任务期间保持开门",
+              "after_exit": "离库后关门，当前 V1 不支持"
+            }
+          },
+          "open_quality": {
+            "name": "全开证据质量",
+            "state": {
+              "confirmed": "已确认物理到位",
+              "estimated": "预计到位，未确认物理到位",
+              "unknown": "无法判断"
+            }
+          },
+          "close_quality": {
+            "name": "全闭证据质量",
+            "state": {
+              "confirmed": "已确认物理到位",
+              "estimated": "预计到位，未确认物理到位",
+              "unknown": "无法判断"
+            }
+          },
+          "open_source": {
+            "name": "全开判断来源",
+            "state": {
+              "contact": "所选端点触点",
+              "position": "所选位置反馈",
+              "timed": "所选行程计时"
+            }
+          },
+          "close_source": {
+            "name": "全闭判断来源",
+            "state": {
+              "contact": "所选端点触点",
+              "position": "所选位置反馈",
+              "timed": "所选行程计时"
+            }
+          },
+          "open_reason": {
+            "name": "全开证据原因"
+          },
+          "close_reason": {
+            "name": "全闭证据原因"
+          }
+        }
+      }
     },
     "switch": {
-      "child_lock": { "name": "童锁" },
-      "dnd_switch": { "name": "勿扰模式" },
-      "off_peak_switch": { "name": "错峰充电" },
-      "sound_setting": { "name": "声音设置" },
-      "status_indicator": { "name": "状态指示灯" }
+      "child_lock": {
+        "name": "童锁"
+      },
+      "dnd_switch": {
+        "name": "勿扰模式"
+      },
+      "off_peak_switch": {
+        "name": "错峰充电"
+      },
+      "sound_setting": {
+        "name": "声音设置"
+      },
+      "status_indicator": {
+        "name": "状态指示灯"
+      }
     },
     "time": {
-      "dnd_end_time": { "name": "勿扰结束" },
-      "dnd_start_time": { "name": "勿扰开始" },
-      "off_peak_end": { "name": "错峰结束" },
-      "off_peak_start": { "name": "错峰开始" }
+      "dnd_end_time": {
+        "name": "勿扰结束"
+      },
+      "dnd_start_time": {
+        "name": "勿扰开始"
+      },
+      "off_peak_end": {
+        "name": "错峰结束"
+      },
+      "off_peak_start": {
+        "name": "错峰开始"
+      }
     }
   },
   "exceptions": {
@@ -169,6 +736,9 @@
     },
     "garage_guard_open_timeout": {
       "message": "柜门实体 {entity_id} 超时后仍未打开到 95%。"
+    },
+    "garage_control_error": {
+      "message": "车库控制拒绝了操作：{reason}"
     }
   },
   "options": {
@@ -182,7 +752,8 @@
           "v1_map_position_poll_interval": "危险区坐标轮询间隔",
           "v1_stuck_detection_enabled": "卡住检测",
           "v1_stuck_radius": "卡住判定半径",
-          "v1_stuck_window": "卡住判定时长"
+          "v1_stuck_window": "卡住判定时长",
+          "do_configure_garage": "继续配置单机车库控制"
         },
         "data_description": {
           "clean_command_watch_timeout": "下发清扫命令后，等待这么多秒仍没有任务开始就发出告警事件（roborock_plus_clean_command_not_started）。填 0 关闭此检查。",
@@ -192,14 +763,102 @@
           "v1_map_position_poll_interval": "填 0 表示按当前服务器自动决定，或填 1 到 300 秒。这里控制危险区传感器读取扫地机坐标的频率。除非你自建了服务器，否则请保持 0：地图数据始终来自服务器，对 Roborock 云端轮询过快可能导致账号被限流。",
           "v1_stuck_detection_enabled": "扫地机应该移动却停着不动时上报——扫地机顶住柜门就是这个表现。会发出 roborock_plus_vacuum_stuck 事件并点亮「卡住」传感器。本集成只负责上报，停止扫地机交给自动化。",
           "v1_stuck_radius": "扫地机在地图坐标里允许漂移多大范围仍算「没动」。默认 200 足以滤掉静止采样的 1~2 单位抖动。如果扫地机沿边缓慢作业时被误报卡住，可以调大。",
-          "v1_stuck_window": "扫地机在判定半径内停留多少秒算「卡住」。默认 120。检测需要在这个窗口内有若干次采样，所以也取决于危险区坐标轮询间隔。"
+          "v1_stuck_window": "扫地机在判定半径内停留多少秒算「卡住」。默认 120。检测需要在这个窗口内有若干次采样，所以也取决于危险区坐标轮询间隔。",
+          "do_configure_garage": "先保存本页选项，再选择本条目的 V1 扫地机配置车库；不会自动迁移旧门保护。"
         },
         "description": "配置本地状态轮询、柜门保护和地图绘制选项。\n\n当前状态轮询间隔：{current_interval} 秒。\n\n危险区坐标轮询间隔：{current_map_interval} 秒（0 表示自动）。\n\n柜门保护只影响从 Home Assistant 发起的清扫命令。\n\n清扫启动确认：命令下发后若始终没有任务开始，会发出事件供自动化告警（本集成不会自动关门）。",
         "error": {
           "garage_guard_missing_config": "请选择柜门实体，或者关闭柜门保护。"
         },
         "title": "Roborock Plus 选项"
+      },
+      "garage_select": {
+        "title": "选择车库扫地机",
+        "description": "明确选择本集成条目中的 V1 扫地机。每扇门只能有一个管理者。",
+        "data": {
+          "duid": "扫地机"
+        },
+        "data_description": {
+          "duid": "绑定到稳定的设备 duid，不依赖可变的实体名称。"
+        }
+      },
+      "garage": {
+        "title": "车库控制",
+        "description": "配置 {robot}。新配置默认为未启用草稿；启用前需填写所有安全时长、明确选择来源并确认交接。现场离线可以保存，但运行时不会因此获得通行许可。",
+        "data": {
+          "enabled": "启用车库控制",
+          "cover_entity_id": "车库门 cover 实体",
+          "task_door_mode": "任务期间的门模式",
+          "open_source": "全开判断来源",
+          "close_source": "全闭判断来源",
+          "open_contact": "全开触点",
+          "close_contact": "全闭触点",
+          "open_contact_state": "全开触点到位值",
+          "close_contact_state": "全闭触点到位值",
+          "position_kind": "位置反馈类型",
+          "open_position": "全开位置阈值",
+          "close_position": "全闭位置阈值",
+          "open_travel_seconds": "完整开门时间",
+          "close_travel_seconds": "完整关门时间",
+          "travel_margin_seconds": "行程余量",
+          "contact_settle_seconds": "触点稳定时间",
+          "position_settle_seconds": "位置稳定时间",
+          "operation_timeout_seconds": "门动作超时",
+          "dock_settle_seconds": "停靠稳定时间",
+          "allow_estimated": "接受门到位估算风险",
+          "close_permission_entity": "家庭关门许可",
+          "handover_confirmed": "确认门控制权交接"
+        },
+        "data_description": {
+          "enabled": "绑定、硬件标定和交接完成后再启用。关闭时可以保存未完整配置的草稿。",
+          "cover_entity_id": "选择支持打开和关闭的 cover。支持设置位置，不代表能反馈真实物理位置。",
+          "task_door_mode": "整个任务保持门开，包括回洗拖布和补电。当前 V1 暂不支持离库后关门。",
+          "open_source": "明确选择端点触点、位置反馈或计时。所选来源失联后，不会自动切换其他来源。",
+          "close_source": "与全开来源独立选择。没有全闭不代表已经全开。",
+          "open_contact": "选择表示全开的 binary_sensor；不按设备类别排除合法触点。",
+          "close_contact": "选择表示全闭的另一个 binary_sensor，不能与全开使用同一个实体。",
+          "open_contact_state": "按实际端点测试选择 on 或 off，不会自动猜测极性。",
+          "close_contact_state": "按实际端点测试选择 on 或 off，不会自动猜测极性。",
+          "position_kind": "真实测量须已核实为物理反馈；目标回声和软件估算都属于估算，必须接受风险。",
+          "open_position": "使用位置来源时，填写实测的 0–100 阈值，须高于全闭阈值并保证机器人通行空间。95 仅为旧配置建议。",
+          "close_position": "使用位置来源时，填写实测的 0–100 阈值，须低于全开阈值并核实物理关位。5 仅为旧配置建议。",
+          "open_travel_seconds": "填写实测完整行程，1–600 秒。计时或估算来源必须等满完整行程，没有通用默认值。",
+          "close_travel_seconds": "填写实测完整行程，1–600 秒。开门和关门耗时可以不同。",
+          "travel_margin_seconds": "确认额外余量，0–120 秒。只在完整行程上叠加一次。",
+          "contact_settle_seconds": "确认触点到位后需要保持多久，0–60 秒。等待稳定不能把不可靠来源变成可靠反馈。",
+          "position_settle_seconds": "确认位置到位后需要保持多久，0–60 秒。目标回声等待再久仍然是估算。",
+          "operation_timeout_seconds": "填写 1–1800 秒，必须大于最长行程加余量和稳定时间。超时会阻塞流程，不会放行机器人。",
+          "dock_settle_seconds": "填写 1–300 秒，至少两次成功的机器人状态观测跨越此窗口；重复旧样本不累计稳定时间。",
+          "allow_estimated": "计时无法发现卡门、电机空转或通路障碍。使用计时或估算位置时必须明确接受，估算不会显示为已确认到位。",
+          "close_permission_entity": "可选 input_boolean 或 binary_sensor，只读。仅 on 允许关门；off、unknown、unavailable 都拒绝。留空表示没有家庭附加限制。",
+          "handover_confirmed": "我已标定端点和时长、确认没有待续任务且机器人安全停靠、停用旧主动门控自动化，并将自动关门改用 request_garage_close。旧全局保护涉及的其他机器人须先逐台处理。"
+        }
       }
+    },
+    "error": {
+      "invalid_binding": "车库绑定必须是配置对象。",
+      "invalid_boolean_value": "安全开关必须是真或假，不能填文本或数字。",
+      "invalid_numeric_value": "请填写范围内的有限数值，不接受布尔值或数字文本。",
+      "missing_safety_configuration": "启用前请补齐安全时长、来源和所选端点的必填字段。",
+      "invalid_evidence_source": "请为各端点明确选择触点、位置或计时来源。",
+      "invalid_contact_configuration": "请选择端点 binary_sensor，并明确选择到位值 on 或 off。",
+      "duplicate_endpoint": "全开和全闭端点不能使用同一个 binary_sensor。",
+      "invalid_position_configuration": "请选择位置反馈是真实测量还是估算。",
+      "invalid_position_thresholds": "位置阈值必须满足 0 ≤ 全闭 < 全开 ≤ 100。",
+      "estimated_risk_not_accepted": "计时或估算反馈必须明确接受估算风险后才能启用。",
+      "operation_timeout_too_short": "超时必须大于完整行程加余量和稳定时间。",
+      "invalid_entity_reference": "请选择允许类型的实体。",
+      "unsupported_robot": "只能选择本集成条目中的 V1 扫地机。",
+      "unsupported_cover": "所选 cover 必须同时支持打开和关闭。",
+      "unsupported_return_interlock": "当前 V1 返航互锁能力不足，暂不支持离库后关门，请选择任务期间保持开门。",
+      "invalid_task_door_mode": "请选择支持的任务门模式。",
+      "handover_required": "启用前请确认标定完成并已交接旧门控自动化。",
+      "duplicate_binding": "这扇门已由另一台扫地机或另一个集成条目管理。",
+      "legacy_guard_conflict": "另一台扫地机仍依赖此门的旧全局保护，请先处理它的保护关系再交接。",
+      "unsupported_configuration_version": "已保存的车库配置版本不受支持。"
+    },
+    "abort": {
+      "no_supported_v1": "本条目尚无已加载的 V1 扫地机，请先恢复集成连接。"
     }
   },
   "selector": {
@@ -211,6 +870,31 @@
         "eu": "欧洲",
         "ru": "俄罗斯",
         "us": "美国"
+      }
+    },
+    "garage_task_mode": {
+      "options": {
+        "hold_open": "任务期间保持开门",
+        "after_exit": "离库后关门（当前 V1 不支持）"
+      }
+    },
+    "garage_evidence_source": {
+      "options": {
+        "contact": "端点触点",
+        "position": "位置反馈",
+        "timed": "计时估算"
+      }
+    },
+    "garage_contact_state": {
+      "options": {
+        "on": "on 时到位",
+        "off": "off 时到位"
+      }
+    },
+    "garage_position_kind": {
+      "options": {
+        "measured": "真实测量",
+        "estimated": "估算或目标回声"
       }
     }
   },
@@ -238,6 +922,14 @@
     "get_safe_zone_editor_context": {
       "name": "获取危险区编辑上下文",
       "description": "获取编辑器需要的地图、当前位置和危险区信息。"
+    },
+    "request_garage_close": {
+      "name": "请求安全关闭车库门",
+      "description": "重新核对任务、稳定停靠、受信位置、家庭许可和人工保持后请求关门，不提供强制绕过。"
+    },
+    "reset_garage_control": {
+      "name": "重新核对车库控制",
+      "description": "重新观察并解除可恢复故障或人工保持，不移动门或扫地机，也不清除活动任务。下一次明确请求仍需通过全部守卫。"
     }
   }
 }

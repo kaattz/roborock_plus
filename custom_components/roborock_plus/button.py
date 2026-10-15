@@ -34,6 +34,9 @@ from .entity import (
     RoborockEntityV1,
 )
 from .garage_guard import async_guard_garage_open
+from .garage_control import GarageControlError
+from .garage_task import GarageTaskError
+from .garage_runtime import configured as is_garage_configured, check_legacy_ownership
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -224,11 +227,22 @@ class RoborockRoutineButtonEntity(RoborockEntity, ButtonEntity):
 
     async def async_press(self, **kwargs: Any) -> None:
         """Press the button."""
-        await async_guard_garage_open(
-            self.hass,
-            self._coordinator.config_entry.options,
-        )
-        await self._coordinator.execute_routines(self._routine_id)
+        from homeassistant.exceptions import ServiceValidationError
+        try:
+            if is_garage_configured(self._coordinator):
+                runtime = getattr(self._coordinator, 'garage_runtime', None)
+                if runtime is None:
+                    raise GarageControlError(getattr(self._coordinator, 'garage_setup_error', None) or 'session_recovery_required')
+                await runtime.async_routine(lambda: self._coordinator.execute_routines(self._routine_id))
+            else:
+                check_legacy_ownership(self.hass, self._coordinator.config_entry.options, self._coordinator.duid)
+                await async_guard_garage_open(self.hass, self._coordinator.config_entry.options)
+                await self._coordinator.execute_routines(self._routine_id)
+        except (GarageControlError, GarageTaskError) as err:
+            raise ServiceValidationError(
+                translation_domain='roborock_plus', translation_key='garage_control_error',
+                translation_placeholders={'reason':err.reason},
+            ) from err
         # A routine runs asynchronously on the server, so the call above
         # returns before the vacuum actually starts. Watch it so a routine that
         # fails does not leave the door open unnoticed.

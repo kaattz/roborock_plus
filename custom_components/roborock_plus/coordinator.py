@@ -164,6 +164,9 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
         # to the base class. This is reset on successful data update.
         self._last_update_success_time: datetime | None = None
         self._last_full_update_success_time: datetime | None = None
+        # Snapshot the actual status RPC, before slower trait/map work. The
+        # library's status object is mutable, so garage safety reads scalars.
+        self.garage_status_sample: dict[str, Any] | None = None
         self._has_connected_locally: bool = False
         self.last_resume_command: str | None = None
         self._remove_v1_diagnostics_ready_callback = None
@@ -281,11 +284,11 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
 
     async def _update_device_prop(self) -> None:
         """Update device properties."""
+        await self._update_status()
         await _refresh_traits(
             [
                 trait
                 for trait in (
-                    self.properties_api.status,
                     self.properties_api.consumables,
                     self.properties_api.clean_summary,
                     self.properties_api.dnd,
@@ -305,6 +308,13 @@ class RoborockDataUpdateCoordinator(DataUpdateCoordinator[DeviceState | None]):
     async def _update_status(self) -> None:
         """Update only the status trait used by vacuum/status/running entities."""
         await _refresh_traits([self.properties_api.status])
+        status = self.properties_api.status
+        self.garage_status_sample = {
+            "sampled_at": dt_util.utcnow(),
+            "state": str(getattr(status.state, "name", status.state)),
+            "in_cleaning": status.in_cleaning,
+            "in_returning": status.in_returning,
+        }
         _LOGGER.debug("Updated device status")
 
     async def _async_update_data(self) -> DeviceState | None:

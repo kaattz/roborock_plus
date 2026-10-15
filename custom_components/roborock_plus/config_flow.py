@@ -78,7 +78,9 @@ from .garage_config import (
     GARAGE_CONTROL_VERSION,
     NUMERIC_RANGES,
     GarageConfigError,
+    longest_endpoint_wait,
     required_timing_fields,
+    suggested_timing_values,
     validate_binding,
     validate_binding_ownership,
     validate_legacy_guard_ownership,
@@ -727,9 +729,12 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
         return tuple(fields)
 
     def _garage_error_form(self, error: GarageConfigError) -> ConfigFlowResult:
+        errors = {"base": error.reason}
+        if error.field:
+            errors[error.field] = error.reason
         for step_id in ("garage", "garage_feedback", "garage_timing"):
             if error.field in self._garage_fields(step_id):
-                return self._garage_form(step_id, {error.field: error.reason})
+                return self._garage_form(step_id, errors)
         if error.field:
             step_id = "garage_feedback" if error.field in (
                 "open_contact", "close_contact", "open_contact_state", "close_contact_state",
@@ -737,21 +742,25 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
             ) else "garage_timing"
             # An invalid retained value must be editable even while its source
             # is inactive; otherwise a hidden field would prevent every save.
-            return self._garage_form(step_id, {error.field: error.reason}, extra_fields=(error.field,))
-        return self._garage_form("garage_timing", {"base": error.reason})
+            return self._garage_form(step_id, errors, extra_fields=(error.field,))
+        return self._garage_form("garage_timing", errors)
 
     def _garage_form(
         self, step_id: str, errors: dict[str, str] | None = None,
         *, extra_fields: tuple[str, ...] = (),
     ) -> ConfigFlowResult:
         values = self._garage_values()
+        timing_suggestions = suggested_timing_values(values) if step_id == "garage_timing" else {}
 
         def field(key: str, default: Any = None) -> Any:
+            marker = vol.Required if step_id in ("garage_feedback", "garage_timing") and key not in (
+                "allow_estimated", "handover_confirmed",
+            ) else vol.Optional
             if key in values and values[key] not in (None, ""):
-                return vol.Optional(key, default=values[key])
+                return marker(key, default=values[key])
             if default is not None:
-                return vol.Optional(key, default=default)
-            return vol.Optional(key)
+                return marker(key, default=default)
+            return marker(key)
 
         def choice(options: list[str], translation_key: str) -> SelectSelector:
             return SelectSelector(SelectSelectorConfig(
@@ -777,14 +786,21 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
         for key, (minimum, maximum) in {
             **NUMERIC_RANGES, "open_position": (0, 100), "close_position": (0, 100)
         }.items():
-            selectors[field(key)] = NumberSelector(NumberSelectorConfig(
+            default = timing_suggestions.get(key) if key not in values else None
+            selectors[field(key, default)] = NumberSelector(NumberSelectorConfig(
                 min=minimum, max=maximum, step=1,
                 mode=NumberSelectorMode.BOX,
                 unit_of_measurement="%" if key.endswith("_position") else "s",
             ))
         visible = (*self._garage_fields(step_id), *extra_fields)
         data_schema = {key: selector for key, selector in selectors.items() if key.schema in visible}
+        placeholders = {"robot": self._garage_devices().get(self._garage_duid, self._garage_duid)}
+        if errors and "operation_timeout_too_short" in errors.values():
+            placeholders.update(
+                current_timeout=f"{values['operation_timeout_seconds']:g}",
+                required_wait=f"{longest_endpoint_wait(values):g}",
+            )
         return self.async_show_form(
             step_id=step_id, data_schema=vol.Schema(data_schema), errors=errors or {},
-            description_placeholders={"robot": self._garage_devices().get(self._garage_duid, self._garage_duid)},
+            description_placeholders=placeholders,
         )

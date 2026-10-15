@@ -2,7 +2,7 @@
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz/)
 
-当前发布：**v0.7.0**，新增默认关闭的原生车库控制。[更新记录](CHANGELOG.md)
+当前发布：**v0.7.1**，支持离库后关门和三步配置，新车库控制默认关闭。[更新记录](CHANGELOG.md)
 
 `Roborock Plus` 是一个 Home Assistant 自定义集成，基于官方内置 `roborock` 集成演化而来。
 

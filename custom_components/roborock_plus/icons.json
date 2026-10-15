@@ -18,6 +18,18 @@
       },
       "water_shortage": {
         "default": "mdi:water"
+      },
+      "garage_open_confirmed": {
+        "default": "mdi:garage-open"
+      },
+      "garage_closed_confirmed": {
+        "default": "mdi:garage"
+      },
+      "garage_passage_allowed": {
+        "default": "mdi:shield-check"
+      },
+      "garage_problem": {
+        "default": "mdi:garage-alert"
       }
     },
     "button": {
@@ -114,6 +126,9 @@
       },
       "zeo_state": {
         "default": "mdi:information-outline"
+      },
+      "garage_phase": {
+        "default": "mdi:garage-variant"
       }
     },
     "switch": {
@@ -154,6 +169,12 @@
     },
     "set_vacuum_goto_position": {
       "service": "mdi:map-marker"
+    },
+    "request_garage_close": {
+      "service": "mdi:garage"
+    },
+    "reset_garage_control": {
+      "service": "mdi:shield-refresh"
     }
   }
 }

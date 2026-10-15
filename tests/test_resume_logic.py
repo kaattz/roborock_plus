@@ -20,6 +20,14 @@ select_resume_command_from_status = MODULE.select_resume_command_from_status
 select_start_or_resume_command = MODULE.select_start_or_resume_command
 
 
+def test_resume_transport_command_keeps_the_original_task() -> None:
+    assert APP_RESUME_COMMAND == "app_resume"
+    assert select_start_or_resume_command(in_returning=1, in_cleaning=0) == "app_resume"
+    assert select_resume_command_from_status(
+        state="returning_home", in_returning=1, in_cleaning=0
+    ) == "app_resume"
+
+
 def test_select_start_or_resume_command_for_returning() -> None:
     assert (
         select_start_or_resume_command(in_returning=1, in_cleaning=None)

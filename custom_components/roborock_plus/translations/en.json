@@ -107,6 +107,326 @@
       },
       "stuck": {
         "name": "Stuck"
+      },
+      "garage_open_confirmed": {
+        "name": "Garage fully open confirmed",
+        "state_attributes": {
+          "session_id": {
+            "name": "Current task session"
+          },
+          "operation_id": {
+            "name": "Current door operation"
+          },
+          "phase": {
+            "name": "Garage phase",
+            "state": {
+              "disabled": "Disabled",
+              "recovering": "Reconciling saved state",
+              "idle": "Idle",
+              "opening": "Opening door",
+              "awaiting_start": "Waiting for robot movement",
+              "task_open": "Task active, door held open",
+              "outside_closed": "Outside, door closed",
+              "returning": "Returning to dock",
+              "docked_intermission": "Docked during unfinished task",
+              "closing": "Closing door",
+              "waiting_close_permission": "Waiting for household closing permission",
+              "blocked": "Blocked by fault",
+              "manual_hold": "Manual control hold"
+            }
+          },
+          "reason": {
+            "name": "Blocking reason"
+          },
+          "cover_entity_id": {
+            "name": "Controlled door"
+          },
+          "task_door_mode": {
+            "name": "Task door mode",
+            "state": {
+              "hold_open": "Keep open throughout task",
+              "after_exit": "Close after exit, unsupported on current V1"
+            }
+          },
+          "open_quality": {
+            "name": "Open evidence quality",
+            "state": {
+              "confirmed": "Physically confirmed",
+              "estimated": "Estimated, not physically confirmed",
+              "unknown": "Unknown"
+            }
+          },
+          "close_quality": {
+            "name": "Closed evidence quality",
+            "state": {
+              "confirmed": "Physically confirmed",
+              "estimated": "Estimated, not physically confirmed",
+              "unknown": "Unknown"
+            }
+          },
+          "open_source": {
+            "name": "Open evidence source",
+            "state": {
+              "contact": "Selected endpoint contact",
+              "position": "Selected position feedback",
+              "timed": "Selected full-travel timer"
+            }
+          },
+          "close_source": {
+            "name": "Closed evidence source",
+            "state": {
+              "contact": "Selected endpoint contact",
+              "position": "Selected position feedback",
+              "timed": "Selected full-travel timer"
+            }
+          },
+          "open_reason": {
+            "name": "Open evidence reason"
+          },
+          "close_reason": {
+            "name": "Closed evidence reason"
+          }
+        }
+      },
+      "garage_closed_confirmed": {
+        "name": "Garage fully closed confirmed",
+        "state_attributes": {
+          "session_id": {
+            "name": "Current task session"
+          },
+          "operation_id": {
+            "name": "Current door operation"
+          },
+          "phase": {
+            "name": "Garage phase",
+            "state": {
+              "disabled": "Disabled",
+              "recovering": "Reconciling saved state",
+              "idle": "Idle",
+              "opening": "Opening door",
+              "awaiting_start": "Waiting for robot movement",
+              "task_open": "Task active, door held open",
+              "outside_closed": "Outside, door closed",
+              "returning": "Returning to dock",
+              "docked_intermission": "Docked during unfinished task",
+              "closing": "Closing door",
+              "waiting_close_permission": "Waiting for household closing permission",
+              "blocked": "Blocked by fault",
+              "manual_hold": "Manual control hold"
+            }
+          },
+          "reason": {
+            "name": "Blocking reason"
+          },
+          "cover_entity_id": {
+            "name": "Controlled door"
+          },
+          "task_door_mode": {
+            "name": "Task door mode",
+            "state": {
+              "hold_open": "Keep open throughout task",
+              "after_exit": "Close after exit, unsupported on current V1"
+            }
+          },
+          "open_quality": {
+            "name": "Open evidence quality",
+            "state": {
+              "confirmed": "Physically confirmed",
+              "estimated": "Estimated, not physically confirmed",
+              "unknown": "Unknown"
+            }
+          },
+          "close_quality": {
+            "name": "Closed evidence quality",
+            "state": {
+              "confirmed": "Physically confirmed",
+              "estimated": "Estimated, not physically confirmed",
+              "unknown": "Unknown"
+            }
+          },
+          "open_source": {
+            "name": "Open evidence source",
+            "state": {
+              "contact": "Selected endpoint contact",
+              "position": "Selected position feedback",
+              "timed": "Selected full-travel timer"
+            }
+          },
+          "close_source": {
+            "name": "Closed evidence source",
+            "state": {
+              "contact": "Selected endpoint contact",
+              "position": "Selected position feedback",
+              "timed": "Selected full-travel timer"
+            }
+          },
+          "open_reason": {
+            "name": "Open evidence reason"
+          },
+          "close_reason": {
+            "name": "Closed evidence reason"
+          }
+        }
+      },
+      "garage_passage_allowed": {
+        "name": "Garage passage allowed",
+        "state_attributes": {
+          "session_id": {
+            "name": "Current task session"
+          },
+          "operation_id": {
+            "name": "Current door operation"
+          },
+          "phase": {
+            "name": "Garage phase",
+            "state": {
+              "disabled": "Disabled",
+              "recovering": "Reconciling saved state",
+              "idle": "Idle",
+              "opening": "Opening door",
+              "awaiting_start": "Waiting for robot movement",
+              "task_open": "Task active, door held open",
+              "outside_closed": "Outside, door closed",
+              "returning": "Returning to dock",
+              "docked_intermission": "Docked during unfinished task",
+              "closing": "Closing door",
+              "waiting_close_permission": "Waiting for household closing permission",
+              "blocked": "Blocked by fault",
+              "manual_hold": "Manual control hold"
+            }
+          },
+          "reason": {
+            "name": "Blocking reason"
+          },
+          "cover_entity_id": {
+            "name": "Controlled door"
+          },
+          "task_door_mode": {
+            "name": "Task door mode",
+            "state": {
+              "hold_open": "Keep open throughout task",
+              "after_exit": "Close after exit, unsupported on current V1"
+            }
+          },
+          "open_quality": {
+            "name": "Open evidence quality",
+            "state": {
+              "confirmed": "Physically confirmed",
+              "estimated": "Estimated, not physically confirmed",
+              "unknown": "Unknown"
+            }
+          },
+          "close_quality": {
+            "name": "Closed evidence quality",
+            "state": {
+              "confirmed": "Physically confirmed",
+              "estimated": "Estimated, not physically confirmed",
+              "unknown": "Unknown"
+            }
+          },
+          "open_source": {
+            "name": "Open evidence source",
+            "state": {
+              "contact": "Selected endpoint contact",
+              "position": "Selected position feedback",
+              "timed": "Selected full-travel timer"
+            }
+          },
+          "close_source": {
+            "name": "Closed evidence source",
+            "state": {
+              "contact": "Selected endpoint contact",
+              "position": "Selected position feedback",
+              "timed": "Selected full-travel timer"
+            }
+          },
+          "open_reason": {
+            "name": "Open evidence reason"
+          },
+          "close_reason": {
+            "name": "Closed evidence reason"
+          }
+        }
+      },
+      "garage_problem": {
+        "name": "Garage control problem",
+        "state_attributes": {
+          "session_id": {
+            "name": "Current task session"
+          },
+          "operation_id": {
+            "name": "Current door operation"
+          },
+          "phase": {
+            "name": "Garage phase",
+            "state": {
+              "disabled": "Disabled",
+              "recovering": "Reconciling saved state",
+              "idle": "Idle",
+              "opening": "Opening door",
+              "awaiting_start": "Waiting for robot movement",
+              "task_open": "Task active, door held open",
+              "outside_closed": "Outside, door closed",
+              "returning": "Returning to dock",
+              "docked_intermission": "Docked during unfinished task",
+              "closing": "Closing door",
+              "waiting_close_permission": "Waiting for household closing permission",
+              "blocked": "Blocked by fault",
+              "manual_hold": "Manual control hold"
+            }
+          },
+          "reason": {
+            "name": "Blocking reason"
+          },
+          "cover_entity_id": {
+            "name": "Controlled door"
+          },
+          "task_door_mode": {
+            "name": "Task door mode",
+            "state": {
+              "hold_open": "Keep open throughout task",
+              "after_exit": "Close after exit, unsupported on current V1"
+            }
+          },
+          "open_quality": {
+            "name": "Open evidence quality",
+            "state": {
+              "confirmed": "Physically confirmed",
+              "estimated": "Estimated, not physically confirmed",
+              "unknown": "Unknown"
+            }
+          },
+          "close_quality": {
+            "name": "Closed evidence quality",
+            "state": {
+              "confirmed": "Physically confirmed",
+              "estimated": "Estimated, not physically confirmed",
+              "unknown": "Unknown"
+            }
+          },
+          "open_source": {
+            "name": "Open evidence source",
+            "state": {
+              "contact": "Selected endpoint contact",
+              "position": "Selected position feedback",
+              "timed": "Selected full-travel timer"
+            }
+          },
+          "close_source": {
+            "name": "Closed evidence source",
+            "state": {
+              "contact": "Selected endpoint contact",
+              "position": "Selected position feedback",
+              "timed": "Selected full-travel timer"
+            }
+          },
+          "open_reason": {
+            "name": "Open evidence reason"
+          },
+          "close_reason": {
+            "name": "Closed evidence reason"
+          }
+        }
       }
     },
     "button": {
@@ -604,6 +924,101 @@
           "washing": "Washing",
           "weighing": "Weighing"
         }
+      },
+      "garage_phase": {
+        "name": "Garage control phase",
+        "state": {
+          "disabled": "Disabled",
+          "recovering": "Reconciling saved state",
+          "idle": "Idle",
+          "opening": "Opening door",
+          "awaiting_start": "Waiting for robot movement",
+          "task_open": "Task active, door held open",
+          "outside_closed": "Outside, door closed",
+          "returning": "Returning to dock",
+          "docked_intermission": "Docked during unfinished task",
+          "closing": "Closing door",
+          "waiting_close_permission": "Waiting for household closing permission",
+          "blocked": "Blocked by fault",
+          "manual_hold": "Manual control hold"
+        },
+        "state_attributes": {
+          "session_id": {
+            "name": "Current task session"
+          },
+          "operation_id": {
+            "name": "Current door operation"
+          },
+          "phase": {
+            "name": "Garage phase",
+            "state": {
+              "disabled": "Disabled",
+              "recovering": "Reconciling saved state",
+              "idle": "Idle",
+              "opening": "Opening door",
+              "awaiting_start": "Waiting for robot movement",
+              "task_open": "Task active, door held open",
+              "outside_closed": "Outside, door closed",
+              "returning": "Returning to dock",
+              "docked_intermission": "Docked during unfinished task",
+              "closing": "Closing door",
+              "waiting_close_permission": "Waiting for household closing permission",
+              "blocked": "Blocked by fault",
+              "manual_hold": "Manual control hold"
+            }
+          },
+          "reason": {
+            "name": "Blocking reason"
+          },
+          "cover_entity_id": {
+            "name": "Controlled door"
+          },
+          "task_door_mode": {
+            "name": "Task door mode",
+            "state": {
+              "hold_open": "Keep open throughout task",
+              "after_exit": "Close after exit, unsupported on current V1"
+            }
+          },
+          "open_quality": {
+            "name": "Open evidence quality",
+            "state": {
+              "confirmed": "Physically confirmed",
+              "estimated": "Estimated, not physically confirmed",
+              "unknown": "Unknown"
+            }
+          },
+          "close_quality": {
+            "name": "Closed evidence quality",
+            "state": {
+              "confirmed": "Physically confirmed",
+              "estimated": "Estimated, not physically confirmed",
+              "unknown": "Unknown"
+            }
+          },
+          "open_source": {
+            "name": "Open evidence source",
+            "state": {
+              "contact": "Selected endpoint contact",
+              "position": "Selected position feedback",
+              "timed": "Selected full-travel timer"
+            }
+          },
+          "close_source": {
+            "name": "Closed evidence source",
+            "state": {
+              "contact": "Selected endpoint contact",
+              "position": "Selected position feedback",
+              "timed": "Selected full-travel timer"
+            }
+          },
+          "open_reason": {
+            "name": "Open evidence reason"
+          },
+          "close_reason": {
+            "name": "Closed evidence reason"
+          }
+        }
       }
     },
     "switch": {
@@ -722,6 +1137,9 @@
     },
     "update_options_failed": {
       "message": "Failed to update Roborock options"
+    },
+    "garage_control_error": {
+      "message": "Garage control rejected the operation: {reason}"
     }
   },
   "issues": {
@@ -761,7 +1179,8 @@
           "v1_stuck_window": "Stuck detection window",
           "vacuum_position": "Vacuum position",
           "virtual_walls": "Virtual walls",
-          "zones": "Zones"
+          "zones": "Zones",
+          "do_configure_garage": "Continue to per-robot garage control"
         },
         "data_description": {
           "charger": "Show the charger on the map.",
@@ -791,14 +1210,102 @@
           "v1_stuck_window": "How many seconds the vacuum may stay within the movement tolerance before it is reported stuck. Default 120. Detection needs several samples inside this window, so it also depends on the danger-zone polling interval.",
           "vacuum_position": "Show the vacuum position on the map.",
           "virtual_walls": "Show virtual walls on the map.",
-          "zones": "Show zones on the map."
+          "zones": "Show zones on the map.",
+          "do_configure_garage": "Keep this page’s options and continue to select this entry’s V1 robot. The old guard is not migrated automatically."
         },
         "description": "Configure local status polling, garage door guard, and map drawing options.\n\nCurrent status polling interval: {current_interval} seconds.\n\nDanger-zone position polling interval: {current_map_interval} seconds. 0 selects this automatically from the configured server.\n\nGarage door guard only affects clean commands started from Home Assistant.",
         "error": {
           "garage_guard_missing_config": "Select a garage door cover, or disable garage door guard."
         },
         "title": "Roborock Plus options"
+      },
+      "garage_select": {
+        "title": "Select garage robot",
+        "description": "Select a V1 robot from this integration entry explicitly. Each door has one controller.",
+        "data": {
+          "duid": "Robot"
+        },
+        "data_description": {
+          "duid": "Bind to the stable device duid rather than a mutable entity name."
+        }
+      },
+      "garage": {
+        "title": "Garage control",
+        "description": "Configure {robot}. New configurations are disabled drafts. Before enabling, enter all safety timings, choose evidence explicitly and confirm handover. Offline sources can be saved, but do not authorize runtime passage.",
+        "data": {
+          "enabled": "Enable garage control",
+          "cover_entity_id": "Garage door cover",
+          "task_door_mode": "Door mode during a task",
+          "open_source": "Open endpoint evidence",
+          "close_source": "Closed endpoint evidence",
+          "open_contact": "Fully open contact",
+          "close_contact": "Fully closed contact",
+          "open_contact_state": "Fully open contact active state",
+          "close_contact_state": "Fully closed contact active state",
+          "position_kind": "Position feedback kind",
+          "open_position": "Fully open position threshold",
+          "close_position": "Fully closed position threshold",
+          "open_travel_seconds": "Full opening travel time",
+          "close_travel_seconds": "Full closing travel time",
+          "travel_margin_seconds": "Travel margin",
+          "contact_settle_seconds": "Contact stabilization time",
+          "position_settle_seconds": "Position stabilization time",
+          "operation_timeout_seconds": "Door operation timeout",
+          "dock_settle_seconds": "Dock stabilization time",
+          "allow_estimated": "Accept estimated door endpoints",
+          "close_permission_entity": "Household permission to close",
+          "handover_confirmed": "Confirm control handover"
+        },
+        "data_description": {
+          "enabled": "Enable only after the binding, hardware calibration and handover are complete. Disabled bindings are saved as drafts.",
+          "cover_entity_id": "Select the cover that supports opening and closing. Support for setting position does not prove physical position feedback.",
+          "task_door_mode": "Keep the door open throughout the task, including mop washing and charging. Closing after exit is unsupported for current V1 robots.",
+          "open_source": "Choose explicitly: a contact endpoint, position feedback, or timing. An unavailable selected source never falls back to another source.",
+          "close_source": "Choose independently from the open endpoint. Not closed does not mean fully open.",
+          "open_contact": "Select a binary sensor for the open endpoint. Device class does not determine whether this sensor is usable.",
+          "close_contact": "Select a separate binary sensor for the closed endpoint. Both endpoints cannot use the same entity.",
+          "open_contact_state": "Choose on or off based on an actual endpoint test; polarity is never inferred.",
+          "close_contact_state": "Choose on or off based on an actual endpoint test; polarity is never inferred.",
+          "position_kind": "Measured means verified physical feedback. Estimated includes target echoes and software estimates, and requires accepting estimation risk.",
+          "open_position": "For position evidence: enter a tested threshold from 0 to 100, above the closed threshold. Verify enough clearance for the robot; 95 is only an old setup suggestion.",
+          "close_position": "For position evidence: enter a tested threshold from 0 to 100, below the open threshold. Verify it against physical closure; 5 is only an old setup suggestion.",
+          "open_travel_seconds": "Enter the measured full travel time in seconds (1–600). A timed or estimated source waits the full journey; there is no universal default.",
+          "close_travel_seconds": "Enter the measured full travel time in seconds (1–600). Opening and closing may take different times.",
+          "travel_margin_seconds": "Confirm an additional margin of 0–120 seconds. This is added once to the configured travel time.",
+          "contact_settle_seconds": "Confirm how long a contact endpoint must stay active (0–60 seconds). Stabilization does not turn an unreliable source into reliable feedback.",
+          "position_settle_seconds": "Confirm how long position feedback must remain at its endpoint (0–60 seconds). A target echo remains estimated regardless of stabilization.",
+          "operation_timeout_seconds": "Enter 1–1800 seconds, greater than the longest travel time plus margin and stabilization. A timeout blocks the flow and never authorizes passage.",
+          "dock_settle_seconds": "Enter 1–300 seconds. At least two successful robot state observations must span this window; old repeated samples do not count.",
+          "allow_estimated": "Timing cannot detect a jam, motor slip, or obstruction. Accept explicitly to use timed or estimated position evidence; estimates never become confirmed endpoints.",
+          "close_permission_entity": "Optional input_boolean or binary_sensor, read only. Only on allows closing; off, unknown and unavailable deny it. Leaving this empty adds no household restriction.",
+          "handover_confirmed": "I calibrated endpoints/timing, checked that no task needs resuming and that the robot is safely docked, disabled old active door-control automations, and routed automatic closing through request_garage_close. Other robots sharing the legacy guard must be handled first."
+        }
       }
+    },
+    "error": {
+      "invalid_binding": "The garage binding must be a configuration object.",
+      "invalid_boolean_value": "Use a true or false value for the safety switch.",
+      "invalid_numeric_value": "Enter a finite number within the field range; booleans and numeric text are not accepted.",
+      "missing_safety_configuration": "Complete all safety timings, sources and required endpoint fields before enabling.",
+      "invalid_evidence_source": "Select contact, position, or timed explicitly for each endpoint.",
+      "invalid_contact_configuration": "Select the endpoint binary sensor and its active on/off polarity.",
+      "duplicate_endpoint": "The open and closed endpoints must use different binary sensors.",
+      "invalid_position_configuration": "Choose whether position feedback is measured or estimated.",
+      "invalid_position_thresholds": "Position thresholds must satisfy 0 ≤ closed < open ≤ 100.",
+      "estimated_risk_not_accepted": "Timed or estimated feedback requires explicitly accepting its risk.",
+      "operation_timeout_too_short": "The timeout must exceed travel time plus margin and stabilization.",
+      "invalid_entity_reference": "Select an entity from the allowed domain.",
+      "unsupported_robot": "Only a V1 robot from this integration entry can be selected.",
+      "unsupported_cover": "The selected cover must support both opening and closing.",
+      "unsupported_return_interlock": "Closing after exit is not supported by current V1 return interlocks. Use keep open.",
+      "invalid_task_door_mode": "Select a supported task door mode.",
+      "handover_required": "Confirm calibration and migration from old door-control automations before enabling.",
+      "duplicate_binding": "This cover is already controlled by another robot or integration entry.",
+      "legacy_guard_conflict": "Another robot still uses the old global guard for this door. Resolve its protection before handover.",
+      "unsupported_configuration_version": "The saved garage configuration version is unsupported."
+    },
+    "abort": {
+      "no_supported_v1": "No loaded V1 robot is available in this entry. Restore the integration connection first."
     }
   },
   "selector": {
@@ -810,6 +1317,31 @@
         "eu": "EU",
         "ru": "RU",
         "us": "US"
+      }
+    },
+    "garage_task_mode": {
+      "options": {
+        "hold_open": "Keep open throughout task",
+        "after_exit": "Close after exit (unsupported on current V1)"
+      }
+    },
+    "garage_evidence_source": {
+      "options": {
+        "contact": "Endpoint contact",
+        "position": "Position feedback",
+        "timed": "Timed estimate"
+      }
+    },
+    "garage_contact_state": {
+      "options": {
+        "on": "Endpoint active when on",
+        "off": "Endpoint active when off"
+      }
+    },
+    "garage_position_kind": {
+      "options": {
+        "measured": "Measured physical feedback",
+        "estimated": "Estimate or target echo"
       }
     }
   },
@@ -899,6 +1431,14 @@
     "get_safe_zone_editor_context": {
       "name": "Get danger zone editor context",
       "description": "Retrieves map image, calibration, current position, and saved danger zone for the editor."
+    },
+    "request_garage_close": {
+      "name": "Request guarded garage closing",
+      "description": "Request closing after rechecking the task, stable dock, trusted position, household permission and manual hold. There is no force bypass."
+    },
+    "reset_garage_control": {
+      "name": "Recheck garage control",
+      "description": "Reobserve and clear recoverable faults or manual hold without moving the door or robot or erasing an active task. The next explicit request still passes all guards."
     }
   }
 }

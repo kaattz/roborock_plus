@@ -1,5 +1,20 @@
 # 扫地机柜门状态机
 
+## legacy 状态与迁移入口
+
+这里是**旧全局 guard + 家庭 YAML 状态机**的历史实现和验证材料。
+新车库控制在集成选项中显式按 V1 机器人绑定，默认 `hold_open`：整个任务（包括回洗/补电）
+不主动关门，标准流程随 HACS 集成本体更新，不需要运行本目录的构建或复制 JSON/YAML。
+新配置不会自动接管旧门。当前真实 V1 不开放下文 B 阶段“离开后关门”的 `after_exit` 模式。
+
+迁移步骤、来源标定和硬件边界见 [主说明](../../README.md#原生车库控制集成管流程自动化管家庭策略)，
+家庭自动化交接见 [automations/README.md](../../automations/README.md#原生车库控制与旧自动化交接)。
+启用前核对并停用同门的旧状态机及 `*_plus` 主动流程；多机旧 guard 的其他保护关系需先解决。
+无人关门等家庭策略改用 `request_garage_close`，人工操作保留；`reset_garage_control` 只复核、不动设备。
+
+以下内容继续保留供未迁移配置维护和仿真对照；本次没有改写或删除旧 YAML/JSON，
+也不会自动把仓库内容写入正在运行的 Home Assistant。
+
 自动化本体保存在 Home Assistant 里（`automation.sao_di_ji_ju_men_zhuang_tai_ji`，
 `automations.yaml` 中 id `1791392186966`）。这个目录是它的**可复现来源和验证**，
 因为 HA 里的那份不在版本控制里，改坏了没有历史可查。

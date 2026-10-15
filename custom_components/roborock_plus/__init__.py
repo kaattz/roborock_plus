@@ -54,6 +54,7 @@ from .models import get_device_info
 from .panel import async_setup_panel
 from .roborock_storage import CacheStore, async_cleanup_map_storage
 from .services import async_setup_services
+from .garage_runtime import async_setup_garages, INITIALIZED_KEY
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 SCAN_INTERVAL = timedelta(seconds=30)
@@ -190,6 +191,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: RoborockConfigEntry) -> 
     entry.runtime_data = RoborockCoordinators(
         v1_coords, a01_coords, b01_q7_coords, b01_q10_coords
     )
+
+    await async_setup_garages(hass, entry)
+    hass.data.setdefault('roborock_plus_options_snapshot', {})[entry.entry_id] = {
+        key: value for key, value in entry.options.items() if key != INITIALIZED_KEY
+    }
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -346,6 +353,16 @@ async def setup_coordinator(
         raise
     else:
         return coordinator
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: RoborockConfigEntry) -> None:
+    """Apply user options; journal-initialization metadata alone needs no reload."""
+    current = {key: value for key, value in entry.options.items() if key != INITIALIZED_KEY}
+    snapshots = hass.data.setdefault('roborock_plus_options_snapshot', {})
+    if snapshots.get(entry.entry_id) == current:
+        return
+    snapshots[entry.entry_id] = current
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: RoborockConfigEntry) -> bool:

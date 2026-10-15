@@ -24,7 +24,7 @@ from homeassistant.config_entries import (
     SOURCE_REAUTH,
     ConfigFlow,
     ConfigFlowResult,
-    OptionsFlowWithReload,
+    OptionsFlow,
 )
 from homeassistant.const import CONF_USERNAME
 from homeassistant.core import callback
@@ -342,8 +342,8 @@ class RoborockFlowHandler(ConfigFlow, domain=DOMAIN):
         return RoborockOptionsFlowHandler(config_entry)
 
 
-class RoborockOptionsFlowHandler(OptionsFlowWithReload):
-    """Handle an option flow for Roborock."""
+class RoborockOptionsFlowHandler(OptionsFlow):
+    """Handle options; the config-entry update listener owns reloading."""
 
     def __init__(self, config_entry: RoborockConfigEntry) -> None:
         """Initialize options flow."""

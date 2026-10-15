@@ -100,6 +100,7 @@ def _options_handler(options=None, robots=("robot-a",)):
     class Marker:
         def __init__(self, key, **kwargs):
             self.key = key
+            self.schema = key
             self.default = kwargs.get("default")
     class Base:
         def async_show_form(self, **kwargs):
@@ -172,6 +173,21 @@ def _valid_garage():
     }
 
 
+def _submit_garage(handler, values):
+    """Follow the real native steps using only fields visible on each page."""
+    page = asyncio.run(handler.async_step_garage())
+    for _ in range(3):
+        if page["type"] != "form":
+            return page
+        visible = {marker.key for marker in page["data_schema"]}
+        submitted = {key: value for key, value in values.items() if key in visible}
+        method = getattr(handler, f"async_step_{page['step_id']}")
+        page = asyncio.run(method(submitted))
+        if page.get("errors"):
+            return page
+    return page
+
+
 def test_native_garage_entry_preserves_combined_options_and_selects_current_v1():
     handler = _options_handler()
     value = _normal_options()
@@ -183,7 +199,7 @@ def test_native_garage_entry_preserves_combined_options_and_selects_current_v1()
     assert "do_configure_garage" not in handler.options["drawables"]
     result = asyncio.run(handler.async_step_garage_select({"duid": "robot-a"}))
     assert result["step_id"] == "garage"
-    result = asyncio.run(handler.async_step_garage(_valid_garage()))
+    result = _submit_garage(handler, _valid_garage())
     assert result["type"] == "create_entry"
     assert result["data"]["garage_control_version"] == 1
     assert result["data"]["garage_bindings"]["robot-a"]["cover_entity_id"] == "cover.door"
@@ -201,34 +217,58 @@ def test_new_native_binding_has_no_implicit_sources_or_safety_durations():
     result = asyncio.run(handler.async_step_garage_select({"duid": "robot-a"}))
     assert result["step_id"] == "garage"
     schema = {marker.key: marker for marker in result["data_schema"]}
-    for field in ("open_source", "close_source", "open_contact_state", "close_contact_state", "open_travel_seconds", "close_travel_seconds", "travel_margin_seconds", "contact_settle_seconds", "position_settle_seconds", "operation_timeout_seconds", "dock_settle_seconds"):
+    assert len(schema) <= 6
+    for field in ("open_source", "close_source"):
         assert schema[field].default is None, field
-    assert schema["handover_confirmed"].default is False
     assert schema["enabled"].default is False
+    assert schema["task_door_mode"].default == "hold_open"
 
 
 def test_incomplete_draft_saves_but_cannot_be_enabled():
     handler = _options_handler()
     asyncio.run(handler.async_step_garage_select({"duid": "robot-a"}))
-    result = asyncio.run(handler.async_step_garage({"enabled": False, "cover_entity_id": "cover.door"}))
+    result = _submit_garage(handler, {"enabled": False, "cover_entity_id": "cover.door"})
     assert result["data"]["garage_bindings"]["robot-a"]["enabled"] is False
-    result = asyncio.run(handler.async_step_garage({"enabled": True, "cover_entity_id": "cover.door"}))
+    result = _submit_garage(handler, {"enabled": True, "cover_entity_id": "cover.door"})
     assert result["type"] == "form"
     assert result["errors"]
 
 
-def test_native_ui_rejects_unsupported_duid_position_capability_and_after_exit():
+def test_native_ui_accepts_after_exit_and_rejects_unsupported_duid_and_cover():
     handler = _options_handler()
     result = asyncio.run(handler.async_step_garage_select({"duid": "q10"}))
     assert result["errors"]["base"] == "unsupported_robot"
     asyncio.run(handler.async_step_garage_select({"duid": "robot-a"}))
     value = _valid_garage()
     value["task_door_mode"] = "after_exit"
-    result = asyncio.run(handler.async_step_garage(value))
-    assert "unsupported_return_interlock" in result["errors"].values()
+    result = _submit_garage(handler, value)
+    assert result["type"] == "create_entry"
+    assert result["data"]["garage_bindings"]["robot-a"]["task_door_mode"] == "after_exit"
     handler.hass.states.get = lambda _: SimpleNamespace(state="open", attributes={"supported_features": 4})
-    result = asyncio.run(handler.async_step_garage(_valid_garage()))
+    result = _submit_garage(handler, _valid_garage())
     assert "unsupported_cover" in result["errors"].values()
+
+
+def test_after_exit_uses_existing_form_without_an_unsafe_return_switch():
+    handler = _options_handler()
+    page = asyncio.run(handler.async_step_garage_select({"duid": "robot-a"}))
+    fields = {marker.key for marker in page["data_schema"]}
+    assert fields == {"enabled", "cover_entity_id", "task_door_mode", "open_source", "close_source", "close_permission_entity"}
+
+
+def test_after_exit_description_requires_return_pause_and_hardware_acceptance():
+    for path in [CONFIG_FLOW.parent / "strings.json", TRANSLATIONS_DIR / "en.json", TRANSLATIONS_DIR / "zh-Hans.json"]:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        description = data["options"]["step"]["garage"]["data_description"]["task_door_mode"]
+        label = data["selector"]["garage_task_mode"]["options"]["after_exit"]
+        if path.name == "zh-Hans.json":
+            assert "暂停" in description and "确认" in description and "实测" in description
+            assert "不支持" not in label
+        else:
+            assert "pause" in description.lower() and "confirm" in description.lower()
+            assert "hardware" in description.lower()
+            assert "unsupported" not in label.lower()
+        assert "app_resume" in description
 
 
 def test_native_ui_rejects_same_door_cross_entry_and_other_legacy_robot():
@@ -236,11 +276,11 @@ def test_native_ui_rejects_same_door_cross_entry_and_other_legacy_robot():
     asyncio.run(handler.async_step_garage_select({"duid": "robot-a"}))
     other = SimpleNamespace(entry_id="other", options={"garage_bindings": {"other-robot": _valid_garage()}}, runtime_data=SimpleNamespace(v1=[]))
     handler.hass.config_entries.async_entries = lambda _: [handler.config_entry, other]
-    result = asyncio.run(handler.async_step_garage(_valid_garage()))
+    result = _submit_garage(handler, _valid_garage())
     assert "duplicate_binding" in result["errors"].values()
     handler.options.update({"garage_guard_enabled": True, "garage_door_entity_id": "cover.door"})
     handler.hass.config_entries.async_entries = lambda _: [handler.config_entry]
-    result = asyncio.run(handler.async_step_garage(_valid_garage()))
+    result = _submit_garage(handler, _valid_garage())
     assert "legacy_guard_conflict" in result["errors"].values()
 
 
@@ -258,11 +298,129 @@ def test_legacy_options_edit_cannot_steal_a_new_binding_door():
 def test_safety_configuration_fields_and_errors_are_translated():
     for path in [CONFIG_FLOW.parent / "strings.json", TRANSLATIONS_DIR / "en.json", TRANSLATIONS_DIR / "zh-Hans.json"]:
         data = json.loads(path.read_text(encoding="utf-8"))["options"]
-        step = data["step"]["garage"]
+        steps = [data["step"][key] for key in ("garage", "garage_feedback", "garage_timing")]
+        labels = {key: value for step in steps for key, value in step["data"].items()}
+        descriptions = {key: value for step in steps for key, value in step["data_description"].items()}
         for key in (*_valid_garage(), "open_contact", "close_contact", "open_contact_state", "close_contact_state", "position_kind", "open_position", "close_position", "close_permission_entity"):
-            assert step["data"].get(key), (path.name, key)
-            assert step["data_description"].get(key), (path.name, key)
+            assert labels.get(key), (path.name, key)
+            assert descriptions.get(key), (path.name, key)
         assert data["step"]["drawables"]["data"]["do_configure_garage"]
         assert data["step"]["garage_select"]["data"]["duid"]
         assert data["error"]["unsupported_return_interlock"]
         assert data["error"]["legacy_guard_conflict"]
+
+
+def _page_keys(page):
+    return {marker.key for marker in page["data_schema"]}
+
+
+def _garage_basics(**changes):
+    values = {key: value for key, value in _valid_garage().items() if key in {
+        "enabled", "cover_entity_id", "task_door_mode", "open_source", "close_source",
+    }}
+    values.update(changes)
+    return values
+
+
+def test_timed_source_skips_feedback_and_only_shows_estimate_timing():
+    handler = _options_handler()
+    asyncio.run(handler.async_step_garage_select({"duid": "robot-a"}))
+    page = asyncio.run(handler.async_step_garage(_garage_basics()))
+    assert page["step_id"] == "garage_timing"
+    assert _page_keys(page) == {"open_travel_seconds", "close_travel_seconds", "travel_margin_seconds", "operation_timeout_seconds", "dock_settle_seconds", "allow_estimated", "handover_confirmed"}
+    for marker in page["data_schema"]:
+        if marker.key.endswith("seconds"):
+            assert marker.default is None
+    values = {key: value for key, value in _valid_garage().items() if key in _page_keys(page)}
+    result = asyncio.run(handler.async_step_garage_timing(values))
+    saved = result["data"]["garage_bindings"]["robot-a"]
+    assert "contact_settle_seconds" not in saved
+    assert "position_settle_seconds" not in saved
+
+
+def test_contact_source_requires_polarity_then_only_contact_stabilization():
+    handler = _options_handler()
+    asyncio.run(handler.async_step_garage_select({"duid": "robot-a"}))
+    page = asyncio.run(handler.async_step_garage(_garage_basics(open_source="contact", close_source="contact")))
+    assert page["step_id"] == "garage_feedback"
+    assert _page_keys(page) == {"open_contact", "close_contact", "open_contact_state", "close_contact_state"}
+    assert all(marker.default is None for marker in page["data_schema"])
+    missing = asyncio.run(handler.async_step_garage_feedback({}))
+    assert missing["errors"]
+    assert missing["step_id"] == "garage_feedback"
+    page = asyncio.run(handler.async_step_garage_feedback({"open_contact": "binary_sensor.open", "close_contact": "binary_sensor.closed", "open_contact_state": "off", "close_contact_state": "on"}))
+    assert page["step_id"] == "garage_timing"
+    assert _page_keys(page) == {"contact_settle_seconds", "operation_timeout_seconds", "dock_settle_seconds", "handover_confirmed"}
+
+
+@pytest.mark.parametrize("kind,extra", [("measured", set()), ("estimated", {"open_travel_seconds", "close_travel_seconds", "travel_margin_seconds", "allow_estimated"})])
+def test_position_feedback_kind_controls_visible_timing(kind, extra):
+    handler = _options_handler()
+    asyncio.run(handler.async_step_garage_select({"duid": "robot-a"}))
+    page = asyncio.run(handler.async_step_garage(_garage_basics(open_source="position", close_source="position")))
+    assert _page_keys(page) == {"position_kind", "open_position", "close_position"}
+    page = asyncio.run(handler.async_step_garage_feedback({"position_kind": kind, "open_position": 95, "close_position": 5}))
+    assert _page_keys(page) == {"position_settle_seconds", "operation_timeout_seconds", "dock_settle_seconds", "handover_confirmed"} | extra
+
+
+def test_source_switch_and_reentry_preserve_inactive_hardware_values():
+    original = _valid_garage()
+    handler = _options_handler({"garage_control_version": 1, "garage_bindings": {"robot-a": original}})
+    asyncio.run(handler.async_step_garage_select({"duid": "robot-a"}))
+    contact_values = {
+        **_garage_basics(open_source="contact", close_source="contact"),
+        "open_contact": "binary_sensor.open", "close_contact": "binary_sensor.closed",
+        "open_contact_state": "off", "close_contact_state": "on", "contact_settle_seconds": 2,
+    }
+    result = _submit_garage(handler, contact_values)
+    saved = result["data"]
+    changed = saved["garage_bindings"]["robot-a"]
+    assert changed["open_travel_seconds"] == original["open_travel_seconds"]
+    assert changed["close_travel_seconds"] == original["close_travel_seconds"]
+    assert changed["position_settle_seconds"] == original["position_settle_seconds"]
+    again = _options_handler(saved)
+    asyncio.run(again.async_step_garage_select({"duid": "robot-a"}))
+    page = asyncio.run(again.async_step_garage(_garage_basics(open_source="contact", close_source="contact")))
+    defaults = {marker.key: marker.default for marker in page["data_schema"]}
+    assert defaults["open_contact_state"] == "off"
+    result = _submit_garage(again, _garage_basics())
+    restored = result["data"]["garage_bindings"]["robot-a"]
+    assert restored["open_contact"] == "binary_sensor.open"
+    assert restored["open_contact_state"] == "off"
+    assert restored["contact_settle_seconds"] == 2
+
+
+@pytest.mark.parametrize("field,invalid,corrected,step", [
+    ("position_settle_seconds", float("nan"), 2, "garage_timing"),
+    ("open_contact_state", "closed", "off", "garage_feedback"),
+])
+def test_invalid_retained_hidden_value_is_visible_and_can_be_corrected(field, invalid, corrected, step):
+    original = {**_valid_garage(), field: invalid}
+    handler = _options_handler({"garage_control_version": 1, "garage_bindings": {"robot-a": original}})
+    asyncio.run(handler.async_step_garage_select({"duid": "robot-a"}))
+    page = asyncio.run(handler.async_step_garage(_garage_basics()))
+    assert page["step_id"] == step
+    assert page["errors"].get(field)
+    assert field in _page_keys(page)
+    page = asyncio.run(getattr(handler, f"async_step_{step}")({field: corrected}))
+    if page["type"] == "form":
+        page = asyncio.run(handler.async_step_garage_timing({}))
+    assert page["type"] == "create_entry"
+    assert page["data"]["garage_bindings"]["robot-a"][field] == corrected
+
+
+@pytest.mark.parametrize("field,invalid,reason", [
+    ("cover_entity_id", "switch.wrong", "invalid_entity_reference"),
+    ("open_source", "auto", "invalid_evidence_source"),
+    ("task_door_mode", "unsafe_mode", "invalid_task_door_mode"),
+    ("close_permission_entity", "sensor.wrong", "invalid_entity_reference"),
+])
+def test_disabled_native_draft_rejects_supplied_invalid_fields_without_discarding_sources(field, invalid, reason):
+    handler = _options_handler()
+    asyncio.run(handler.async_step_garage_select({"duid": "robot-a"}))
+    draft = {**_garage_basics(enabled=False), field: invalid}
+    page = asyncio.run(handler.async_step_garage(draft))
+    assert page["type"] == "form"
+    assert page["errors"][field] == reason
+    assert handler._garage_values()["open_source"] == draft["open_source"]
+    assert handler._garage_values()["close_source"] == "timed"

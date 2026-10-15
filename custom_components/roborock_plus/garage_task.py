@@ -138,6 +138,8 @@ class RobotObservation:
     fresh: bool = True
     sample_id: Any = None
     sample_utc: float | None = None
+    outside_danger_zone: bool | None = None
+    position_sample_id: Any = None
 
 
 class GarageTaskError(ValueError):
@@ -372,6 +374,24 @@ class GarageTaskSession:
         self._dock_since, self._dock_samples, self._dock_stable = None, 0, False
         self._transit_idle_since, self._transit_idle_samples = None, 0
         self.reason = "task_end_unconfirmed" if self.active else "session_recovery_required"
+
+    def matches_current_records(self, summary: Any, utc: float) -> bool:
+        """Check against the durable pre-send baseline, not a new pause snapshot."""
+        if not (self.active and self.started and not self._cancel_requested and not self._correlation_invalid):
+            return False
+        try:
+            records, count, detail = _baseline(summary)
+        except GarageTaskError:
+            return False
+        unchanged = (records == self._baseline_records and count == self._baseline_clean_count
+                     and detail == self._baseline_record)
+        return unchanged or self.matches_current_completion(summary, utc)
+
+    def matches_current_completion(self, summary: Any, utc: float) -> bool:
+        """Allow a delayed successful record for this task, never another task."""
+        return bool(self.active and self.started and self.task_kind == "clean"
+                    and not self._cancel_requested and not self._correlation_invalid
+                    and self._matching_completion(summary, utc))
 
     def _matching_completion(self, summary: Any, utc: float) -> bool:
         if not self.started or self._first_clean_utc is None or self._sent_utc is None:

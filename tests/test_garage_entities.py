@@ -138,6 +138,17 @@ def test_phase_attributes_explain_current_session_operation_and_evidence(entitie
     assert attrs["task_door_mode"] == "hold_open"
 
 
+@pytest.mark.parametrize("phase", ["pausing_return", "return_opening", "resuming_return"])
+def test_return_interlock_phases_are_native_enum_values(entities, phase):
+    sensor = entities.build_garage_sensor_entities([coordinator(runtime=runtime(phase=phase))])[0]
+    assert sensor.native_value == phase
+    assert phase in sensor._attr_options
+    for name in ("strings.json", "translations/en.json", "translations/zh-Hans.json"):
+        data = json.loads((COMPONENT / name).read_text(encoding="utf-8"))
+        assert data["entity"]["sensor"]["garage_phase"]["state"][phase]
+        assert data["entity"]["sensor"]["garage_phase"]["state_attributes"]["phase"]["state"][phase]
+
+
 def test_entity_listener_writes_state_and_is_removed_on_unload(entities):
     rt = runtime()
     callbacks = []

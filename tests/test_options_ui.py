@@ -111,7 +111,7 @@ def _options_handler(options=None, robots=("robot-a",)):
             return {"type": "abort", **kwargs}
     scope.update({
         "deepcopy": deepcopy,
-        "OptionsFlowWithReload": Base,
+        "OptionsFlow": Base,
         "vol": SimpleNamespace(Required=Marker, Optional=Marker, Schema=lambda value: value),
         "NumberSelector": lambda config: config,
         "NumberSelectorConfig": dict,

@@ -329,8 +329,10 @@ def test_timed_source_skips_feedback_and_only_shows_estimate_timing():
     assert page["step_id"] == "garage_timing"
     assert _page_keys(page) == {"open_travel_seconds", "close_travel_seconds", "travel_margin_seconds", "operation_timeout_seconds", "dock_settle_seconds", "allow_estimated", "handover_confirmed"}
     for marker in page["data_schema"]:
-        if marker.key.endswith("seconds"):
+        if marker.key in ("open_travel_seconds", "close_travel_seconds"):
             assert marker.default is None
+        elif marker.key.endswith("seconds"):
+            assert marker.default == {"travel_margin_seconds": 10, "operation_timeout_seconds": 90, "dock_settle_seconds": 5}[marker.key]
     values = {key: value for key, value in _valid_garage().items() if key in _page_keys(page)}
     result = asyncio.run(handler.async_step_garage_timing(values))
     saved = result["data"]["garage_bindings"]["robot-a"]

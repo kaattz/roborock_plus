@@ -37,6 +37,26 @@ def required_timing_fields(binding: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(key for key in NUMERIC_RANGES if key in required)
 
 
+def suggested_timing_values(binding: Mapping[str, Any]) -> dict[str, int]:
+    """Suggest UI policy values; never invent hardware travel or repair a binding."""
+    required = required_timing_fields(binding)
+    suggestions = {key: value for key, value in {
+        "travel_margin_seconds": 10, "contact_settle_seconds": 1,
+        "position_settle_seconds": 2, "dock_settle_seconds": 5,
+    }.items() if key in required}
+    values = {**suggestions, **binding}
+    longest = 0.0
+    for direction in ("open", "close"):
+        try:
+            longest = max(longest, _endpoint_wait(values, direction))
+        except GarageConfigError:
+            # Keep the other known direction's wait. The incomplete direction
+            # remains a required input and cannot pass strict validation.
+            continue
+    suggestions["operation_timeout_seconds"] = max(90, math.ceil(longest + 30))
+    return suggestions
+
+
 class GarageConfigError(ValueError):
     """A stable machine-readable configuration failure."""
 
@@ -58,6 +78,25 @@ def _number(binding: Mapping[str, Any], key: str, minimum: float, maximum: float
     ):
         raise GarageConfigError("invalid_numeric_value", key)
     return value
+
+
+def _endpoint_wait(binding: Mapping[str, Any], direction: str) -> float:
+    source = binding.get(f"{direction}_source")
+    if source not in EVIDENCE_SOURCES:
+        raise GarageConfigError("invalid_evidence_source", f"{direction}_source")
+    wait = 0.0
+    if source in ("contact", "position"):
+        key = "contact_settle_seconds" if source == "contact" else "position_settle_seconds"
+        wait += _number(binding, key, *NUMERIC_RANGES[key])
+    if source == "timed" or (source == "position" and binding.get("position_kind") == "estimated"):
+        for key in (f"{direction}_travel_seconds", "travel_margin_seconds"):
+            wait += _number(binding, key, *NUMERIC_RANGES[key])
+    return wait
+
+
+def longest_endpoint_wait(binding: Mapping[str, Any]) -> float:
+    """Strictly require both selected-source waits for validation and error hints."""
+    return max(_endpoint_wait(binding, "open"), _endpoint_wait(binding, "close"))
 
 
 def _entity(value: Any, domains: tuple[str, ...], field: str) -> None:
@@ -149,14 +188,7 @@ def validate_binding(binding: Mapping[str, Any], *, supported: bool = True) -> d
         raise GarageConfigError("estimated_risk_not_accepted", "allow_estimated")
     for key in required_timing_fields(result):
         _number(result, key, *NUMERIC_RANGES[key])
-    waits = []
-    for direction in ("open", "close"):
-        source = result[f"{direction}_source"]
-        wait = result["contact_settle_seconds"] if source == "contact" else result["position_settle_seconds"] if source == "position" else 0
-        if source == "timed" or (source == "position" and result["position_kind"] == "estimated"):
-            wait += result[f"{direction}_travel_seconds"] + result["travel_margin_seconds"]
-        waits.append(wait)
-    longest_wait = max(waits)
+    longest_wait = longest_endpoint_wait(result)
     if result["operation_timeout_seconds"] <= longest_wait:
         raise GarageConfigError("operation_timeout_too_short", "operation_timeout_seconds")
     permission = result.get("close_permission_entity")

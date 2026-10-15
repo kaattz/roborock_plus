@@ -844,7 +844,7 @@
       },
       "garage_timing": {
         "title": "时长和安全确认",
-        "description": "只填写所选来源需要的时长。未选来源的旧参数会保留。启用前请完成硬件标定、风险确认及控制权交接；离线反馈可以保存，但不能产生通行许可。",
+        "description": "通常只需填写实测开门或关门时间，其他辅助参数已填建议值，可按实际情况修改。星号项必须填写，原有值不会被覆盖。两个确认框请核实后手动勾选。未选来源的旧参数会保留；离线反馈不能产生通行许可。",
         "data": {
           "open_travel_seconds": "完整开门时间",
           "close_travel_seconds": "完整关门时间",
@@ -857,13 +857,13 @@
           "handover_confirmed": "确认门控制权交接"
         },
         "data_description": {
-          "open_travel_seconds": "填写实测完整行程，1–600 秒。计时或估算来源必须等满完整行程，没有通用默认值。",
-          "close_travel_seconds": "填写实测完整行程，1–600 秒。开门和关门耗时可以不同。",
-          "travel_margin_seconds": "确认额外余量，0–120 秒。只在完整行程上叠加一次。",
-          "contact_settle_seconds": "确认触点到位后需要保持多久，0–60 秒。等待稳定不能把不可靠来源变成可靠反馈。",
-          "position_settle_seconds": "确认位置到位后需要保持多久，0–60 秒。目标回声等待再久仍然是估算。",
-          "operation_timeout_seconds": "填写 1–1800 秒，必须大于所选来源的最长到位等待时间（包括适用的行程、裕量和稳定时间）。超时只会阻塞流程，不会放行机器人。",
-          "dock_settle_seconds": "填写 1–300 秒，至少两次成功的机器人状态观测跨越此窗口；重复旧样本不累计稳定时间。",
+          "open_travel_seconds": "必填，1–600 秒。用秒表测门从全关到完全打开的时间，实测35秒就填35。此项没有通用默认值，不能用建议值代替实测。",
+          "close_travel_seconds": "必填，1–600 秒。用秒表测门从全开到完全关闭的时间；可能与开门不同，不自动照搬。",
+          "travel_margin_seconds": "建议10秒，可填0–120秒。额外加在实测行程之后，给门变慢留余量；每次行程只加一次。",
+          "contact_settle_seconds": "建议1秒，可填0–60秒。到位触点连续保持这段时间后才确认，避免短暂抖动。不能把不可靠来源变成可靠反馈。",
+          "position_settle_seconds": "建议2秒，可填0–60秒。位置连续处于到位范围后才确认；目标回声仍属于估算。",
+          "operation_timeout_seconds": "初次建议至少90秒，已有较长行程时会给出更大的建议值。必须大于最长到位等待：例如开门35秒加余量10秒，需要大于45秒，可填90秒。超时只会阻塞，不会放行机器人。",
+          "dock_settle_seconds": "建议5秒，可填1–300秒。回到基站后等待状态稳定，至少两次新鲜观测跨越这段时间；旧样本不计。",
           "allow_estimated": "计时无法发现卡门、电机空转或通路障碍。使用计时或估算位置时必须明确接受，估算不会显示为已确认到位。",
           "handover_confirmed": "我已标定端点和时长、确认没有待续任务且机器人安全停靠、停用旧主动门控自动化，并将自动关门改用 request_garage_close。旧全局保护涉及的其他机器人须先逐台处理。"
         }
@@ -880,7 +880,7 @@
       "invalid_position_configuration": "请选择位置反馈是真实测量还是估算。",
       "invalid_position_thresholds": "位置阈值必须满足 0 ≤ 全闭 < 全开 ≤ 100。",
       "estimated_risk_not_accepted": "计时或估算反馈必须明确接受估算风险后才能启用。",
-      "operation_timeout_too_short": "超时必须大于完整行程加余量和稳定时间。",
+      "operation_timeout_too_short": "当前门动作超时为 {current_timeout} 秒，必须大于最长到位等待 {required_wait} 秒（已包含适用的行程、余量和稳定时间）。请增大超时后再提交。",
       "invalid_entity_reference": "请选择允许类型的实体。",
       "unsupported_robot": "只能选择本集成条目中的 V1 扫地机。",
       "unsupported_cover": "所选 cover 必须同时支持打开和关闭。",

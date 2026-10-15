@@ -209,3 +209,23 @@ Review → 第一性原理：制动保护与恢复授权职责分开，复用原
 - `<action>` 按用户明确指定升级 0.7.1，合并最新 origin/main，复核并推送分支，经 PR 合并到 main 后发布 v0.7.1；不部署 HA、不启用绑定。
 - `<verify>` 合并后重跑全量 pytest，独立发布复审；核对 GitHub main、tag、manifest 和 Release；保留 T12 的原生/变异结果及实物验收缺口。
 - `<done>` GitHub 可下载包含离库流程与配置减负的 v0.7.1，版本和说明一致，新控制默认关闭，未操作设备。发布结果以 GitHub Release 及 PR 记录为准。
+
+## T15 辅助默认值与提交错误可见（REQ-13，2026-10-16）
+
+- `<files>` garage_config.py、config_flow.py、strings/en/zh-Hans；tests/test_garage_form_defaults.py、tests/test_garage_form_feedback.py、tests/test_garage_form_review.py、tests/ha_native_garage_form.py及原配置/表单对照；原req/spec/设计/清单/CHANGELOG。
+- `<action>` 仅在UI给缺失辅助项预填S5.2建议值，不覆盖旧值或猜测行程；二/三步标必填，业务错误同时在顶部与字段显示，保留用户输入和原校验。沿用三步，不新增页面或持久化结构。
+- `<verify>` 缺dock/21秒超时/交接失败顶部提示先红后绿；默认值、未用来源、保留0/非法值/草稿、真实行程和确认框边界；主机全量与离线原生HA schema/保存测试，独立Review后核对REQ-13漂移。
+- `<done>` 新配置通常只手填真实行程并确认交接；不合法提交有可见中文提示，可纠正后保存；不操作真实设备，不发布或部署。
+
+时间盒：用户确认30分钟，起点2026-10-16 01:57:32（上海），02:27:32截止。此批仅本地修复/隔离验证。v0.7.1旧翻译显示此前已由用户强刷确认解决，不把缓存问题写成新代码缺陷。
+
+T15结果：默认值及顶部错误7个场景先红后绿，超时数字提示单项先红后绿；独立Review补双向计时单侧未知2个先红后绿。最终主机全量965 passed；离线原生HA 2026.9.4共22 passed，覆盖Required/schema自动填值、35+10与21的顶部/字段提示、中文占位符和纠正后保存；compileall通过。原生仅5条既有上游弃用提示。无浏览器或实物验收声明，无新增P1/P2。
+Review → 第一性原理：辅助建议仅作用UI、业务规则严格拒绝缺项；同一端点等待公式用于校验/建议/错误数值，未知另一方向不抹掉已知较大等待。旧值及源选择保留，草稿可存，真实行程和确认仍由用户提供；REQ-13/S5.2/T15一致，不改Store或门/机器人状态流。
+本批约14分钟：实现与验证约10分钟，流程约4分钟（复现、规格同步、独立评审），在30分钟内提前收口。以包含本段的本地提交固定，未推送、未发布、未部署，未触发设备；v0.7.1已发布标签保持原样。
+
+## T16 用户指定发布 v0.7.2（2026-10-16）
+
+- `<files>` manifest.json、CHANGELOG.md、README.md、清单、本feature文档。
+- `<action>` 按用户指定升级0.7.2，合并最新origin/main；提交推送分支，经PR合并后发布GitHub Release，不部署HA或操作设备。
+- `<verify>` 合并后全量pytest与离线原生HA表单检查、独立发布Review；核对远端main、tag、manifest和正式Release一致。
+- `<done>` GitHub的v0.7.2可下载T15修复，发布说明与配置行为相符，默认关闭、实物验收边界保留；发布结果以PR/Release记录为准。

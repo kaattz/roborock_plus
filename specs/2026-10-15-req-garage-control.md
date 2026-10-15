@@ -1,6 +1,6 @@
 # 通用车库门控制需求
 
-日期：2026-10-15。状态：用户已确认并授权编码；首批实现中，实物验收待用户操作。
+日期：2026-10-15。状态：V1 + hold_open 已实现，按用户确认发布 v0.7.0；after_exit 未开放，实物验收待用户操作。
 关联：[设计](../docs/plans/2026-10-15-door-evidence-design.md)、[spec](2026-10-15-spec-garage-control.md)、[plan](2026-10-15-plan-garage-control.md)。
 
 ## 用户故事

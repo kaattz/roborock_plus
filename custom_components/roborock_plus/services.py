@@ -12,6 +12,8 @@ GET_MAPS_SERVICE_NAME = "get_maps"
 SET_VACUUM_GOTO_POSITION_SERVICE_NAME = "set_vacuum_goto_position"
 GET_VACUUM_CURRENT_POSITION_SERVICE_NAME = "get_vacuum_current_position"
 RESUME_TASK_SERVICE_NAME = "resume_task"
+REQUEST_GARAGE_CLOSE_SERVICE_NAME = "request_garage_close"
+RESET_GARAGE_CONTROL_SERVICE_NAME = "reset_garage_control"
 GET_DOCK_POSITION_SERVICE_NAME = "get_dock_position"
 GET_SAFE_ZONE_SERVICE_NAME = "get_safe_zone"
 GET_SAFE_ZONE_SUGGESTION_SERVICE_NAME = "get_safe_zone_suggestion"
@@ -43,6 +45,26 @@ SET_SAFE_ZONE_SCHEMA = cv.make_entity_service_schema(
 @callback
 def async_setup_services(hass: HomeAssistant) -> None:
     """Set up services."""
+
+    service.async_register_platform_entity_service(
+        hass,
+        DOMAIN,
+        REQUEST_GARAGE_CLOSE_SERVICE_NAME,
+        entity_domain=VACUUM_DOMAIN,
+        schema=None,
+        func="async_request_garage_close",
+        supports_response=SupportsResponse.NONE,
+    )
+
+    service.async_register_platform_entity_service(
+        hass,
+        DOMAIN,
+        RESET_GARAGE_CONTROL_SERVICE_NAME,
+        entity_domain=VACUUM_DOMAIN,
+        schema=None,
+        func="async_reset_garage_control",
+        supports_response=SupportsResponse.NONE,
+    )
 
     service.async_register_platform_entity_service(
         hass,

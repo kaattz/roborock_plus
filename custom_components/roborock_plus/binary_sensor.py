@@ -28,6 +28,7 @@ from .coordinator import (
 )
 from .entity import RoborockCoordinatedEntityA01, RoborockCoordinatedEntityV1
 from .models import DeviceState
+from .garage_entities import build_garage_binary_entities
 from .safe_zone_entities import build_safe_zone_entities
 from .safe_zone import point_in_danger_zone, point_outside_danger_zone
 from .safe_zone_store import DISPATCH_SAFE_ZONE_UPDATED, get_safe_zone_store
@@ -204,6 +205,7 @@ async def async_setup_entry(
         RoborockStuckBinarySensorEntity(coordinator)
         for coordinator in config_entry.runtime_data.v1
     )
+    entities.extend(build_garage_binary_entities(config_entry.runtime_data.v1))
     async_add_entities(entities)
 
 

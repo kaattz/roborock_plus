@@ -222,7 +222,7 @@ def _configured_cover_position(hass: Any, cover_entity_id: str) -> Any:
 
 
 def _configured_cover_changed_at(hass: Any, cover_entity_id: str) -> float | None:
-    """Return when the cover entity last actually changed, as epoch seconds.
+    """Return the last cover change in the guard's monotonic clock domain.
 
     Uses ``last_updated_timestamp`` rather than ``last_changed``: core advances
     ``last_updated`` on any real change including an attribute-only one, and
@@ -231,16 +231,27 @@ def _configured_cover_changed_at(hass: Any, cover_entity_id: str) -> float | Non
     position does not refresh this -- which is what makes it usable as evidence
     that a reading has settled.
 
-    ``None`` when the timestamp is unavailable; callers must treat that as
-    unsafe rather than as "long ago".
+    HA stores an epoch timestamp. Convert its age to monotonic time before the
+    guard subtracts it from ``time.monotonic()``. Missing, non-finite or future
+    timestamps remain unknown, rather than counting as a settled reading.
     """
+    from math import isfinite
+
     state = hass.states.get(cover_entity_id)
     if state is None:
         return None
     stamp = getattr(state, "last_updated_timestamp", None)
-    if stamp is None:
+    if stamp is None or isinstance(stamp, bool):
         return None
     try:
-        return float(stamp)
-    except (TypeError, ValueError):
+        epoch_changed = float(stamp)
+        wall_now, monotonic_now = time.time(), time.monotonic()
+        if not all(isfinite(value) for value in (epoch_changed, wall_now, monotonic_now)):
+            return None
+        age = wall_now - epoch_changed
+        changed = monotonic_now - age
+        if age < 0 or not isfinite(age) or not isfinite(changed):
+            return None
+        return changed
+    except (TypeError, ValueError, OverflowError):
         return None

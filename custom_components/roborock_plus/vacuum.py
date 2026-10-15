@@ -47,6 +47,9 @@ from .garage_guard import (
     command_value,
     should_guard_clean_command,
 )
+from .garage_control import GarageControlError
+from .garage_task import GarageTaskError
+from .garage_runtime import configured as is_garage_configured, check_legacy_ownership, command_name
 from .resume_logic import (
     select_resume_command,
     select_resume_command_for_clean_command,
@@ -228,6 +231,55 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
             return None
         return self._status_trait.fan_speed_name
 
+    async def send(
+        self, command: RoborockCommand | str,
+        params: dict[str, Any] | list[Any] | int | None = None,
+    ) -> dict:
+        """Route every V1 transport entry through the opted-in garage owner."""
+        try:
+            if is_garage_configured(self.coordinator):
+                runtime = getattr(self.coordinator, 'garage_runtime', None)
+                if runtime is None:
+                    raise GarageControlError(getattr(self.coordinator, 'garage_setup_error', None) or 'session_recovery_required')
+                self.coordinator.garage_vacuum_entity_id = getattr(self, 'entity_id', None)
+                return await runtime.async_send(
+                    command, lambda: super(RoborockVacuum, self).send(command, params),
+                )
+            if should_guard_clean_command(command) or command_name(command) in ('app_resume', 'app_resume_build_map', 'app_charge'):
+                check_legacy_ownership(self.hass, self.coordinator.config_entry.options, self.coordinator.duid)
+        except (GarageControlError, GarageTaskError) as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key='garage_control_error',
+                translation_placeholders={'reason': err.reason},
+            ) from err
+        return await super().send(command, params)
+
+    async def async_request_garage_close(self) -> None:
+        """Request closure through the same robot and household safety gates."""
+        runtime = getattr(self.coordinator, 'garage_runtime', None)
+        try:
+            if runtime is None:
+                raise GarageControlError(getattr(self.coordinator, 'garage_setup_error', None) or 'garage_not_configured')
+            await runtime.async_request_close()
+        except (GarageControlError, GarageTaskError) as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key='garage_control_error',
+                translation_placeholders={'reason': err.reason},
+            ) from err
+
+    async def async_reset_garage_control(self) -> None:
+        """Reconcile controller facts without issuing a hardware action."""
+        runtime = getattr(self.coordinator, 'garage_runtime', None)
+        try:
+            if runtime is None:
+                raise GarageControlError(getattr(self.coordinator, 'garage_setup_error', None) or 'garage_not_configured')
+            runtime.reset()
+        except (GarageControlError, GarageTaskError) as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key='garage_control_error',
+                translation_placeholders={'reason': err.reason},
+            ) from err
+
     async def async_start(self) -> None:
         """Start the vacuum."""
         command = select_start_or_resume_command(
@@ -390,6 +442,9 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
         if should_guard_clean_command(command):
             if resume_command := select_resume_command_for_clean_command(command):
                 self.coordinator.last_resume_command = resume_command
+            if is_garage_configured(self.coordinator):
+                return
+            check_legacy_ownership(self.hass, self.coordinator.config_entry.options, self.coordinator.duid)
             await async_guard_garage_open(
                 self.hass,
                 self.coordinator.config_entry.options,

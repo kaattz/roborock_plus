@@ -51,6 +51,7 @@ from .entity import (
     RoborockEntity,
 )
 from .models import DeviceState
+from .garage_entities import build_garage_sensor_entities
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -576,6 +577,7 @@ async def async_setup_entry(
         for coordinator in coordinators.b01_q10
         for description in Q10_B01_SENSOR_DESCRIPTIONS
     )
+    entities.extend(build_garage_sensor_entities(coordinators.v1))
     async_add_entities(entities)
 
 

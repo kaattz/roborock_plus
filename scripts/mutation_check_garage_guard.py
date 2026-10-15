@@ -8,12 +8,18 @@ started into a shut door.
 
 This reverts each fix in turn and requires the suite to go red, so the new tests
 cannot repeat that mistake.
+
+The baseline and mutations run in a disposable copy. Production checkout files
+are only read, including when a subprocess fails, times out or is interrupted.
 """
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -182,36 +188,55 @@ def main() -> int:
     caught = 0
     escaped = []
 
-    try:
+    with tempfile.TemporaryDirectory(prefix="roborock-legacy-guard-") as directory:
+        workspace = Path(directory)
+        component = workspace / "custom_components" / "roborock_plus"
+        component.mkdir(parents=True)
+        (workspace / "tests").mkdir()
+        for source in VACUUM.parent.glob("*.py"):
+            shutil.copyfile(source, component / source.name)
+        for test in TESTS:
+            shutil.copyfile(REPO / test, workspace / test)
+        vacuum_path = component / "vacuum.py"
+        guard_path = component / "garage_guard.py"
+        # Baseline and mutations must execute the same isolated source snapshot.
+        vacuum_path.write_text(vacuum_original, encoding="utf-8")
+        guard_path.write_text(guard_original, encoding="utf-8")
+        try:
+            baseline = _run_tests(workspace)
+        except subprocess.TimeoutExpired:
+            print("BASELINE FAILED (timed out)")
+            return 1
+        if baseline.returncode != 0:
+            print("BASELINE FAILED")
+            print(baseline.stdout + baseline.stderr)
+            return 1
+        print("BASELINE PASSED", flush=True)
         for name, mutate in MUTATIONS:
             vacuum, guard = mutate(vacuum_original, guard_original)
             if vacuum == vacuum_original and guard == guard_original:
                 print(f"SETUP FAILED  {name}  (anchor not found)")
                 escaped.append(name)
                 continue
-            VACUUM.write_text(vacuum, encoding="utf-8")
-            GUARD.write_text(guard, encoding="utf-8")
+            compile(vacuum, str(vacuum_path), "exec")
+            compile(guard, str(guard_path), "exec")
+            vacuum_path.write_text(vacuum, encoding="utf-8")
+            guard_path.write_text(guard, encoding="utf-8")
             try:
-                result = subprocess.run(
-                    [sys.executable, "-m", "pytest", *TESTS, "-q", "--no-header"],
-                    cwd=REPO,
-                    capture_output=True,
-                    text=True,
-                    timeout=TIMEOUT_SECONDS,
-                )
+                result = _run_tests(workspace)
             except subprocess.TimeoutExpired:
-                print(f"CAUGHT        {name}  (timed out)")
+                print(f"CAUGHT        {name}  (timed out)", flush=True)
                 caught += 1
                 continue
-            if result.returncode != 0:
-                print(f"CAUGHT        {name}")
+            if result.returncode == 1:
+                print(f"CAUGHT        {name}", flush=True)
                 caught += 1
             else:
-                print(f"ESCAPED       {name}")
+                state = "ESCAPED" if result.returncode == 0 else "HARNESS ERROR"
+                print(f"{state}       {name}", flush=True)
+                if result.returncode != 0:
+                    print(result.stdout + result.stderr)
                 escaped.append(name)
-    finally:
-        VACUUM.write_text(vacuum_original, encoding="utf-8")
-        GUARD.write_text(guard_original, encoding="utf-8")
 
     print()
     print(f"{caught}/{len(MUTATIONS)} mutations caught")
@@ -221,6 +246,21 @@ def main() -> int:
             print(f"  - {name}")
         return 1
     return 0
+
+
+def _run_tests(workspace: Path) -> subprocess.CompletedProcess[str]:
+    """Read and mutate only temporary copies; collection errors are not kills."""
+    return subprocess.run(
+        [sys.executable, "-m", "pytest", *TESTS, "-q", "--no-header"],
+        cwd=workspace,
+        env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=TIMEOUT_SECONDS,
+        check=False,
+    )
 
 
 if __name__ == "__main__":

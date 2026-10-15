@@ -1,6 +1,8 @@
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 MODULE_PATH = REPO / "custom_components" / "roborock_plus" / "garage_guard.py"
 SPEC = spec_from_file_location("roborock_plus_garage_guard", MODULE_PATH)
@@ -150,8 +152,9 @@ def test_postcommand_wait_applies_the_time_gate() -> None:
 class _Clock:
     """A virtual clock standing in for time.monotonic and asyncio.sleep."""
 
-    def __init__(self) -> None:
+    def __init__(self, epoch_offset: float = 0.0) -> None:
         self.now = 0.0
+        self.epoch_offset = epoch_offset
         self.sleeps: list[float] = []
 
 
@@ -161,6 +164,9 @@ class _FakeTime:
 
     def monotonic(self) -> float:
         return self._clock.now
+
+    def time(self) -> float:
+        return self._clock.now + self._clock.epoch_offset
 
 
 class _FakeAsyncio:
@@ -486,3 +492,42 @@ def test_the_configured_window_reaches_the_guard() -> None:
         "the guard is called without the shared echo window, so it cannot see "
         "commands issued by anything else"
     )
+
+
+def test_real_epoch_change_time_is_translated_to_monotonic_domain(monkeypatch) -> None:
+    clock = _Clock(epoch_offset=1_700_000_000)
+    clock.now = 100
+    monkeypatch.setattr(MODULE, "time", _FakeTime(clock))
+    hass = _Hass(lambda: 100, updated_at=1_700_000_010)
+    assert MODULE._configured_cover_changed_at(hass, "cover.door") == 10
+
+
+def test_recent_command_can_use_settled_epoch_reading_without_extra_travel_wait() -> None:
+    clock = _Clock(epoch_offset=1_700_000_000)
+    clock.now = 100
+    hass = _Hass(lambda: 100, updated_at=1_700_000_000)
+    window = MODULE.DoorEchoWindow()
+    window.note_command(99)
+    assert _run_guard(hass, clock, window) == "returned"
+    assert hass.service_calls == []
+    assert clock.sleeps == []
+
+
+def test_real_epoch_fresh_echo_still_waits_full_travel() -> None:
+    clock = _Clock(epoch_offset=1_700_000_000)
+    clock.now = 100
+    hass = _Hass(lambda: 100, updated_at=1_700_000_099)
+    window = MODULE.DoorEchoWindow()
+    window.note_command(99)
+    assert _run_guard(hass, clock, window) == "returned"
+    assert len(hass.service_calls) == 1
+    assert clock.now >= 100 + MODULE.DEFAULT_GARAGE_DOOR_MIN_TRAVEL
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -float("inf"), 1_700_000_101, True, "bad"])
+def test_invalid_or_future_epoch_change_time_is_unknown(monkeypatch, invalid) -> None:
+    clock = _Clock(epoch_offset=1_700_000_000)
+    clock.now = 100
+    monkeypatch.setattr(MODULE, "time", _FakeTime(clock))
+    hass = _Hass(lambda: 100, updated_at=invalid)
+    assert MODULE._configured_cover_changed_at(hass, "cover.door") is None

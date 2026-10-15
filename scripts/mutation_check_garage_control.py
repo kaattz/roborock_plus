@@ -20,6 +20,8 @@ TESTS = [
 # Targets are exact on purpose: an outdated harness fails rather than silently
 # claiming coverage when the production decision no longer exists.
 MUTATIONS = [
+    ('garage_runtime.py', 'user stop leaves queued movement alive', '                self.controller.cancel_pending_for_user()', '                pass'),
+    ('garage_control.py', 'navigation return keeps old endpoint semantics', "            elif command == 'app_charge' and getattr(self.session, 'task_kind', None) == 'goto':", '            elif False:'),
     ('garage_control.py', 'hide invalid task correlation from diagnostics', "        if self.session.to_dict().get('correlation_valid') is False:\n            self.fault(self.session.reason or 'session_recovery_required')\n            return", '        pass'),
     ('garage_task.py', 'external task leaves old authority reusable', 'if state in _TASK_STATES or bool(o.in_cleaning) or bool(o.in_returning):\n                self._invalidate_correlation()', 'if state in _TASK_STATES or bool(o.in_cleaning) or bool(o.in_returning):\n                self.known_idle = False\n                self.reason = "session_recovery_required"'),
     ('garage_control.py', 'new intent overwrites unknown task', 'if new_task and not self.session.can_begin:', 'if False:'),
@@ -32,7 +34,8 @@ MUTATIONS = [
     ('garage_control.py', 'resume without original session', 'if resume and not (self.session.active and self.session.started):', 'if False:'),
     ('garage_control.py', 'clear uncertain clock context', "if self.session.to_dict().get('correlation_valid') is False:", 'if False:'),
     ('garage_control.py', 'accept inactive returning as resumed', "and bool(getattr(self.robot,'in_cleaning',None) or getattr(self.robot,'in_returning',None))", ''),
-    ('garage_control.py', 'skip durable task save', '                await self.persist()\n            self._check(operation)', '                pass\n            self._check(operation)'),
+    ('garage_control.py', 'skip durable task save', '                self.session.begin(self.robot.summary, self.robot.utc, command)\n                await self.persist()', '                self.session.begin(self.robot.summary, self.robot.utc, command)'),
+    ('garage_control.py', 'skip durable navigation return save', '                self.session.redirect_to_return(self.robot.utc)\n                await self.persist()', '                self.session.redirect_to_return(self.robot.utc)'),
     ('garage_control.py', 'skip final passage recheck', "            self.refresh()\n            if self.passage_allowed is not True:\n                raise GarageControlError('feedback_unavailable')\n            self._check(operation)", '            self._check(operation)'),
     ('garage_control.py', 'wash preparation is not task start', 'or resumed or preparing:', 'or resumed:'),
     ('garage_task.py', 'any docking means task finished', '    def _matching_completion(self, summary: Any, utc: float) -> bool:\n', '    def _matching_completion(self, summary: Any, utc: float) -> bool:\n        return True\n'),

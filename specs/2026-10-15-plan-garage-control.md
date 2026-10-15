@@ -1,6 +1,6 @@
 # 通用车库门控制实施计划
 
-日期：2026-10-15。状态：统一关联失效修正及隔离验证已完成；after_exit 隔离演练及硬件验收待完成，尚未部署/发布。
+日期：2026-10-15。状态：V1 + hold_open 已实现，按用户确认交付 v0.7.0；after_exit 隔离演练及硬件验收待完成，未部署用户 HA。
 目标：门证据和标准流程随集成交付，家庭策略通过许可/请求/事件对接。
 架构：纯证据 + 单门单机控制器 + HA 接线，复用机器人状态和位置采样。
 技术：Python asyncio、HA Options Flow/Store/实体服务、pytest 虚拟时钟。
@@ -167,3 +167,13 @@ compileall 通过；原生环境仅原有 5 条上游弃用提示。
 - `<done>` 用户可按一个提交定位完整候选版本，清单明确谁操作设备、什么结果才算通过，无虚构现场测量/验收结果。
 
 交付复核：清单 42 行，引用路径存在；全量 pytest 838 passed。Review 核对家庭许可仅限制关闭、最终停靠几何与旧自动化来源；保留一页清单，不重复整套规格。候选版本以包含本页的本地提交固定，未推送/部署/发布，现场验收仍待用户完成。
+
+## T11 发布前修正与 v0.7.0 交付（REQ-5、REQ-6、REQ-10、REQ-14）
+
+- `<files>` garage_control.py、garage_runtime.py、garage_task.py、tests/test_garage_runtime_safety.py、scripts/mutation_check_garage_control.py；manifest.json、本套文档及 CHANGELOG.md。
+- `<action>` 修复用户暂停/停止未撤销等待启动、活动导航转显式回充未收尾两项实现偏离；清扫回充保留原关联。版本按用户确认升级 v0.7.0，推送、合并并发布 GitHub Release，不部署 HA。
+- `<verify>` 两项回归先红后绿；全量 pytest、原生 HA 隔离检查、控制变异；独立评审修正；核对远端合并、标签、manifest 与 Release。
+- `<done>` 旧启动不在用户停止/暂停后补发；导航显式回充按独立返航终点收尾，清扫不提前结束；发布明确 V1 + hold_open、默认关闭与现场验收未完成。
+
+发布前验证：全量 pytest 849 passed；原生 HA 2026.9.4 隔离检查 16 passed（仅 5 条上游弃用提示）；运行时安全回归 26 passed；compileall 通过。控制变异最终 22/22 全部捕获，保留既有对照；中途 20/21 暴露变异目标因新分支错位，已拆分新任务/导航回充保存点并复跑。未量测覆盖率百分比，最低 HA 2026.8.0 未逐版验证。
+分层复审：两个具体实现遗漏均先红后绿，定向独立复审无新增 P1/P2；文档 24 个相对链接有效。漂移检查仍仅交付 V1 + hold_open，不把 after_exit 演练和物理验收标记完成。发布目标为 [v0.7.0](https://github.com/kaattz/roborock_plus/releases/tag/v0.7.0)，推送、合并、标签与 manifest 的远端一致性在发布后核对；不部署用户 HA。

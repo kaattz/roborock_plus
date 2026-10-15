@@ -78,6 +78,68 @@ def test_tick_cannot_initialize_or_overwrite_while_store_restore_is_pending():
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("original", ["app_goto_target", "app_start"])
+def test_return_during_navigation_can_finish_without_replacing_clean_lineage(original):
+    """An explicit return terminates navigation; cleaning still needs its record."""
+    async def exercise():
+        b = Boundaries()
+        runtime = b.create()
+        await runtime.async_restore()
+        await runtime.async_tick()
+        advance(b)
+        await runtime.async_tick()
+        runtime.schedule = lambda: None
+
+        async def refresh_summary():
+            pass
+
+        runtime.coordinator.properties_api.clean_summary = NS(refresh=refresh_summary)
+
+        async def move(direction, operation):
+            b.events.append(("door", direction))
+            b.cover.state = "closed" if direction == "close" else "open"
+            b.states["binary_sensor.open"].state = "off" if direction == "close" else "on"
+            b.states["binary_sensor.closed"].state = "on" if direction == "close" else "off"
+
+        async def send(command):
+            b.events.append(("robot", command))
+
+        async def poll(state, cleaning=0, returning=0):
+            b.status.state.name = state
+            b.status.in_cleaning = cleaning
+            b.status.in_returning = returning
+            advance(b)
+            await runtime.async_tick()
+
+        runtime.controller.move_door = move
+        await runtime.async_send(original, lambda: send(original))
+        navigation = original == "app_goto_target"
+        await poll("going_to_target" if navigation else "cleaning", cleaning=0 if navigation else 1)
+        lineage = runtime.session.to_dict()
+        assert runtime.session.active and runtime.session.started
+        await runtime.async_send("app_charge", lambda: send("app_charge"))
+        if not navigation:
+            current = runtime.session.to_dict()
+            for key in ("session_id", "task_kind", "sent_utc", "first_clean_utc", "baseline_records", "baseline_clean_count", "baseline_record"):
+                assert current[key] == lineage[key], key
+        await poll("returning_home", returning=1)
+        await poll("charging")
+        assert runtime.session.active, "one dock poll must not end the task"
+        await poll("charging")
+        if navigation:
+            assert runtime.session.ended and not runtime.session.active
+            assert runtime.session.can_close
+            assert b.events.count(("door", "close")) == 1
+            assert runtime.controller.phase == "idle"
+        else:
+            assert runtime.session.active and not runtime.session.ended
+            assert not runtime.session.can_close
+            assert ("door", "close") not in b.events
+            assert runtime.session.task_kind == "clean"
+
+    asyncio.run(exercise())
+
+
 def test_physical_closing_revokes_passage_before_open_contact_releases():
     b = Boundaries()
     sample(b)
@@ -199,3 +261,178 @@ def test_invalid_first_clean_sample_time_invalidates_task_correlation(invalid):
     assert session.started is False
     assert session.to_dict()["correlation_valid"] is False
     assert session.can_close is False
+
+
+@pytest.mark.parametrize("interrupt", ["app_stop", "app_pause"])
+@pytest.mark.parametrize("boundary", ["opening", "persist", "awaiting_start"])
+def test_user_interrupt_revokes_pending_start_before_door_or_save_can_finish(interrupt, boundary):
+    """A user stop/pause must win over a queued start, including slow storage."""
+    async def exercise():
+        b = Boundaries()
+        runtime = b.create()
+        await runtime.async_restore()
+        await runtime.async_tick()
+        advance(b)
+        await runtime.async_tick()
+        runtime.schedule = lambda: None
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def refresh_summary():
+            pass
+
+        runtime.coordinator.properties_api.clean_summary = NS(refresh=refresh_summary)
+
+        async def move(direction, operation):
+            b.events.append(("door", direction))
+            b.states["binary_sensor.closed"].state = "off"
+
+        async def sleep(seconds):
+            entered.set()
+            await release.wait()
+            advance(b)
+            b.states["binary_sensor.open"].state = "on"
+
+        original_persist = runtime.persist
+        first_save = True
+
+        async def slow_persist():
+            nonlocal first_save
+            if first_save:
+                first_save = False
+                entered.set()
+                await release.wait()
+            await original_persist()
+
+        runtime.controller.move_door = move
+        runtime.controller.sleep = sleep
+        if boundary == "opening":
+            b.states["binary_sensor.open"].state = "off"
+            b.states["binary_sensor.closed"].state = "on"
+        elif boundary == "persist":
+            runtime.controller.persist = slow_persist
+
+        async def send_start():
+            b.events.append(("robot", "app_start"))
+
+        async def send_interrupt():
+            b.events.append(("robot", interrupt))
+
+        start = asyncio.create_task(runtime.async_send("app_start", send_start))
+        if boundary == "awaiting_start":
+            await asyncio.wait_for(start, timeout=2)
+            assert runtime.controller.phase == "awaiting_start"
+        else:
+            await asyncio.wait_for(entered.wait(), timeout=2)
+        try:
+            await runtime.async_send(interrupt, send_interrupt)
+        finally:
+            release.set()
+        if boundary != "awaiting_start":
+            with pytest.raises(runtime_module().GarageControlError, match="operation_cancelled"):
+                await asyncio.wait_for(start, timeout=2)
+            assert ("robot", "app_start") not in b.events
+        assert ("robot", interrupt) in b.events
+        assert runtime.controller.phase == "manual_hold"
+        assert runtime.controller.reason == "operation_cancelled"
+        advance(b)
+        await runtime.async_tick()
+        assert runtime.controller.phase == "manual_hold"
+        assert not any(event == ("door", "close") for event in b.events)
+
+    asyncio.run(exercise())
+
+
+async def running_runtime(command="app_goto_target"):
+    b = Boundaries()
+    runtime = b.create()
+    await runtime.async_restore()
+    await runtime.async_tick()
+    advance(b)
+    await runtime.async_tick()
+    runtime.schedule = lambda: None
+
+    async def refresh_summary():
+        pass
+
+    runtime.coordinator.properties_api.clean_summary = NS(refresh=refresh_summary)
+
+    async def send():
+        b.events.append(("robot", command))
+
+    await runtime.async_send(command, send)
+    b.status.state.name = "cleaning" if command == "app_start" else "going_to_target"
+    b.status.in_cleaning = 1 if command == "app_start" else 0
+    advance(b)
+    await runtime.async_tick()
+    assert runtime.controller.phase == "task_open"
+    return b, runtime
+
+
+def test_ordinary_active_clean_pause_preserves_session_and_resume_context():
+    async def exercise():
+        b, runtime = await running_runtime("app_start")
+        before = runtime.session.to_dict()
+
+        async def send_pause():
+            b.events.append(("robot", "app_pause"))
+
+        await runtime.async_send("app_pause", send_pause)
+        b.status.state.name, b.status.in_cleaning = "paused", 0
+        advance(b)
+        await runtime.async_tick()
+        assert runtime.controller.reason is None
+        assert runtime.controller.phase == "task_open"
+        assert runtime.session.active and runtime.session.started
+        assert runtime.session.session_id == before["session_id"]
+        assert not runtime.session.to_dict()["cancel_requested"]
+        assert ("robot", "app_resume") not in b.events
+
+    asyncio.run(exercise())
+
+
+def test_navigation_redirect_store_failure_never_sends_return_or_closes():
+    async def exercise():
+        b, runtime = await running_runtime()
+        before = list(b.events)
+
+        async def failed_save():
+            raise OSError("simulated storage failure")
+
+        async def send_return():
+            b.events.append(("robot", "app_charge"))
+
+        runtime.controller.persist = failed_save
+        with pytest.raises(OSError, match="storage failure"):
+            await runtime.async_send("app_charge", send_return)
+        assert runtime.controller.phase == "blocked"
+        assert not runtime.session.can_close
+        changes = b.events[len(before):]
+        assert not any(event[0] in ("robot", "door") for event in changes)
+        assert any(name == "roborock_plus_garage_issue" and data["reason"] == "command_failed"
+                   and data["active"] for name, data in changes)
+
+    asyncio.run(exercise())
+
+
+def test_pre_return_status_samples_cannot_finish_redirected_navigation():
+    async def exercise():
+        b, runtime = await running_runtime()
+        b.coord.update_interval = timedelta(seconds=60)
+        sent = b.utc
+
+        async def send_return():
+            b.events.append(("robot", "app_charge"))
+
+        await runtime.async_send("app_charge", send_return)
+        for offset in (0.2, 0.1):
+            advance(b)
+            b.coord.garage_status_sample = {
+                "sampled_at": datetime.fromtimestamp(sent - offset, timezone.utc),
+                "state": "charging", "in_cleaning": 0, "in_returning": 0,
+            }
+            await runtime.async_tick()
+        assert runtime.session.active and not runtime.session.started
+        assert not runtime.session.ended and not runtime.session.can_close
+        assert ("door", "close") not in b.events
+
+    asyncio.run(exercise())

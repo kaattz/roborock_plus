@@ -230,6 +230,19 @@ class GarageTaskSession:
         self._cancel_requested = True
         self._dock_since, self._dock_samples, self._dock_stable = None, 0, False
 
+    def redirect_to_return(self, utc: float) -> None:
+        """Replace a managed navigation intent with the user's explicit return."""
+        if (not self.active or self.task_kind != "goto" or self._correlation_invalid
+            or self._cancel_requested or not _finite(utc) or utc < 0):
+            raise GarageTaskError("session_recovery_required")
+        self.task_kind = "return"
+        self._sent_utc = float(utc)
+        self.started = False
+        self._first_transit_utc = None
+        self._dock_since, self._dock_samples, self._dock_stable = None, 0, False
+        self._transit_idle_since, self._transit_idle_samples = None, 0
+        self.reason = "task_end_unconfirmed"
+
     def reconcile_active(self, observation: RobotObservation) -> None:
         """Explicitly match a restored task to live state, without resuming it."""
         state = str(getattr(observation.state, "name", observation.state))

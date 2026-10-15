@@ -227,6 +227,8 @@ class GarageRuntime:
         if name not in _NEW_TASK_COMMANDS | _RESUME_COMMANDS | _DIRECT_COMMANDS | {'app_charge'}:
             raise GarageControlError('unsupported_guarded_command')
         if name in _DIRECT_COMMANDS:
+            if name in ('app_stop', 'app_pause'):
+                self.controller.cancel_pending_for_user()
             result = await send()
             if name == 'app_stop' and self.session.active:
                 self.session.request_cancel()

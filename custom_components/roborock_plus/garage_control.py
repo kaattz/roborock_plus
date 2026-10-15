@@ -86,6 +86,11 @@ class GarageController:
             return
         self.fault('manual_override', manual=True)
 
+    def cancel_pending_for_user(self) -> None:
+        """Revoke queued movement before forwarding a user's stop or pause."""
+        if not self.reason and (self._pending or self.phase == 'awaiting_start'):
+            self.fault('operation_cancelled', manual=True)
+
     def shutdown(self) -> None:
         self._closed = True
         self.operation_id += 1
@@ -207,6 +212,9 @@ class GarageController:
                 if not self.session.can_begin:
                     raise GarageControlError('session_recovery_required')
                 self.session.begin(self.robot.summary, self.robot.utc, command)
+                await self.persist()
+            elif command == 'app_charge' and getattr(self.session, 'task_kind', None) == 'goto':
+                self.session.redirect_to_return(self.robot.utc)
                 await self.persist()
             self._check(operation)
             # No await between this final observation/check and invoking send.

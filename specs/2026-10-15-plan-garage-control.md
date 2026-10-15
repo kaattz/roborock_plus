@@ -229,3 +229,23 @@ Review → 第一性原理：辅助建议仅作用UI、业务规则严格拒绝�
 - `<action>` 按用户指定升级0.7.2，合并最新origin/main；提交推送分支，经PR合并后发布GitHub Release，不部署HA或操作设备。
 - `<verify>` 合并后全量pytest与离线原生HA表单检查、独立发布Review；核对远端main、tag、manifest和正式Release一致。
 - `<done>` GitHub的v0.7.2可下载T15修复，发布说明与配置行为相符，默认关闭、实物验收边界保留；发布结果以PR/Release记录为准。
+
+## T17 配置完成保存的重载冲突（REQ-13，2026-10-16）
+
+- `<files>` config_flow.py、tests/test_options_ui.py、tests/ha_native_options_finish.py；原spec、本计划、CHANGELOG。
+- `<action>` 修复 OptionsFlowWithReload 与既有配置更新监听器冲突；改用普通 OptionsFlow，由原监听器统一重载，不改变配置数据、安全校验或设备状态流。
+- `<verify>` 真实 HA 2026.9.4 OptionsFlowManager 完成保存先红后绿，覆盖轮询/绘图/车库及未启用草稿；断言 options 保存且变更只重载一次、无变更及仅初始化元数据不重载；主机全量、离线原生测试、独立 Review。
+- `<done>` 本地回归不再抛出 update listeners/OptionsFlowWithReload 冲突，保留原配置更新语义；不部署、不发布、不操作设备，用户现场保存仍待升级后确认。
+
+T17结果：只读现场日志定位 HA 拒绝 OptionsFlowWithReload 与 update_listeners 并用。新增3条真实完成流程回归全部先复现同一异常，再修复为通过；检查选项与旧绑定保留、变更1次重载、同值0次及初始化元数据仅保存不重载。主机965 passed，离线原生HA 2026.9.4共25 passed（仅5条既有上游弃用提示），compileall通过；独立Review无新增P1/P2。
+Review → 第一性原理：只保留原监听器这一处重载职责，不捕获或隐藏HA异常，不改变程序化配置更新、安全校验或设备状态流；REQ-13/S5.2一致。此前原生测试只验证到create_entry返回值，现补实际finish及listener边界；可用回归表达，不另堆lesson。lessons/by-topic目录缺失，相关关键词检索未执行；不扩大修复范围。
+本批实现与验证约3分钟，流程约4分钟（只读日志定位、测试边界复核、文档及独立评审）。本地提交固定修复，未发布、未部署，未触发设备，现场保存仍待升级后由用户确认。
+
+## T18 用户指定发布 v0.7.3（2026-10-16）
+
+- `<files>` manifest.json、CHANGELOG.md、README.md、交接清单、本feature文档。
+- `<action>` 按用户指定升级0.7.3，合并最新origin/main；提交推送分支，经PR合并后发布GitHub Release，不部署HA、不操作设备。
+- `<verify>` 合并后主机全量和离线原生HA完成保存回归、独立覆盖及发布Review；核对远端main、tag、manifest和正式Release一致。
+- `<done>` GitHub可下载包含T17提交修复的v0.7.3，发布说明与实际范围一致；默认关闭及现场验收边界保留，现场保存待用户升级后确认。
+
+发布前验证：合并origin/main后主机965 passed，离线原生HA 2026.9.4共25 passed（5条既有上游弃用提示），compileall通过。独立覆盖审计确认5个变更行为场景均有真实manager/listener回归，此为场景审计而非实测行/分支覆盖率；独立发布Review无P1/P2，T17已完成，T18推送/合并/发布以远端记录为准。无新增产品行为或未记录范围漂移，现场保存及物理验收仍待用户完成。

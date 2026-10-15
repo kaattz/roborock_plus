@@ -93,7 +93,10 @@
               "closing": "正在关门",
               "waiting_close_permission": "等待家庭关门许可",
               "blocked": "故障阻塞",
-              "manual_hold": "人工接管保持"
+              "manual_hold": "人工接管保持",
+              "pausing_return": "正在暂停返航并等待确认",
+              "return_opening": "返航已暂停，正在开门",
+              "resuming_return": "门已全开，恢复同一返航"
             }
           },
           "reason": {
@@ -106,7 +109,7 @@
             "name": "任务期间门模式",
             "state": {
               "hold_open": "任务期间保持开门",
-              "after_exit": "离库后关门，当前 V1 不支持"
+              "after_exit": "离库后关门，返航暂停互锁"
             }
           },
           "open_quality": {
@@ -173,7 +176,10 @@
               "closing": "正在关门",
               "waiting_close_permission": "等待家庭关门许可",
               "blocked": "故障阻塞",
-              "manual_hold": "人工接管保持"
+              "manual_hold": "人工接管保持",
+              "pausing_return": "正在暂停返航并等待确认",
+              "return_opening": "返航已暂停，正在开门",
+              "resuming_return": "门已全开，恢复同一返航"
             }
           },
           "reason": {
@@ -186,7 +192,7 @@
             "name": "任务期间门模式",
             "state": {
               "hold_open": "任务期间保持开门",
-              "after_exit": "离库后关门，当前 V1 不支持"
+              "after_exit": "离库后关门，返航暂停互锁"
             }
           },
           "open_quality": {
@@ -253,7 +259,10 @@
               "closing": "正在关门",
               "waiting_close_permission": "等待家庭关门许可",
               "blocked": "故障阻塞",
-              "manual_hold": "人工接管保持"
+              "manual_hold": "人工接管保持",
+              "pausing_return": "正在暂停返航并等待确认",
+              "return_opening": "返航已暂停，正在开门",
+              "resuming_return": "门已全开，恢复同一返航"
             }
           },
           "reason": {
@@ -266,7 +275,7 @@
             "name": "任务期间门模式",
             "state": {
               "hold_open": "任务期间保持开门",
-              "after_exit": "离库后关门，当前 V1 不支持"
+              "after_exit": "离库后关门，返航暂停互锁"
             }
           },
           "open_quality": {
@@ -333,7 +342,10 @@
               "closing": "正在关门",
               "waiting_close_permission": "等待家庭关门许可",
               "blocked": "故障阻塞",
-              "manual_hold": "人工接管保持"
+              "manual_hold": "人工接管保持",
+              "pausing_return": "正在暂停返航并等待确认",
+              "return_opening": "返航已暂停，正在开门",
+              "resuming_return": "门已全开，恢复同一返航"
             }
           },
           "reason": {
@@ -346,7 +358,7 @@
             "name": "任务期间门模式",
             "state": {
               "hold_open": "任务期间保持开门",
-              "after_exit": "离库后关门，当前 V1 不支持"
+              "after_exit": "离库后关门，返航暂停互锁"
             }
           },
           "open_quality": {
@@ -617,7 +629,10 @@
           "closing": "正在关门",
           "waiting_close_permission": "等待家庭关门许可",
           "blocked": "故障阻塞",
-          "manual_hold": "人工接管保持"
+          "manual_hold": "人工接管保持",
+          "pausing_return": "正在暂停返航并等待确认",
+          "return_opening": "返航已暂停，正在开门",
+          "resuming_return": "门已全开，恢复同一返航"
         },
         "state_attributes": {
           "session_id": {
@@ -641,7 +656,10 @@
               "closing": "正在关门",
               "waiting_close_permission": "等待家庭关门许可",
               "blocked": "故障阻塞",
-              "manual_hold": "人工接管保持"
+              "manual_hold": "人工接管保持",
+              "pausing_return": "正在暂停返航并等待确认",
+              "return_opening": "返航已暂停，正在开门",
+              "resuming_return": "门已全开，恢复同一返航"
             }
           },
           "reason": {
@@ -654,7 +672,7 @@
             "name": "任务期间门模式",
             "state": {
               "hold_open": "任务期间保持开门",
-              "after_exit": "离库后关门，当前 V1 不支持"
+              "after_exit": "离库后关门，返航暂停互锁"
             }
           },
           "open_quality": {
@@ -783,21 +801,51 @@
         }
       },
       "garage": {
-        "title": "车库控制",
-        "description": "配置 {robot}。新配置默认为未启用草稿；启用前需填写所有安全时长、明确选择来源并确认交接。现场离线可以保存，但运行时不会因此获得通行许可。",
+        "title": "基本设置与来源",
+        "description": "配置 {robot}。先选门、任务模式和全开／全闭来源；启用后继续填写所选来源需要的参数，最后确认交接才会保存启用。关闭时可直接保存不完整草稿。新绑定默认关闭，任务模式默认为 hold_open。",
         "data": {
           "enabled": "启用车库控制",
           "cover_entity_id": "车库门 cover 实体",
           "task_door_mode": "任务期间的门模式",
           "open_source": "全开判断来源",
           "close_source": "全闭判断来源",
+          "close_permission_entity": "家庭关门许可"
+        },
+        "data_description": {
+          "enabled": "绑定、硬件标定和交接完成后再启用。关闭时可以保存未完整配置的草稿。",
+          "cover_entity_id": "选择支持打开和关闭的 cover。支持设置位置，不代表能反馈真实物理位置。",
+          "task_door_mode": "hold_open：整个任务保持开门。after_exit：HA 先开门并确认通行，再启动扫地机，出库不额外暂停；受信位置确认在门口危险区外后关门。返航必须先暂停并确认已停，再等待门全开通行条件，最后用 app_resume 恢复同一返航。暂停、开门或恢复异常时阻塞并等待人工处理。门时长、通行空间及暂停恢复须由用户实测验收。",
+          "open_source": "明确选择端点触点、位置反馈或计时。所选来源失联后，不会自动切换其他来源。",
+          "close_source": "与全开来源独立选择。没有全闭不代表已经全开。",
+          "close_permission_entity": "可选 input_boolean 或 binary_sensor，只读。仅 on 允许关门；off、unknown、unavailable 都拒绝。留空表示没有家庭附加限制。"
+        }
+      },
+      "garage_feedback": {
+        "title": "所选来源的反馈",
+        "description": "只显示所选来源需要的反馈。请按实际测试填写触点极性和位置类型，不会自动猜测。切换来源会保留原有参数；所选来源失联时不会改用其他来源。",
+        "data": {
           "open_contact": "全开触点",
           "close_contact": "全闭触点",
           "open_contact_state": "全开触点到位值",
           "close_contact_state": "全闭触点到位值",
           "position_kind": "位置反馈类型",
           "open_position": "全开位置阈值",
-          "close_position": "全闭位置阈值",
+          "close_position": "全闭位置阈值"
+        },
+        "data_description": {
+          "open_contact": "选择表示全开的 binary_sensor；不按设备类别排除合法触点。",
+          "close_contact": "选择表示全闭的另一个 binary_sensor，不能与全开使用同一个实体。",
+          "open_contact_state": "按实际端点测试选择 on 或 off，不会自动猜测极性。",
+          "close_contact_state": "按实际端点测试选择 on 或 off，不会自动猜测极性。",
+          "position_kind": "真实测量须已核实为物理反馈；目标回声和软件估算都属于估算，必须接受风险。",
+          "open_position": "使用位置来源时，填写实测的 0–100 阈值，须高于全闭阈值并保证机器人通行空间。95 仅为旧配置建议。",
+          "close_position": "使用位置来源时，填写实测的 0–100 阈值，须低于全开阈值并核实物理关位。5 仅为旧配置建议。"
+        }
+      },
+      "garage_timing": {
+        "title": "时长和安全确认",
+        "description": "只填写所选来源需要的时长。未选来源的旧参数会保留。启用前请完成硬件标定、风险确认及控制权交接；离线反馈可以保存，但不能产生通行许可。",
+        "data": {
           "open_travel_seconds": "完整开门时间",
           "close_travel_seconds": "完整关门时间",
           "travel_margin_seconds": "行程余量",
@@ -806,31 +854,17 @@
           "operation_timeout_seconds": "门动作超时",
           "dock_settle_seconds": "停靠稳定时间",
           "allow_estimated": "接受门到位估算风险",
-          "close_permission_entity": "家庭关门许可",
           "handover_confirmed": "确认门控制权交接"
         },
         "data_description": {
-          "enabled": "绑定、硬件标定和交接完成后再启用。关闭时可以保存未完整配置的草稿。",
-          "cover_entity_id": "选择支持打开和关闭的 cover。支持设置位置，不代表能反馈真实物理位置。",
-          "task_door_mode": "整个任务保持门开，包括回洗拖布和补电。当前 V1 暂不支持离库后关门。",
-          "open_source": "明确选择端点触点、位置反馈或计时。所选来源失联后，不会自动切换其他来源。",
-          "close_source": "与全开来源独立选择。没有全闭不代表已经全开。",
-          "open_contact": "选择表示全开的 binary_sensor；不按设备类别排除合法触点。",
-          "close_contact": "选择表示全闭的另一个 binary_sensor，不能与全开使用同一个实体。",
-          "open_contact_state": "按实际端点测试选择 on 或 off，不会自动猜测极性。",
-          "close_contact_state": "按实际端点测试选择 on 或 off，不会自动猜测极性。",
-          "position_kind": "真实测量须已核实为物理反馈；目标回声和软件估算都属于估算，必须接受风险。",
-          "open_position": "使用位置来源时，填写实测的 0–100 阈值，须高于全闭阈值并保证机器人通行空间。95 仅为旧配置建议。",
-          "close_position": "使用位置来源时，填写实测的 0–100 阈值，须低于全开阈值并核实物理关位。5 仅为旧配置建议。",
           "open_travel_seconds": "填写实测完整行程，1–600 秒。计时或估算来源必须等满完整行程，没有通用默认值。",
           "close_travel_seconds": "填写实测完整行程，1–600 秒。开门和关门耗时可以不同。",
           "travel_margin_seconds": "确认额外余量，0–120 秒。只在完整行程上叠加一次。",
           "contact_settle_seconds": "确认触点到位后需要保持多久，0–60 秒。等待稳定不能把不可靠来源变成可靠反馈。",
           "position_settle_seconds": "确认位置到位后需要保持多久，0–60 秒。目标回声等待再久仍然是估算。",
-          "operation_timeout_seconds": "填写 1–1800 秒，必须大于最长行程加余量和稳定时间。超时会阻塞流程，不会放行机器人。",
+          "operation_timeout_seconds": "填写 1–1800 秒，必须大于所选来源的最长到位等待时间（包括适用的行程、裕量和稳定时间）。超时只会阻塞流程，不会放行机器人。",
           "dock_settle_seconds": "填写 1–300 秒，至少两次成功的机器人状态观测跨越此窗口；重复旧样本不累计稳定时间。",
           "allow_estimated": "计时无法发现卡门、电机空转或通路障碍。使用计时或估算位置时必须明确接受，估算不会显示为已确认到位。",
-          "close_permission_entity": "可选 input_boolean 或 binary_sensor，只读。仅 on 允许关门；off、unknown、unavailable 都拒绝。留空表示没有家庭附加限制。",
           "handover_confirmed": "我已标定端点和时长、确认没有待续任务且机器人安全停靠、停用旧主动门控自动化，并将自动关门改用 request_garage_close。旧全局保护涉及的其他机器人须先逐台处理。"
         }
       }
@@ -839,7 +873,7 @@
       "invalid_binding": "车库绑定必须是配置对象。",
       "invalid_boolean_value": "安全开关必须是真或假，不能填文本或数字。",
       "invalid_numeric_value": "请填写范围内的有限数值，不接受布尔值或数字文本。",
-      "missing_safety_configuration": "启用前请补齐安全时长、来源和所选端点的必填字段。",
+      "missing_safety_configuration": "启用前请补齐所选来源及其必需的反馈和时长。",
       "invalid_evidence_source": "请为各端点明确选择触点、位置或计时来源。",
       "invalid_contact_configuration": "请选择端点 binary_sensor，并明确选择到位值 on 或 off。",
       "duplicate_endpoint": "全开和全闭端点不能使用同一个 binary_sensor。",
@@ -850,7 +884,7 @@
       "invalid_entity_reference": "请选择允许类型的实体。",
       "unsupported_robot": "只能选择本集成条目中的 V1 扫地机。",
       "unsupported_cover": "所选 cover 必须同时支持打开和关闭。",
-      "unsupported_return_interlock": "当前 V1 返航互锁能力不足，暂不支持离库后关门，请选择任务期间保持开门。",
+      "unsupported_return_interlock": "返航暂停或恢复互锁条件未通过，自动流程已阻塞，请人工处理。",
       "invalid_task_door_mode": "请选择支持的任务门模式。",
       "handover_required": "启用前请确认标定完成并已交接旧门控自动化。",
       "duplicate_binding": "这扇门已由另一台扫地机或另一个集成条目管理。",
@@ -875,7 +909,7 @@
     "garage_task_mode": {
       "options": {
         "hold_open": "任务期间保持开门",
-        "after_exit": "离库后关门（当前 V1 不支持）"
+        "after_exit": "离库后关门，返航暂停互锁"
       }
     },
     "garage_evidence_source": {

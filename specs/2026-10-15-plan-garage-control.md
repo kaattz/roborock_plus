@@ -1,6 +1,7 @@
 # 通用车库门控制实施计划
 
 日期：2026-10-15。状态：V1 + hold_open 已实现，按用户确认交付 v0.7.0；after_exit 隔离演练及硬件验收待完成，未部署用户 HA。
+2026-10-16 增量：T12/T13 的 after_exit、先制动后授权和分步配置已完成隔离验证；用户随后指定 v0.7.1 GitHub 发布，见 T14。未部署 HA，型号实物验收待用户操作。T1–T11 保留 v0.7.0 阶段的计划及历史结果，不作为本轮模式限制。
 目标：门证据和标准流程随集成交付，家庭策略通过许可/请求/事件对接。
 架构：纯证据 + 单门单机控制器 + HA 接线，复用机器人状态和位置采样。
 技术：Python asyncio、HA Options Flow/Store/实体服务、pytest 虚拟时钟。
@@ -177,3 +178,34 @@ compileall 通过；原生环境仅原有 5 条上游弃用提示。
 
 发布前验证：全量 pytest 849 passed；原生 HA 2026.9.4 隔离检查 16 passed（仅 5 条上游弃用提示）；运行时安全回归 26 passed；compileall 通过。控制变异最终 22/22 全部捕获，保留既有对照；中途 20/21 暴露变异目标因新分支错位，已拆分新任务/导航回充保存点并复跑。未量测覆盖率百分比，最低 HA 2026.8.0 未逐版验证。
 分层复审：两个具体实现遗漏均先红后绿，定向独立复审无新增 P1/P2；文档 24 个相对链接有效。漂移检查仍仅交付 V1 + hold_open，不把 after_exit 演练和物理验收标记完成。发布目标为 [v0.7.0](https://github.com/kaattz/roborock_plus/releases/tag/v0.7.0)，推送、合并、标签与 manifest 的远端一致性在发布后核对；不部署用户 HA。
+
+## T12 补齐旧离库关门流程（2026-10-16，REQ-4、REQ-6、REQ-7、REQ-8、REQ-10）
+
+- `<files>` 原 req/spec/设计；garage_config.py、garage_control.py、garage_runtime.py、garage_task.py、config_flow.py 及对应翻译；tests/test_garage_after_exit.py、tests/test_garage_after_exit_review.py、tests/test_garage_after_exit_runtime.py、tests/ha_native_garage_after_exit_runtime.py、tests/ha_native_garage.py 及原 guard/会话/回放对照，控制变异脚本。
+- `<action>` 已复核旧 PHASE_LEAVE/RETURN/PARK；按用户随后明确的 S5.1 实现出库无额外暂停、受信区外关门；返航必须暂停确认→开门确认→app_resume 原返航。补控制器代次/暂停所有权、返航抢占和原生配置；不只删除 unsupported 校验，不复制本屋常量。
+- `<verify>` 新场景先红后绿：首次/再次离库、回洗/补电停靠及自主继续、真正结束、重复/失联样本、用户暂停、恢复失败、慢门/靠门返航和关门中返航；保留旧自动化及 hold_open 对照，运行相关全量/原生 HA/变异，所有 I/O 均隔离。
+- `<done>` 实际命令轨迹符合 S5.1，原任务不因返航 pause/app_charge 被破坏，未验证能力不能在 UI 中冒充可用；同一控制器处理两种模式，且不触发真实设备。
+
+时间盒：用户确认 60 分钟，开始 2026-10-16 00:35:19（上海），01:35:19 截止；后续要求合入同盒，不延长。内部代码/隔离验证授权有效，不部署、不触发真实设备。历史 v0.7.0 结果不改写为本轮成果。
+
+## T13 原生配置三步减负（REQ-13）
+
+- `<files>` config_flow.py、garage_config.py、strings.json 与 en/zh-Hans；tests/test_options_ui.py、tests/test_garage_config.py、原生 HA 表单测试。
+- `<action>` 首屏仅基本来源选择；随后只展示所选反馈和对应时长，沿用原生选择器；旧值合并保留，未选来源不要求无用字段，不猜门行程/极性。
+- `<verify>` 真实 Options 方法与 schema 保存/重入/切换来源、未启用草稿、已提供非法值及缺失必填的回归先红后绿；Linux 原生 HA 验证。
+- `<done>` 不再首屏铺全部参数，反馈不相关项不可见；所有选中来源的安全校验及旧配置兼容仍完整。
+
+根因与修正：返航开始前已有取消或其它任务记录时，旧校验先报错而跳过 app_pause。用户确认换路线后，先确认新鲜返航并制动，观察暂停后开门；初始及持续原任务关联仅授权自动恢复，初始失败不可被后续恢复洗白。
+6 个制动/授权场景先红后绿，覆盖坏记录、记录缺失/格式异常、后续恢复及关联时钟失效。最终主机全量 949 passed，Linux 原生 HA 2026.9.4 共 21 passed，compileall 通过；原生仅 5 条既有上游弃用提示。独立聚焦复审 111 passed，无新增 P1/P2。
+HA 只读核对：两条分区任务使用同一蓝图，开门由旧 garage_guard，离库关门由旧状态机；未触发设备、未修改远端配置。
+Review → 第一性原理：制动保护与恢复授权职责分开，复用原会话基线，不增加自动回充代偿或 STOP 依赖。漂移核对 REQ-8/REQ-13、S5.1/S5.2 与本地实现一致；原生表单覆盖 contact/timed 和重入/切换，位置来源由主机测试覆盖，未声称原生全组合或最低 HA 2026.8 逐版验证。
+保留缺口：型号物理暂停/保持/恢复、门行程/极性/防夹及整场实物验收仍由用户完成，未 archive 为全部验收完成。仓库未提供 scripts/check-lessons.mjs，未执行该脚本，不为此扩大改动。
+安全变异：原 34 项 34/34 捕获，新增“初始关联失败被后续好记录洗白”单项 1/1 捕获，合计 35/35；两轮均先跑原始对照，保留全部旧项，无覆盖降级。文档本地链接 26/26 有效，计划 202 行左右，未超过 300 行。
+本地候选以包含本段的提交固定，manifest 仍为已发布的 0.7.0，本轮改动标为未发布；不推送、不部署、不操作设备。本批实现/验证约 33 分钟，流程约 7 分钟（规格同步、独立评审、HA 配置核对），另等待路线确认约 12 分钟，在原 60 分钟时间盒内收口。
+
+## T14 用户指定发布 v0.7.1（2026-10-16）
+
+- `<files>` manifest.json、CHANGELOG.md、README.md、交接清单、本 feature 文档。
+- `<action>` 按用户明确指定升级 0.7.1，合并最新 origin/main，复核并推送分支，经 PR 合并到 main 后发布 v0.7.1；不部署 HA、不启用绑定。
+- `<verify>` 合并后重跑全量 pytest，独立发布复审；核对 GitHub main、tag、manifest 和 Release；保留 T12 的原生/变异结果及实物验收缺口。
+- `<done>` GitHub 可下载包含离库流程与配置减负的 v0.7.1，版本和说明一致，新控制默认关闭，未操作设备。发布结果以 GitHub Release 及 PR 记录为准。

@@ -78,6 +78,7 @@ from .garage_config import (
     GARAGE_CONTROL_VERSION,
     NUMERIC_RANGES,
     GarageConfigError,
+    required_timing_fields,
     validate_binding,
     validate_binding_ownership,
     validate_legacy_guard_ownership,
@@ -346,6 +347,7 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
         """Initialize options flow."""
         self.options = deepcopy(dict(config_entry.options))
         self._garage_duid: str | None = None
+        self._garage_draft: dict[str, Any] | None = None
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -573,6 +575,7 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
                 errors["base"] = "unsupported_robot"
             else:
                 self._garage_duid = user_input["duid"]
+                self._garage_draft = None
                 return await self.async_step_garage()
         return self.async_show_form(
             step_id="garage_select",
@@ -607,36 +610,144 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
     async def async_step_garage(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Edit a binding without issuing any door or robot command."""
+        """Choose basic settings and sources before showing hardware fields."""
         if self._garage_duid is None:
             return await self.async_step_garage_select()
-        errors: dict[str, str] = {}
-        bindings = self.options.get(CONF_GARAGE_BINDINGS, {})
-        values = bindings.get(self._garage_duid, {}) if user_input is None else user_input
+        values = self._garage_values()
         if user_input is not None:
+            values.update(user_input)
             try:
-                binding = validate_binding(
-                    user_input, supported=self._garage_duid in self._garage_devices()
-                )
-                if binding["enabled"]:
-                    state = self.hass.states.get(binding["cover_entity_id"])
-                    # An offline source may be saved, but cannot authorize runtime
-                    # passage. OPEN/CLOSE are command capabilities, not feedback.
-                    if state is not None and state.state not in ("unknown", "unavailable"):
-                        features = state.attributes.get("supported_features", 0)
-                        required = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE
-                        if not isinstance(features, int) or features & required != required:
-                            raise GarageConfigError("unsupported_cover", "cover_entity_id")
-                    self._validate_garage_ownership(binding)
+                if not isinstance(values.get("enabled", False), bool):
+                    raise GarageConfigError("invalid_boolean_value", "enabled")
+                validate_binding({**values, "enabled": False})
+                if not values.get("enabled", False):
+                    return self._save_garage_binding()
+                if not values.get("cover_entity_id"):
+                    raise GarageConfigError("missing_safety_configuration", "cover_entity_id")
+                if not isinstance(values["cover_entity_id"], str) or not values["cover_entity_id"].startswith("cover."):
+                    raise GarageConfigError("invalid_entity_reference", "cover_entity_id")
+                if values.get("task_door_mode", "hold_open") not in ("hold_open", "after_exit"):
+                    raise GarageConfigError("invalid_task_door_mode", "task_door_mode")
+                for direction in ("open", "close"):
+                    key = f"{direction}_source"
+                    if key not in values:
+                        raise GarageConfigError("missing_safety_configuration", key)
+                    if values[key] not in EVIDENCE_SOURCES:
+                        raise GarageConfigError("invalid_evidence_source", key)
             except GarageConfigError as error:
-                errors[error.field or "base"] = error.reason
-            else:
-                self.options[CONF_GARAGE_CONTROL_VERSION] = GARAGE_CONTROL_VERSION
-                self.options.setdefault(CONF_GARAGE_BINDINGS, {})[self._garage_duid] = binding
-                return self.async_create_entry(title="", data=self.options)
+                return self._garage_error_form(error)
+            if self._garage_feedback_fields():
+                return await self.async_step_garage_feedback()
+            return await self.async_step_garage_timing()
+        return self._garage_form("garage")
+
+    def _garage_values(self) -> dict[str, Any]:
+        """Keep inactive hardware values while a user changes evidence sources."""
+        if self._garage_draft is None:
+            self._garage_draft = deepcopy(dict(
+                self.options.get(CONF_GARAGE_BINDINGS, {}).get(self._garage_duid, {})
+            ))
+        return self._garage_draft
+
+    def _garage_feedback_fields(self) -> tuple[str, ...]:
+        values = self._garage_values()
+        fields = []
+        for direction in ("open", "close"):
+            if values.get(f"{direction}_source") == "contact":
+                fields.extend((f"{direction}_contact", f"{direction}_contact_state"))
+        if "position" in (values.get("open_source"), values.get("close_source")):
+            fields.extend(("position_kind", "open_position", "close_position"))
+        return tuple(fields)
+
+    async def async_step_garage_feedback(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask for only the explicitly selected endpoint sensors and polarity."""
+        values = self._garage_values()
+        if user_input is not None:
+            values.update(user_input)
+            try:
+                validate_binding({**values, "enabled": False})
+                for direction in ("open", "close"):
+                    if values.get(f"{direction}_source") == "contact":
+                        key = f"{direction}_contact"
+                        if not values.get(key) or values.get(f"{direction}_contact_state") not in ("on", "off"):
+                            raise GarageConfigError("invalid_contact_configuration", key)
+                if "position_kind" in self._garage_feedback_fields():
+                    if values.get("position_kind") not in ("measured", "estimated"):
+                        raise GarageConfigError("invalid_position_configuration", "position_kind")
+                    for key in ("open_position", "close_position"):
+                        if key not in values:
+                            raise GarageConfigError("missing_safety_configuration", key)
+            except GarageConfigError as error:
+                return self._garage_error_form(error)
+            return await self.async_step_garage_timing()
+        return self._garage_form("garage_feedback")
+
+    async def async_step_garage_timing(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Confirm only active-source timings, estimation risk and handover."""
+        if user_input is not None:
+            self._garage_values().update(user_input)
+            try:
+                return self._save_garage_binding()
+            except GarageConfigError as error:
+                return self._garage_error_form(error)
+        return self._garage_form("garage_timing")
+
+    def _save_garage_binding(self) -> ConfigFlowResult:
+        binding = validate_binding(
+            self._garage_values(), supported=self._garage_duid in self._garage_devices()
+        )
+        if binding["enabled"]:
+            state = self.hass.states.get(binding["cover_entity_id"])
+            # Command capabilities never stand in for physical feedback.
+            if state is not None and state.state not in ("unknown", "unavailable"):
+                features = state.attributes.get("supported_features", 0)
+                required = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE
+                if not isinstance(features, int) or features & required != required:
+                    raise GarageConfigError("unsupported_cover", "cover_entity_id")
+            self._validate_garage_ownership(binding)
+        self.options[CONF_GARAGE_CONTROL_VERSION] = GARAGE_CONTROL_VERSION
+        self.options.setdefault(CONF_GARAGE_BINDINGS, {})[self._garage_duid] = binding
+        return self.async_create_entry(title="", data=self.options)
+
+    def _garage_fields(self, step_id: str) -> tuple[str, ...]:
+        if step_id == "garage":
+            return ("enabled", "cover_entity_id", "task_door_mode", "open_source", "close_source", "close_permission_entity")
+        if step_id == "garage_feedback":
+            return self._garage_feedback_fields()
+        values = self._garage_values()
+        fields = list(required_timing_fields(values))
+        sources = (values.get("open_source"), values.get("close_source"))
+        if "timed" in sources or ("position" in sources and values.get("position_kind") == "estimated"):
+            fields.append("allow_estimated")
+        fields.append("handover_confirmed")
+        return tuple(fields)
+
+    def _garage_error_form(self, error: GarageConfigError) -> ConfigFlowResult:
+        for step_id in ("garage", "garage_feedback", "garage_timing"):
+            if error.field in self._garage_fields(step_id):
+                return self._garage_form(step_id, {error.field: error.reason})
+        if error.field:
+            step_id = "garage_feedback" if error.field in (
+                "open_contact", "close_contact", "open_contact_state", "close_contact_state",
+                "position_kind", "open_position", "close_position",
+            ) else "garage_timing"
+            # An invalid retained value must be editable even while its source
+            # is inactive; otherwise a hidden field would prevent every save.
+            return self._garage_form(step_id, {error.field: error.reason}, extra_fields=(error.field,))
+        return self._garage_form("garage_timing", {"base": error.reason})
+
+    def _garage_form(
+        self, step_id: str, errors: dict[str, str] | None = None,
+        *, extra_fields: tuple[str, ...] = (),
+    ) -> ConfigFlowResult:
+        values = self._garage_values()
 
         def field(key: str, default: Any = None) -> Any:
-            if key in values:
+            if key in values and values[key] not in (None, ""):
                 return vol.Optional(key, default=values[key])
             if default is not None:
                 return vol.Optional(key, default=default)
@@ -648,7 +759,7 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
                 translation_key=translation_key,
             ))
 
-        data_schema = {
+        selectors = {
             field("enabled", False): bool,
             field("cover_entity_id"): EntitySelector(EntitySelectorConfig(domain="cover")),
             field("task_door_mode", "hold_open"): choice(["hold_open", "after_exit"], "garage_task_mode"),
@@ -666,12 +777,14 @@ class RoborockOptionsFlowHandler(OptionsFlowWithReload):
         for key, (minimum, maximum) in {
             **NUMERIC_RANGES, "open_position": (0, 100), "close_position": (0, 100)
         }.items():
-            data_schema[field(key)] = NumberSelector(NumberSelectorConfig(
+            selectors[field(key)] = NumberSelector(NumberSelectorConfig(
                 min=minimum, max=maximum, step=1,
                 mode=NumberSelectorMode.BOX,
                 unit_of_measurement="%" if key.endswith("_position") else "s",
             ))
+        visible = (*self._garage_fields(step_id), *extra_fields)
+        data_schema = {key: selector for key, selector in selectors.items() if key.schema in visible}
         return self.async_show_form(
-            step_id="garage", data_schema=vol.Schema(data_schema), errors=errors,
+            step_id=step_id, data_schema=vol.Schema(data_schema), errors=errors or {},
             description_placeholders={"robot": self._garage_devices().get(self._garage_duid, self._garage_duid)},
         )

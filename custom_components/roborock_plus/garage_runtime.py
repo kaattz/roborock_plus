@@ -90,6 +90,7 @@ class GarageRuntime:
             move_door=self.move_door, door_observation=self.door_observation,
             robot_observation=self.robot_observation, close_allowed=self.close_allowed,
             persist=self.persist, notify=self.notify, supports_stop=self.supports_stop,
+            send_robot=self.async_control_command,
             clock=clock,
         )
 
@@ -101,7 +102,9 @@ class GarageRuntime:
     def door_observation(self) -> dict[str, Any]:
         cover = self.hass.states.get(self.binding['cover_entity_id'])
         attrs = {} if cover is None else cover.attributes
-        own_close = getattr(getattr(self, 'controller', None), 'phase', None) == 'closing'
+        phase = getattr(getattr(self, 'controller', None), 'phase', None)
+        own_context = getattr(getattr(cover, 'context', None), 'id', None) in self._contexts
+        own_close = phase == 'closing' or (own_context and phase in ('pausing_return', 'return_opening'))
         available = (self.binding.get('handover_confirmed') is True and cover is not None
                      and cover.state not in ('unknown', 'unavailable') and (cover.state != 'closing' or own_close))
         restored = attrs.get('restored') is True
@@ -122,6 +125,13 @@ class GarageRuntime:
         fresh = bool(getattr(c, 'last_update_success', False) and sampled is not None and 0 <= self.utc()-sampled <= max_age)
         state = str(sample.get('state', 'unknown'))
         trusted = False
+        outside: bool | None = None
+        position_sample: float | None = None
+        map_stamp = getattr(c, 'last_map_position_update', None)
+        if isinstance(map_stamp, datetime) and map_stamp.utcoffset() is not None:
+            candidate = map_stamp.timestamp()
+            if math.isfinite(candidate) and 0 <= candidate <= self.utc():
+                position_sample = candidate
         try:
             resolved = c.resolve_vacuum_position()
             zone = self._zone_provider()
@@ -129,10 +139,16 @@ class GarageRuntime:
             charger = getattr(map_data, 'charger', None)
             numbers = (resolved.x, resolved.y, getattr(charger, 'x', None), getattr(charger, 'y', None))
             valid = all(isinstance(n, (int,float)) and not isinstance(n,bool) and math.isfinite(n) for n in numbers)
-            trusted = bool(resolved.trusted and valid and zone is not None and
+            bounds = () if zone is None else (zone.min_x, zone.max_x, zone.min_y, zone.max_y)
+            valid_zone = (len(bounds) == 4 and all(
+                isinstance(n, (int, float)) and not isinstance(n, bool) and math.isfinite(n) for n in bounds
+            ) and zone.min_x < zone.max_x and zone.min_y < zone.max_y)
+            trusted = bool(resolved.trusted and valid and valid_zone and
                            zone.min_x <= charger.x <= zone.max_x and zone.min_y <= charger.y <= zone.max_y)
             if state in ('charging', 'charging_complete'):
                 trusted = trusted and math.hypot(resolved.x-charger.x, resolved.y-charger.y) <= 1000
+            if trusted and fresh and position_sample is not None:
+                outside = not (zone.min_x <= resolved.x <= zone.max_x and zone.min_y <= resolved.y <= zone.max_y)
         except (AttributeError, TypeError, ValueError, OverflowError):
             trusted = False
         return RobotObservation(
@@ -140,6 +156,7 @@ class GarageRuntime:
             in_cleaning=sample.get('in_cleaning'), in_returning=sample.get('in_returning'),
             summary=getattr(data,'clean_summary',None), position_trusted=trusted,
             docked=state in ('charging','charging_complete'), fresh=fresh, sample_id=sampled, sample_utc=sampled,
+            outside_danger_zone=outside, position_sample_id=position_sample,
         )
 
     def close_allowed(self) -> bool:
@@ -162,6 +179,20 @@ class GarageRuntime:
             'cover', f'{direction}_cover', {'entity_id':self.binding['cover_entity_id']},
             blocking=True, context=context,
         )
+
+    async def async_control_command(self, command: str) -> Any:
+        """Send only the controller's pause/resume, preserving the original task."""
+        name = command_name(command)
+        if name not in ('app_pause', 'app_resume'):
+            raise GarageControlError('unsupported_guarded_command')
+        if self._closed:
+            raise GarageControlError('control_unloaded')
+        if not self._restored or self._first_install:
+            raise GarageControlError('session_recovery_required')
+        self.coordinator.last_resume_command = 'app_resume'
+        response = await self.coordinator.properties_api.command.send(name)
+        await self.coordinator.async_refresh()
+        return response
 
     async def persist(self) -> None:
         payload = self.session.to_dict()

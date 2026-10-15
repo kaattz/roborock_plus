@@ -23,6 +23,20 @@ NUMERIC_RANGES = {
 EVIDENCE_SOURCES = ("contact", "position", "timed")
 
 
+def required_timing_fields(binding: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return only timings consumed by the explicitly selected evidence."""
+    required = {"operation_timeout_seconds", "dock_settle_seconds"}
+    for direction in ("open", "close"):
+        source = binding.get(f"{direction}_source")
+        if source == "contact":
+            required.add("contact_settle_seconds")
+        if source == "position":
+            required.add("position_settle_seconds")
+        if source == "timed" or (source == "position" and binding.get("position_kind") == "estimated"):
+            required.update((f"{direction}_travel_seconds", "travel_margin_seconds"))
+    return tuple(key for key in NUMERIC_RANGES if key in required)
+
+
 class GarageConfigError(ValueError):
     """A stable machine-readable configuration failure."""
 
@@ -55,6 +69,39 @@ def _entity(value: Any, domains: tuple[str, ...], field: str) -> None:
         raise GarageConfigError("invalid_entity_reference", field)
 
 
+def _validate_supplied_fields(binding: Mapping[str, Any]) -> None:
+    """Validate supplied values independently of whether a draft is complete."""
+    for key in ("enabled", "allow_estimated", "handover_confirmed"):
+        if key in binding and not isinstance(binding[key], bool):
+            raise GarageConfigError("invalid_boolean_value", key)
+    for key, (minimum, maximum) in {**NUMERIC_RANGES, "open_position": (0, 100), "close_position": (0, 100)}.items():
+        if key in binding:
+            _number(binding, key, minimum, maximum)
+    if "open_position" in binding and "close_position" in binding and binding["close_position"] >= binding["open_position"]:
+        raise GarageConfigError("invalid_position_thresholds", "open_position")
+    for key, domains in (
+        ("cover_entity_id", ("cover",)),
+        ("close_permission_entity", ("input_boolean", "binary_sensor")),
+        ("open_contact", ("binary_sensor",)),
+        ("close_contact", ("binary_sensor",)),
+    ):
+        if binding.get(key) not in (None, ""):
+            _entity(binding[key], domains, key)
+    for key, choices, reason in (
+        ("task_door_mode", ("hold_open", "after_exit"), "invalid_task_door_mode"),
+        ("open_source", EVIDENCE_SOURCES, "invalid_evidence_source"),
+        ("close_source", EVIDENCE_SOURCES, "invalid_evidence_source"),
+        ("open_contact_state", ("on", "off"), "invalid_contact_configuration"),
+        ("close_contact_state", ("on", "off"), "invalid_contact_configuration"),
+        ("position_kind", ("measured", "estimated"), "invalid_position_configuration"),
+    ):
+        value = binding.get(key)
+        if value not in (None, "") and value not in choices:
+            raise GarageConfigError(reason, key)
+    if binding.get("open_contact") and binding.get("open_contact") == binding.get("close_contact"):
+        raise GarageConfigError("duplicate_endpoint", "close_contact")
+
+
 def validate_binding(binding: Mapping[str, Any], *, supported: bool = True) -> dict[str, Any]:
     """Validate enabled settings without coercion or optimistic safety defaults.
 
@@ -65,17 +112,13 @@ def validate_binding(binding: Mapping[str, Any], *, supported: bool = True) -> d
         raise GarageConfigError("invalid_binding")
     result = dict(binding)
     result.setdefault("enabled", False)
-    for key in ("enabled", "allow_estimated", "handover_confirmed"):
-        if key in result and not isinstance(result[key], bool):
-            raise GarageConfigError("invalid_boolean_value", key)
+    _validate_supplied_fields(result)
     if not result["enabled"]:
         return result
     if not supported:
         raise GarageConfigError("unsupported_robot")
     result.setdefault("task_door_mode", "hold_open")
-    if result["task_door_mode"] == "after_exit":
-        raise GarageConfigError("unsupported_return_interlock", "task_door_mode")
-    if result["task_door_mode"] != "hold_open":
+    if result["task_door_mode"] not in ("hold_open", "after_exit"):
         raise GarageConfigError("invalid_task_door_mode", "task_door_mode")
     if "cover_entity_id" not in result:
         raise GarageConfigError("missing_safety_configuration", "cover_entity_id")
@@ -91,8 +134,6 @@ def validate_binding(binding: Mapping[str, Any], *, supported: bool = True) -> d
             if not result.get(contact_key) or result.get(f"{direction}_contact_state") not in ("on", "off"):
                 raise GarageConfigError("invalid_contact_configuration", contact_key)
             _entity(result[contact_key], ("binary_sensor",), contact_key)
-    if result.get("open_contact") and result.get("open_contact") == result.get("close_contact"):
-        raise GarageConfigError("duplicate_endpoint", "close_contact")
     uses_position = "position" in (result["open_source"], result["close_source"])
     if uses_position:
         if result.get("position_kind") not in ("measured", "estimated"):
@@ -106,9 +147,16 @@ def validate_binding(binding: Mapping[str, Any], *, supported: bool = True) -> d
     )
     if uses_estimate and not result.get("allow_estimated", False):
         raise GarageConfigError("estimated_risk_not_accepted", "allow_estimated")
-    for key, (minimum, maximum) in NUMERIC_RANGES.items():
-        _number(result, key, minimum, maximum)
-    longest_wait = max(result["open_travel_seconds"], result["close_travel_seconds"]) + result["travel_margin_seconds"] + max(result["contact_settle_seconds"], result["position_settle_seconds"])
+    for key in required_timing_fields(result):
+        _number(result, key, *NUMERIC_RANGES[key])
+    waits = []
+    for direction in ("open", "close"):
+        source = result[f"{direction}_source"]
+        wait = result["contact_settle_seconds"] if source == "contact" else result["position_settle_seconds"] if source == "position" else 0
+        if source == "timed" or (source == "position" and result["position_kind"] == "estimated"):
+            wait += result[f"{direction}_travel_seconds"] + result["travel_margin_seconds"]
+        waits.append(wait)
+    longest_wait = max(waits)
     if result["operation_timeout_seconds"] <= longest_wait:
         raise GarageConfigError("operation_timeout_too_short", "operation_timeout_seconds")
     permission = result.get("close_permission_entity")

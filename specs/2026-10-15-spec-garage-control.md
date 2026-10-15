@@ -1,6 +1,7 @@
 # 通用车库门控制规格
 
 日期：2026-10-15。状态：V1 + hold_open 已实现，v0.7.0 发布范围和验收缺口见 plan；after_exit 未开放。
+2026-10-16 追加：本地实现补齐离库后关门及三步配置，最新要求见 S5.1/S5.2；v0.7.0 标签仍为旧范围，未将本轮改动发布或部署。
 依据：[req](2026-10-15-req-garage-control.md)、[设计](../docs/plans/2026-10-15-door-evidence-design.md)。
 
 ## S1 架构与支持范围
@@ -16,10 +17,10 @@
 `garage_guard.py` 保留旧入口，新 binding 只委托同一控制器，不双重等待/发命令。
 复用 coordinator 状态/地图采样、危险区存储、resume_logic、启动确认监听。
 
-首版真实生产范围：V1 + hold_open。after_exit 必须有型号适配器证实各关键返航阶段
-可无损暂停/恢复，且位置、观测延迟和制动余量足以维护门口互锁，才可开放。
-不能让用户勾选“支持 pause”替代能力证据。现有 V1 无充分证据，返回
-`unsupported_return_interlock`；该分支只用隔离测试适配器验证，不冒充真实支持。
+v0.7.0 的生产范围是 V1 + hold_open；本轮本地实现新增 after_exit，按 S5.1 每次观测
+实际暂停、门通行与原返航恢复，不以一个“支持 pause”勾选或服务回执冒充成功。
+内部 transport 只接受 app_pause/app_resume，无此适配时明确 unsupported_return_interlock。
+静态接口/隔离回放不替代具体型号的硬件任务保持、制动和门防夹验收。
 Q7/Q10/A01 与多机共门明确拒绝；不同门可分别绑定不同 V1。
 
 ## S2 数据与配置
@@ -30,7 +31,7 @@ Q7/Q10/A01 与多机共门明确拒绝；不同门可分别绑定不同 V1。
 | 字段 | 值/默认 | 校验 |
 | --- | --- | --- |
 | enabled / cover_entity_id | false / 必选 cover | OPEN/CLOSE 可用；同门跨绑定/条目仅一名管理者 |
-| task_door_mode | hold_open | after_exit 先过 S1 能力检查 |
+| task_door_mode | hold_open / after_exit，默认 hold_open | after_exit 执行 S5.1 返航暂停/开门/恢复的实际观测互锁 |
 | open_source / close_source | contact、position、timed；首次无隐式选择 | 各方向独立，不按临时可用性切换 |
 | open_contact / close_contact | 各方向可选 binary_sensor | 两端点不能同实体；不按 device_class 排除合法门磁 |
 | open_contact_state / close_contact_state | 配触点时必选 on/off | 不默认猜极性 |
@@ -39,7 +40,7 @@ Q7/Q10/A01 与多机共门明确拒绝；不同门可分别绑定不同 V1。
 | open_travel_seconds / close_travel_seconds | 新绑定无通用值；旧值建议 45 | 1–600；估算必填完整行程 |
 | travel_margin_seconds | 新绑定需确认 | 0–120；不把旧 45 秒再重复叠默认余量 |
 | contact_settle_seconds / position_settle_seconds | 新绑定需确认 | 0–60；本屋全关 8 秒不当全开通用值 |
-| operation_timeout_seconds | 新绑定需确认；旧值建议 90 | 1–1800，须大于行程+余量+稳定期 |
+| operation_timeout_seconds | 新绑定需确认；旧值建议 90 | 1–1800，须大于所选来源最长证据等待；估算含行程+余量+稳定期 |
 | dock_settle_seconds | 新绑定需确认，1–300 | 至少两次成功状态样本跨越窗口；重复旧样本不累计稳定期 |
 | allow_estimated | false | timed/estimated position 须明确接受风险 |
 | close_permission_entity | 可空，input_boolean/binary_sensor | 只读；配置后非 on 均否；空表示无家庭附加限制 |
@@ -141,7 +142,8 @@ goto 须先观测 going_to_target，再观测后续新鲜受信 idle 且活动�
 | opening | 明确请求需通行 | 发开门并等许可；超时 blocked，不发机器人移动命令 |
 | awaiting_start | 原命令已发送 | 复用启动监视；观测开始才进入任务，未开始不补偿关门 |
 | task_open | hold_open 活跃任务 | 保持开门意图，回洗/补电/自主恢复不关 |
-| outside_closed | 仅能力合格的 after_exit | 区外+控制器暂停已生效，关门验证后恢复原任务，观测恢复 |
+| outside_closed | after_exit 的受信区外清扫 | 不额外暂停，区内→区外后关门验证；实际返航抢占关门等待 |
+| pausing_return / return_opening / resuming_return | after_exit 的受管返航 | 发送暂停并等新鲜 paused；等门通行后只恢复原会话，再等实际返航继续 |
 | returning | 本次真实返航且未停靠 | hold_open 应已开；异常关闭立即撤销许可/报风险，开门服从 S6 控制权 |
 | docked_intermission | 任务尚未终结且停靠 | 保持开门，等待继续，charging 不是结束 |
 | closing | 满足下文关闭守卫 | 重查家庭许可、发关闭、验证本方向来源 |
@@ -154,9 +156,9 @@ app_start/app_charge。只有自动恢复要求暂停属于控制器；用户显
 恢复自己的暂停任务仍可执行，但须任务上下文有效且完整通过门互锁。
 恢复调用成功不足以报告成功，必须观测原任务继续。
 
-after_exit 关闭：受信区外位置、可恢复阶段、暂停已确认、家庭许可允许，再关门并验证，
-恢复原任务。返航风险优先于关门等待，及时确认暂停，再开门、确认后恢复。
-能力不足不启用，不靠加密官方云轮询补偿。首版真实 V1 明确拒绝此模式。
+after_exit 关闭：真实受信区内→区外边沿、当前仍清扫、家庭许可允许，再关门并验证，
+不额外暂停。返航风险优先于关门等待，先暂停并确认，再用开门反转自身未完成的关闭，
+等通行后恢复；不依赖可选 STOP RPC，不靠加密官方云轮询补偿，详见 S5.1。
 
 最终关闭：本次任务终结、稳定停靠且真实 charger 几何自洽、无待恢复请求、无人工保持、
 家庭许可为真且 cover 可用。无任务的家庭 request_garage_close 使用另一合法前提：
@@ -165,6 +167,41 @@ after_exit 关闭：受信区外位置、可恢复阶段、暂停已确认、家
 这些场景机器人在危险区内正常，不套区外关闭守卫。
 按 configured 来源得到 confirmed 或 accepted estimated 后报告对应结果；
 estimated 不使确认关位实体变真，不循环重发 close 碰运气。
+
+### S5.1 离库后关门补齐（2026-10-16 最新用户要求，REQ-7/REQ-8）
+
+用户要求恢复旧状态机的产品流程；这是原 feature 的规格修正。本地增量已实现，尚待完成隔离验证与用户硬件验收。
+
+| 时点 | 目标行为 |
+| --- | --- |
+| HA 清扫开始 | 先开门并确认通行，再发原清扫请求 |
+| 清扫离开危险区 | 不额外暂停；只在真实受信区内→区外边沿、当前仍清扫、家庭许可允许时关门并验证；关门中实际返航优先抢占 |
+| 返回基站洗拖布或补电/最终回库 | 门尚未允许通行时，确认实际返航且未停靠，发送 app_pause 并等发送后的新鲜 paused；开门并确认通行，复核同一会话和暂停所有权，再发一次 app_resume，等待新鲜返航观测；不以 app_charge/app_start 代替恢复 |
+| 中途停靠及自主继续 | 门保持开；本次任务仍活跃，不因 charging/task_active=off 收尾。再次清扫并确认离开危险区后重复离库关门 |
+| 最终清扫完成回库 | 先确保返航开门；沿用本次任务终结、稳定停靠、真实基站几何和家庭许可等最终关闭守卫 |
+
+旧实现证据：scripts/garage_state_machine/build.py 的 PHASE_LEAVE 为暂停→关门→恢复；
+PHASE_RETURN 直接开门，没有暂停机器人；PHASE_PARK 额外核对清扫结束。
+旧离库触发是实际区内→区外边沿，没有仅首次离库的限制；信号 unknown→区外恢复不算新离库。
+
+最新用户要求覆盖上述旧代码：出库不暂停、返航必须暂停后开门再恢复，不直接沿用旧流程。
+pause/resume 回执不是观测；暂停后 flags 清零也不能单独当成取消，须保存原会话和记录基线，
+等待发送后的新鲜 paused，开门期间持续维持暂停，恢复前重查上下文、通行和所有权。
+用户确认先制动、后授权：活动会话的新鲜实际返航先暂停并确认，再开门；初始记录无效或关联已失效不能阻断制动，只能撤销自动恢复授权。初始授权失败须保留，后续记录恢复也不能洗白；开门后保持暂停并告警，不自动恢复。
+内部暂停/恢复使用白名单原 transport，不能递归走用户暂停入口；用户 pause/stop、人工门控、
+卸载或上下文变化撤销旧代次和暂停所有权，不能自动续上用户的暂停。失败明确阻塞，不回充代偿。
+历史“V1 非清扫暂停必取消”没有原始轨迹支持；已确认旧代码把返航恢复错误映射为 app_charge，
+当前代码与本地 APK 将 app_resume 和 app_charge 分开，不能混淆命令意图和固件能力。
+必须测试慢门、暂停不生效、未观察到原返航恢复、记录变更、靠门返航和关门中返航。
+仍须由用户进行型号实际暂停/保持/恢复验收；不能宣称采样与制动延迟为零或所有 V1 已硬件验证。
+人工/故障抢占、反馈失效、重启不重放与暂停所有权沿用 S6，不引入真实设备实操。
+
+### S5.2 配置减负（2026-10-16，REQ-13）
+
+将原单页展开参数拆成基本/来源、所选反馈、相关时长与确认三步，保持 HA 原生表单。
+只显示选中 contact/position/timed 的参数；未使用来源字段可以不提供，不新造硬件默认值。
+已保存配置合并保留；所有已提供值仍校验范围，切换来源后缺失相关参数须明确提示，
+动作超时须覆盖本次所选证据最长等待，估算接受/交接确认和单门所有权守卫继续生效。
 
 ## S6 并发、人工与生命周期
 
@@ -260,7 +297,7 @@ req 的 V1–V16 在 plan 落到文件；实际命令、结果和未完成项在
 | binary_sensor.py / safe_zone_store.py / v1_position_trust.py | 保留身份、duid 存储和受信位置；不用默认坐标代替 charger |
 | config_flow.py / tests/test_options_ui.py | 原生表单、旧单页保存/翻译守卫；门字段需分离落盘 |
 | automations/roborock_garage_door_statemachine.yaml | 离开暂停/返回等待/最近结束时间是迁移对象，不是通用接口 |
-| automations/README.md / 2026-10-08 状态机设计 | 旧流程不随 HACS 安装；返航不暂停有已知机型原因 |
+| automations/README.md / 2026-10-08 状态机设计 | 旧流程不随 HACS 安装；返航不暂停是旧策略，不能据此断言 APP_PAUSE 本身必取消 |
 
 HA 依据：[Cover 属性与能力](https://developers.home-assistant.io/docs/core/entity/cover/)、
 [Template 乐观模式限制](https://www.home-assistant.io/integrations/template/#cover-optimistic-mode)。

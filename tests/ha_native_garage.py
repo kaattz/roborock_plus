@@ -65,12 +65,20 @@ class MemoryEntries:
         return True
 
 
-def test_native_options_schema_and_saved_duid_binding():
+@pytest.mark.parametrize("mode", ["hold_open", "after_exit"])
+@pytest.mark.parametrize("source", ["contact", "timed"])
+def test_native_options_schema_and_saved_duid_binding(mode, source):
     async def exercise():
         flow_module = importlib.import_module(f"{PACKAGE}.config_flow")
         with TemporaryDirectory() as directory:
             hass = HomeAssistant(directory)
-            entry = NS(entry_id="isolated-entry", options={}, data={}, runtime_data=NS(
+            previous = binding()
+            previous.update(position_kind="measured", open_position=95, close_position=5)
+            entry = NS(entry_id="isolated-entry", options={
+                "garage_control_version": 1,
+                "garage_bindings": {"memory-robot": previous},
+                "garage_initialized_duids": ["memory-robot"],
+            }, data={}, runtime_data=NS(
                 v1=[NS(duid="memory-robot", device=NS(name="Memory robot"))],
             ))
             hass.config_entries = MemoryEntries(entry)
@@ -102,16 +110,57 @@ def test_native_options_schema_and_saved_duid_binding():
             selected = page["data_schema"]({"duid": "memory-robot"})
             page = await flow.async_step_garage_select(selected)
             assert page["step_id"] == "garage"
-            valid = page["data_schema"](binding())
+            basics = {"enabled": True, "cover_entity_id": "cover.memory_garage",
+                      "task_door_mode": mode, "open_source": source, "close_source": source}
+            assert len(page["data_schema"].schema) == 6
+            valid = page["data_schema"](basics)
             with pytest.raises(vol.Invalid):
-                page["data_schema"]({**binding(), "cover_entity_id": "invalid_entity_syntax"})
+                page["data_schema"]({**basics, "cover_entity_id": "invalid_entity_syntax"})
             rejected = await flow.async_step_garage({**valid, "cover_entity_id": "switch.wrong_domain"})
             assert rejected["errors"]["cover_entity_id"] == "invalid_entity_reference"
             result = await flow.async_step_garage(valid)
+            visited = []
+            values = {**binding(), **basics, "allow_estimated": source == "timed"}
+            while result["type"] == "form":
+                assert not result["errors"]
+                step_id = result["step_id"]
+                assert step_id not in visited
+                visited.append(step_id)
+                visible = {marker.schema for marker in result["data_schema"].schema}
+                submitted = result["data_schema"]({key: value for key, value in values.items() if key in visible})
+                result = await getattr(flow, f"async_step_{step_id}")(submitted)
+            assert visited == (["garage_feedback", "garage_timing"] if source == "contact" else ["garage_timing"])
             assert result["type"] == "create_entry"
             assert result["data"]["garage_control_version"] == 1
-            assert result["data"]["garage_bindings"]["memory-robot"]["open_contact_state"] == "on"
+            saved = result["data"]["garage_bindings"]["memory-robot"]
+            assert saved == {**previous, **basics, "allow_estimated": source == "timed"}
+            assert result["data"]["garage_initialized_duids"] == ["memory-robot"]
             assert "open_source" not in result["data"].get("drawables", {})
+
+            # Re-enter through the native form, then switch sources. Hidden
+            # calibrated hardware values must survive both saves unchanged.
+            entry.options = deepcopy(result["data"])
+            reopened = NativeOptions(entry)
+            reopened.hass = hass
+            reopened.context = {}
+            reopened.handler = "roborock_plus"
+            reopened.flow_id = "isolated-garage-options-reentry"
+            page = await reopened.async_step_garage_select({"duid": "memory-robot"})
+            assert page["data_schema"]({})["task_door_mode"] == mode
+            other_source = "timed" if source == "contact" else "contact"
+            change = page["data_schema"]({"open_source": other_source, "close_source": other_source})
+            page = await reopened.async_step_garage(change)
+            while page["type"] == "form":
+                assert not page["errors"]
+                submitted = page["data_schema"]({})
+                if page["step_id"] == "garage_timing" and other_source == "timed":
+                    submitted["allow_estimated"] = True
+                page = await getattr(reopened, f"async_step_{page['step_id']}")(submitted)
+            switched = page["data"]["garage_bindings"]["memory-robot"]
+            assert switched["open_contact_state"] == "on"
+            assert switched["open_travel_seconds"] == previous["open_travel_seconds"]
+            assert switched["open_position"] == previous["open_position"]
+            assert switched["position_kind"] == "measured"
             await hass.async_block_till_done()
 
     asyncio.run(exercise())

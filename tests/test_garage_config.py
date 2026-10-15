@@ -83,7 +83,7 @@ def test_extremely_large_numbers_report_configuration_error(config):
 
 @pytest.mark.parametrize("key", [
     "open_travel_seconds", "close_travel_seconds", "travel_margin_seconds",
-    "contact_settle_seconds", "position_settle_seconds", "operation_timeout_seconds", "dock_settle_seconds",
+    "operation_timeout_seconds", "dock_settle_seconds",
 ])
 def test_new_binding_requires_explicit_timing(config, key):
     value = binding()
@@ -127,7 +127,7 @@ def test_measured_and_estimated_positions_are_explicit(config):
         config.validate_binding(binding(allow_estimated=False))
 
 
-@pytest.mark.parametrize("timeout", [1, 48])
+@pytest.mark.parametrize("timeout", [1, 47])
 def test_timeout_must_exceed_travel_margin_and_settle(config, timeout):
     with pytest.raises(config.GarageConfigError, match="operation_timeout_too_short"):
         config.validate_binding(binding(operation_timeout_seconds=timeout))
@@ -136,13 +136,107 @@ def test_timeout_must_exceed_travel_margin_and_settle(config, timeout):
 def test_handover_and_real_v1_capabilities_cannot_be_bypassed(config):
     with pytest.raises(config.GarageConfigError, match="handover_required"):
         config.validate_binding(binding(handover_confirmed=False))
-    with pytest.raises(config.GarageConfigError, match="unsupported_return_interlock"):
-        config.validate_binding(binding(task_door_mode="after_exit"))
+    assert config.validate_binding(binding(task_door_mode="after_exit"))["task_door_mode"] == "after_exit"
     with pytest.raises(config.GarageConfigError, match="unsupported_robot"):
         config.validate_binding(binding(), supported=False)
     for key in ("enabled", "allow_estimated", "handover_confirmed"):
         with pytest.raises(config.GarageConfigError, match="invalid_boolean_value"):
             config.validate_binding(binding(**{key: "true"}))
+
+
+@pytest.mark.parametrize("mode", ["hold_open", "after_exit"])
+def test_both_modes_keep_explicit_handover_sources_estimation_and_robot_guards(config, mode):
+    value = binding(task_door_mode=mode)
+    assert config.validate_binding(value)["task_door_mode"] == mode
+    with pytest.raises(config.GarageConfigError, match="handover_required"):
+        config.validate_binding({**value, "handover_confirmed": False})
+    with pytest.raises(config.GarageConfigError, match="estimated_risk_not_accepted"):
+        config.validate_binding({**value, "allow_estimated": False})
+    with pytest.raises(config.GarageConfigError, match="invalid_evidence_source"):
+        config.validate_binding({**value, "open_source": "auto"})
+    with pytest.raises(config.GarageConfigError, match="unsupported_robot"):
+        config.validate_binding(value, supported=False)
+    with pytest.raises(config.GarageConfigError, match="invalid_task_door_mode"):
+        config.validate_binding({**value, "task_door_mode": "open_on_return_without_pause"})
+
+
+def test_mode_defaults_remain_disabled_and_hold_open(config):
+    assert config.validate_binding({})["enabled"] is False
+    value = binding()
+    value.pop("task_door_mode")
+    assert config.validate_binding(value)["task_door_mode"] == "hold_open"
+
+
+def test_contact_binding_does_not_require_unused_position_or_estimate_timings(config):
+    value = binding(open_source="contact", close_source="contact", open_contact="binary_sensor.open", close_contact="binary_sensor.closed", open_contact_state="on", close_contact_state="off", allow_estimated=False)
+    for key in ("open_travel_seconds", "close_travel_seconds", "travel_margin_seconds", "position_settle_seconds"):
+        value.pop(key)
+    assert config.validate_binding(value) == value
+    value.pop("contact_settle_seconds")
+    with pytest.raises(config.GarageConfigError, match="missing_safety_configuration"):
+        config.validate_binding(value)
+
+
+def test_measured_position_binding_only_requires_its_selected_feedback_timing(config):
+    value = binding(open_source="position", close_source="position", position_kind="measured", open_position=95, close_position=5, allow_estimated=False)
+    for key in ("open_travel_seconds", "close_travel_seconds", "travel_margin_seconds", "contact_settle_seconds"):
+        value.pop(key)
+    assert config.validate_binding(value) == value
+    value.pop("position_settle_seconds")
+    with pytest.raises(config.GarageConfigError, match="missing_safety_configuration"):
+        config.validate_binding(value)
+
+
+def test_estimated_position_keeps_full_travel_margin_and_position_stabilization(config):
+    value = binding(open_source="position", close_source="position", position_kind="estimated", open_position=95, close_position=5)
+    value.pop("contact_settle_seconds")
+    assert config.validate_binding(value) == value
+    for key in ("open_travel_seconds", "close_travel_seconds", "travel_margin_seconds", "position_settle_seconds"):
+        missing = dict(value)
+        missing.pop(key)
+        with pytest.raises(config.GarageConfigError, match="missing_safety_configuration"):
+            config.validate_binding(missing)
+
+
+def test_unused_but_retained_values_are_still_strictly_checked(config):
+    value = binding(contact_settle_seconds=float("nan"))
+    with pytest.raises(config.GarageConfigError, match="invalid_numeric_value"):
+        config.validate_binding(value)
+    with pytest.raises(config.GarageConfigError, match="invalid_numeric_value"):
+        config.validate_binding({**value, "enabled": False})
+
+
+@pytest.mark.parametrize("field,value,reason", [
+    ("cover_entity_id", "switch.door", "invalid_entity_reference"),
+    ("cover_entity_id", "cover.invalid space", "invalid_entity_reference"),
+    ("cover_entity_id", {}, "invalid_entity_reference"),
+    ("close_permission_entity", False, "invalid_entity_reference"),
+    ("close_permission_entity", "sensor.permission", "invalid_entity_reference"),
+    ("open_source", "auto", "invalid_evidence_source"),
+    ("close_source", [], "invalid_evidence_source"),
+    ("task_door_mode", "open_without_pause", "invalid_task_door_mode"),
+    ("task_door_mode", {}, "invalid_task_door_mode"),
+    ("open_contact", "switch.endpoint", "invalid_entity_reference"),
+    ("close_contact_state", {}, "invalid_contact_configuration"),
+    ("position_kind", [], "invalid_position_configuration"),
+])
+def test_draft_allows_missing_fields_but_rejects_every_supplied_illegal_reference_or_enum(config, field, value, reason):
+    with pytest.raises(config.GarageConfigError) as error:
+        config.validate_binding({"enabled": False, field: value})
+    assert error.value.reason == reason
+    assert error.value.field == field
+
+
+def test_draft_preserves_empty_optional_and_inactive_fields_without_guessing(config):
+    draft = {"enabled": False, "cover_entity_id": "", "close_permission_entity": "",
+             "open_source": "", "close_source": None, "task_door_mode": "",
+             "open_contact": "", "close_contact_state": None, "position_kind": ""}
+    assert config.validate_binding(draft) == draft
+
+
+def test_draft_cannot_store_two_identical_endpoint_references(config):
+    with pytest.raises(config.GarageConfigError, match="duplicate_endpoint"):
+        config.validate_binding({"enabled": False, "open_contact": "binary_sensor.same", "close_contact": "binary_sensor.same"})
 
 
 def test_entity_domains_and_permission_are_checked(config):

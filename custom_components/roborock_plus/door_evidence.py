@@ -92,7 +92,6 @@ class DoorEvidence:
         self._command: _Command | None = None
         self._stable_since: dict[str, float] = {}
         self._last_now: float | None = None
-        self._invalid_reason: str | None = None
 
     def note_command(self, direction: str, now: float, operation_id: int) -> None:
         """Record an accepted full-travel command, starting a new operation."""
@@ -106,14 +105,12 @@ class DoorEvidence:
             self.invalidate("invalid_operation_id")
             return
         self._stable_since.clear()
-        self._invalid_reason = None
         self._command = _Command(direction, valid_now, operation_id)
 
     def invalidate(self, reason: str) -> None:
-        """Revoke old estimates and stable facts after stop, fault or manual move."""
+        """Revoke estimates and stable facts; the controller retains fault reasons."""
         self._command = None
         self._stable_since.clear()
-        self._invalid_reason = reason
 
     def observe(
         self,
@@ -266,7 +263,9 @@ class DoorEvidence:
             return self._unknown(direction, "invalid_configuration")
         command = self._command
         if command is None or command.direction != direction:
-            return self._unknown(direction, self._invalid_reason or "command_required")
+            # Current source failures were checked before estimating. A revoked
+            # old command is not evidence that the source is still unavailable.
+            return self._unknown(direction, "command_required")
         if now - command.started_at < travel + margin:
             return EndpointEvidence(None, "unknown", str(self._binding[f"{direction}_source"]), "travel_in_progress")
         return None

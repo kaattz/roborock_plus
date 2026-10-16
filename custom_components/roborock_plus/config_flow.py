@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 import logging
+import math
 from typing import Any
 
 from roborock.data import UserData
@@ -45,6 +46,7 @@ from homeassistant.helpers.selector import (
     TextSelectorType,
 )
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
+from homeassistant.helpers.translation import async_get_translations
 
 from . import RoborockConfigEntry
 from .clean_command_watch import (
@@ -117,6 +119,17 @@ from .v1_stuck_detection import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class _OptionsNumberSelector(NumberSelector):
+    """Render a number box; let the options step return localized errors.
+
+    FlowManager validates the wire schema before invoking the step. Preserve
+    missing/invalid input here so the step can name every offending field.
+    """
+
+    def __call__(self, value: Any) -> Any:
+        return value
 
 
 class RoborockFlowHandler(ConfigFlow, domain=DOMAIN):
@@ -351,6 +364,7 @@ class RoborockOptionsFlowHandler(OptionsFlow):
         self.options = deepcopy(dict(config_entry.options))
         self._garage_duid: str | None = None
         self._garage_draft: dict[str, Any] | None = None
+        self._drawables_input: dict[str, Any] | None = None
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -363,6 +377,7 @@ class RoborockOptionsFlowHandler(OptionsFlow):
     ) -> ConfigFlowResult:
         """Manage status polling and map drawable options."""
         errors: dict[str, str] = {}
+        invalid_fields: dict[str, str] = {}
         configure_garage = False
         if user_input is not None:
             user_input = dict(user_input)
@@ -373,39 +388,60 @@ class RoborockOptionsFlowHandler(OptionsFlow):
                 if values is not None:
                     user_input.update(values)
             configure_garage = user_input.pop("do_configure_garage", False)
-            self.options[CONF_V1_LOCAL_STATUS_POLL_INTERVAL] = int(
-                user_input.pop(CONF_V1_LOCAL_STATUS_POLL_INTERVAL)
-            )
-            self.options[CONF_V1_MAP_POSITION_POLL_INTERVAL] = int(
-                user_input.pop(CONF_V1_MAP_POSITION_POLL_INTERVAL)
-            )
-            self.options[CONF_CLEAN_COMMAND_WATCH_TIMEOUT] = int(
-                user_input.pop(CONF_CLEAN_COMMAND_WATCH_TIMEOUT)
-            )
+            numeric_ranges = {
+                CONF_V1_LOCAL_STATUS_POLL_INTERVAL: (MIN_V1_LOCAL_STATUS_POLL_INTERVAL, MAX_V1_LOCAL_STATUS_POLL_INTERVAL),
+                CONF_V1_MAP_POSITION_POLL_INTERVAL: (MIN_V1_MAP_POSITION_POLL_INTERVAL, MAX_V1_MAP_POSITION_POLL_INTERVAL),
+                CONF_CLEAN_COMMAND_WATCH_TIMEOUT: (0, MAX_CLEAN_COMMAND_WATCH_TIMEOUT),
+                CONF_V1_STUCK_WINDOW: (MIN_V1_STUCK_WINDOW, MAX_V1_STUCK_WINDOW),
+                CONF_V1_STUCK_RADIUS: (MIN_V1_STUCK_RADIUS, MAX_V1_STUCK_RADIUS),
+            }
+            entered = {field: user_input.pop(field, None) for field in numeric_ranges}
+            for field, (minimum, maximum) in numeric_ranges.items():
+                value = entered[field]
+                if value is None or value == "":
+                    invalid_fields[field] = "required_field"
+                    continue
+                try:
+                    number = float(value)
+                except (TypeError, ValueError, OverflowError):
+                    invalid_fields[field] = "invalid_monitoring_number"
+                    continue
+                if isinstance(value, bool) or not math.isfinite(number) or not number.is_integer() or not minimum <= number <= maximum:
+                    invalid_fields[field] = "invalid_monitoring_number"
+                    continue
+                self.options[field] = int(number)
+            self._drawables_input = None
+            if invalid_fields:
+                self._drawables_input = {
+                    field: None if (
+                        not isinstance(value, (int, float, str)) or isinstance(value, bool)
+                        or isinstance(value, float) and not math.isfinite(value)
+                    ) else value
+                    for field, value in entered.items()
+                }
+                errors.update({f"monitoring.{field}": reason for field, reason in invalid_fields.items()})
+                errors["base"] = (
+                    "missing_monitoring_fields" if set(invalid_fields.values()) == {"required_field"}
+                    else "invalid_monitoring_fields"
+                )
             self.options[CONF_V1_STUCK_DETECTION_ENABLED] = bool(
-                user_input.pop(CONF_V1_STUCK_DETECTION_ENABLED)
-            )
-            self.options[CONF_V1_STUCK_WINDOW] = int(
-                user_input.pop(CONF_V1_STUCK_WINDOW)
-            )
-            self.options[CONF_V1_STUCK_RADIUS] = int(
-                user_input.pop(CONF_V1_STUCK_RADIUS)
+                user_input.pop(CONF_V1_STUCK_DETECTION_ENABLED, self.options.get(CONF_V1_STUCK_DETECTION_ENABLED, True))
             )
             self.options[CONF_GARAGE_GUARD_ENABLED] = bool(
-                user_input.pop(CONF_GARAGE_GUARD_ENABLED)
+                user_input.pop(CONF_GARAGE_GUARD_ENABLED, self.options.get(CONF_GARAGE_GUARD_ENABLED, False))
             )
             self.options[CONF_GARAGE_DOOR_ENTITY_ID] = user_input.pop(
-                CONF_GARAGE_DOOR_ENTITY_ID, ""
+                CONF_GARAGE_DOOR_ENTITY_ID, self.options.get(CONF_GARAGE_DOOR_ENTITY_ID, "")
             )
             self.options[CONF_SHOW_BACKGROUND] = user_input.pop(CONF_SHOW_BACKGROUND)
             self.options[CONF_SHOW_ROOMS] = user_input.pop(CONF_SHOW_ROOMS)
             self.options[CONF_SHOW_WALLS] = user_input.pop(CONF_SHOW_WALLS)
             self.options.setdefault(DRAWABLES, {}).update(user_input)
-            if self.options[CONF_GARAGE_GUARD_ENABLED] and (
+            if not errors and self.options[CONF_GARAGE_GUARD_ENABLED] and (
                 not self.options[CONF_GARAGE_DOOR_ENTITY_ID]
             ):
                 errors["base"] = "garage_guard_missing_config"
-            else:
+            elif not errors:
                 try:
                     validate_legacy_guard_ownership(
                         self.options, entry_id=self.config_entry.entry_id,
@@ -438,11 +474,12 @@ class RoborockOptionsFlowHandler(OptionsFlow):
             CONF_V1_STUCK_RADIUS,
             DEFAULT_V1_STUCK_RADIUS,
         )
+        form_values = {**self.options, **(self._drawables_input or {})}
         data_schema = {
-            vol.Required(
+            vol.Optional(
                 CONF_V1_LOCAL_STATUS_POLL_INTERVAL,
-                default=current_interval,
-            ): NumberSelector(
+                description={"suggested_value": form_values.get(CONF_V1_LOCAL_STATUS_POLL_INTERVAL, current_interval)},
+            ): _OptionsNumberSelector(
                 NumberSelectorConfig(
                     min=MIN_V1_LOCAL_STATUS_POLL_INTERVAL,
                     max=MAX_V1_LOCAL_STATUS_POLL_INTERVAL,
@@ -451,10 +488,10 @@ class RoborockOptionsFlowHandler(OptionsFlow):
                     unit_of_measurement="s",
                 ),
             ),
-            vol.Required(
+            vol.Optional(
                 CONF_V1_MAP_POSITION_POLL_INTERVAL,
-                default=current_map_interval,
-            ): NumberSelector(
+                description={"suggested_value": form_values.get(CONF_V1_MAP_POSITION_POLL_INTERVAL, current_map_interval)},
+            ): _OptionsNumberSelector(
                 NumberSelectorConfig(
                     min=MIN_V1_MAP_POSITION_POLL_INTERVAL,
                     max=MAX_V1_MAP_POSITION_POLL_INTERVAL,
@@ -463,10 +500,10 @@ class RoborockOptionsFlowHandler(OptionsFlow):
                     unit_of_measurement="s",
                 ),
             ),
-            vol.Required(
+            vol.Optional(
                 CONF_CLEAN_COMMAND_WATCH_TIMEOUT,
-                default=current_watch_timeout,
-            ): NumberSelector(
+                description={"suggested_value": form_values.get(CONF_CLEAN_COMMAND_WATCH_TIMEOUT, current_watch_timeout)},
+            ): _OptionsNumberSelector(
                 NumberSelectorConfig(
                     min=0,
                     max=MAX_CLEAN_COMMAND_WATCH_TIMEOUT,
@@ -475,10 +512,10 @@ class RoborockOptionsFlowHandler(OptionsFlow):
                     unit_of_measurement="s",
                 ),
             ),
-            vol.Required(
+            vol.Optional(
                 CONF_V1_STUCK_WINDOW,
-                default=current_stuck_window,
-            ): NumberSelector(
+                description={"suggested_value": form_values.get(CONF_V1_STUCK_WINDOW, current_stuck_window)},
+            ): _OptionsNumberSelector(
                 NumberSelectorConfig(
                     min=MIN_V1_STUCK_WINDOW,
                     max=MAX_V1_STUCK_WINDOW,
@@ -487,10 +524,10 @@ class RoborockOptionsFlowHandler(OptionsFlow):
                     unit_of_measurement="s",
                 ),
             ),
-            vol.Required(
+            vol.Optional(
                 CONF_V1_STUCK_RADIUS,
-                default=current_stuck_radius,
-            ): NumberSelector(
+                description={"suggested_value": form_values.get(CONF_V1_STUCK_RADIUS, current_stuck_radius)},
+            ): _OptionsNumberSelector(
                 NumberSelectorConfig(
                     min=MIN_V1_STUCK_RADIUS,
                     max=MAX_V1_STUCK_RADIUS,
@@ -505,18 +542,6 @@ class RoborockOptionsFlowHandler(OptionsFlow):
                 default=self.options.get(CONF_V1_STUCK_DETECTION_ENABLED, True),
             )
         ] = bool
-        data_schema[
-            vol.Required(
-                CONF_GARAGE_GUARD_ENABLED,
-                default=self.options.get(CONF_GARAGE_GUARD_ENABLED, False),
-            )
-        ] = bool
-        data_schema[
-            vol.Optional(
-                CONF_GARAGE_DOOR_ENTITY_ID,
-                default=self.options.get(CONF_GARAGE_DOOR_ENTITY_ID, ""),
-            )
-        ] = EntitySelector(EntitySelectorConfig(domain="cover"))
         for drawable, default_value in DEFAULT_DRAWABLES.items():
             data_schema[
                 vol.Required(
@@ -549,29 +574,21 @@ class RoborockOptionsFlowHandler(OptionsFlow):
             CONF_CLEAN_COMMAND_WATCH_TIMEOUT, CONF_V1_STUCK_DETECTION_ENABLED,
             CONF_V1_STUCK_WINDOW, CONF_V1_STUCK_RADIUS,
         }
-        legacy_fields = {CONF_GARAGE_GUARD_ENABLED, CONF_GARAGE_DOOR_ENTITY_ID}
         monitoring_schema = {
             marker: value for marker, value in data_schema.items()
             if marker.schema in monitoring_fields
         }
         map_schema = {
             marker: value for marker, value in data_schema.items()
-            if marker.schema not in (monitoring_fields | legacy_fields)
-        }
-        legacy_schema = {
-            marker: value for marker, value in data_schema.items()
-            if marker.schema in legacy_fields
+            if marker.schema not in monitoring_fields
         }
         data_schema = {
             vol.Optional("do_configure_garage", default=configure_garage): bool,
-            vol.Required("monitoring", default=dict): section(
+            vol.Required("monitoring"): section(
                 vol.Schema(monitoring_schema), {"collapsed": False}
             ),
-            vol.Required("map_display", default=dict): section(
+            vol.Required("map_display"): section(
                 vol.Schema(map_schema), {"collapsed": True}
-            ),
-            vol.Required("legacy_compatibility", default=dict): section(
-                vol.Schema(legacy_schema), {"collapsed": True}
             ),
         }
         is_official_cloud = is_official_cloud_url(
@@ -581,14 +598,21 @@ class RoborockOptionsFlowHandler(OptionsFlow):
             self.options,
             is_official_cloud=is_official_cloud,
         )
+        placeholders = {
+            "current_interval": str(current_interval),
+            "current_map_interval": str(int(resolved_map_interval.total_seconds())),
+        }
+        if invalid_fields:
+            translations = await async_get_translations(
+                self.hass, self.hass.config.language, "options", {DOMAIN}
+            )
+            prefix = f"component.{DOMAIN}.options.step.{DRAWABLES}.sections.monitoring.data."
+            placeholders["fields"] = ", ".join(translations[prefix + field] for field in invalid_fields)
         return self.async_show_form(
             step_id=DRAWABLES,
             data_schema=vol.Schema(data_schema),
             errors=errors,
-            description_placeholders={
-                "current_interval": str(current_interval),
-                "current_map_interval": str(int(resolved_map_interval.total_seconds())),
-            },
+            description_placeholders=placeholders,
         )
 
     def _garage_devices(self) -> dict[str, str]:

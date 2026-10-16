@@ -14,16 +14,17 @@ MONITORING = {
     "v1_stuck_window", "v1_stuck_radius",
 }
 LEGACY = {"garage_guard_enabled", "garage_door_entity_id"}
-GROUPS = {"monitoring", "map_display", "legacy_compatibility"}
+GROUPS = {"monitoring", "map_display"}
 
 
 def grouped(values):
     values = deepcopy(values)
     navigation = values.pop("do_configure_garage", False)
+    for key in LEGACY:
+        values.pop(key, None)
     return {
         "do_configure_garage": navigation,
         "monitoring": {key: values.pop(key) for key in MONITORING},
-        "legacy_compatibility": {key: values.pop(key) for key in LEGACY},
         "map_display": values,
     }
 
@@ -33,18 +34,16 @@ def fields(page):
 
 
 def section_defaults(page, group):
-    return {marker.key: marker.default for marker in fields(page)[group].schema}
+    return {marker.key: marker.description.get("suggested_value", marker.default) for marker in fields(page)[group].schema}
 
 
 def test_root_has_new_garage_entry_and_native_collapsible_groups():
     page = asyncio.run(_options_handler().async_step_init())
     root = fields(page)
-    assert list(root) == ["do_configure_garage", "monitoring", "map_display", "legacy_compatibility"]
+    assert list(root) == ["do_configure_garage", "monitoring", "map_display"]
     assert root["monitoring"].options["collapsed"] is False
     assert root["map_display"].options["collapsed"] is True
-    assert root["legacy_compatibility"].options["collapsed"] is True
     assert set(section_defaults(page, "monitoring")) == MONITORING
-    assert set(section_defaults(page, "legacy_compatibility")) == LEGACY
     assert set(section_defaults(page, "map_display")) == {"show_background", "show_rooms", "show_walls"}
 
 
@@ -52,6 +51,7 @@ def test_grouped_submit_preserves_existing_values_and_original_storage_shape():
     previous = {
         "unrelated": {"preserved": True}, "garage_bindings": {"robot-z": {"enabled": False}},
         "garage_initialized_duids": ["robot-z"], "drawables": {"existing_overlay": True},
+        "garage_guard_enabled": True, "garage_door_entity_id": "cover.legacy",
     }
     handler = _options_handler(previous)
     values = _normal_options()
@@ -96,7 +96,8 @@ def test_grouped_new_garage_navigation_keeps_options_pending_until_final_save():
 
 
 def test_legacy_conflict_remains_visible_and_preserves_grouped_edits():
-    handler = _options_handler()
+    previous = {"garage_guard_enabled": True, "garage_door_entity_id": "cover.door"}
+    handler = _options_handler(previous)
     other = SimpleNamespace(
         entry_id="other", options={"garage_bindings": {"other-robot": _valid_garage()}},
         runtime_data=SimpleNamespace(v1=[]),
@@ -108,12 +109,11 @@ def test_legacy_conflict_remains_visible_and_preserves_grouped_edits():
     page = asyncio.run(handler.async_step_drawables(grouped(values)))
     assert page["type"] == "form"
     assert page["errors"]["base"] == "legacy_guard_conflict"
-    assert section_defaults(page, "legacy_compatibility")["garage_door_entity_id"] == "cover.door"
     assert section_defaults(page, "monitoring")["v1_local_status_poll_interval"] == 3
     assert section_defaults(page, "map_display")["show_rooms"] is False
     checkbox = next(marker for marker in page["data_schema"] if marker.key == "do_configure_garage")
     assert checkbox.default is True
-    assert handler.config_entry.options == {}
+    assert handler.config_entry.options == previous
 
 
 def test_group_field_translations_follow_the_native_frontend_lookup_path():
@@ -121,7 +121,7 @@ def test_group_field_translations_follow_the_native_frontend_lookup_path():
         step = json.loads((CONFIG_FLOW.parent / name).read_text(encoding="utf-8"))["options"]["step"]["drawables"]
         assert set(step["sections"]) == GROUPS
         assert set(step["sections"]["monitoring"]["data"]) == MONITORING
-        assert set(step["sections"]["legacy_compatibility"]["data"]) == LEGACY
+        assert not LEGACY & step["data"].keys()
         all_group_fields = set()
         for group in GROUPS:
             translated = step["sections"][group]

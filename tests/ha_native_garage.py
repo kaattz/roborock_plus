@@ -23,9 +23,27 @@ from homeassistant.core import HomeAssistant, callback
 # HA installs its voluptuous-compatible engine while importing the package.
 # Import the public validation facade afterwards, just as HA integrations do.
 import voluptuous as vol
+from homeassistant.data_entry_flow import section
 
 
 PACKAGE = "custom_components.roborock_plus"
+
+
+def options_schema_input(schema, flat_values):
+    """Validate a payload grouped by the actual HA section schema, if present."""
+    def group(current_schema):
+        result = {}
+        for marker, validator in current_schema.schema.items():
+            key = getattr(marker, "schema", marker)
+            if isinstance(validator, section):
+                children = group(validator.schema)
+                if children:
+                    result[key] = children
+            elif key in flat_values:
+                result[key] = flat_values[key]
+        return result
+
+    return schema(group(schema))
 
 
 def test_native_imports_all_changed_production_modules():
@@ -104,7 +122,7 @@ def test_native_options_schema_and_saved_duid_binding(mode, source):
             }
             page = await flow.async_step_init()
             assert isinstance(page["data_schema"], vol.Schema)
-            normal = page["data_schema"](normal)
+            normal = options_schema_input(page["data_schema"], normal)
             page = await flow.async_step_drawables(normal)
             assert page["step_id"] == "garage_select"
             selected = page["data_schema"]({"duid": "memory-robot"})

@@ -109,9 +109,14 @@ def _options_handler(options=None, robots=("robot-a",)):
             return {"type": "create_entry", **kwargs}
         def async_abort(self, **kwargs):
             return {"type": "abort", **kwargs}
+    class Section:
+        def __init__(self, schema, options=None):
+            self.schema = schema
+            self.options = options or {}
     scope.update({
         "deepcopy": deepcopy,
         "OptionsFlow": Base,
+        "section": Section,
         "vol": SimpleNamespace(Required=Marker, Optional=Marker, Schema=lambda value: value),
         "NumberSelector": lambda config: config,
         "NumberSelectorConfig": dict,

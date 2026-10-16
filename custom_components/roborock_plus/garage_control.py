@@ -159,9 +159,11 @@ class GarageController:
             if self.session.reason == 'session_recovery_required':
                 self.session.reconcile_active(self.robot)
         self.reason = None
-        self._user_hold = False
+        # An active task without passage needs a new explicit request. Reset
+        # must not restart its door operation or let background ticks relock it.
+        self._user_hold = self.session.active and self.passage_allowed is not True
         self.notify(None)
-        self.phase = 'task_open' if self.session.active else 'idle'
+        self.phase = 'manual_hold' if self._user_hold else ('task_open' if self.session.active else 'idle')
 
     def _acquire(self) -> int:
         self._check()
@@ -203,6 +205,12 @@ class GarageController:
             endpoint = self.state.open if direction == 'open' else self.state.close
             if endpoint.reason in ('endpoint_conflict', 'feedback_unavailable'):
                 raise GarageControlError(endpoint.reason)
+            source = self.binding.get(f'{direction}_source')
+            estimated = source == 'timed' or (
+                source == 'position' and self.binding.get('position_kind') == 'estimated'
+            )
+            if estimated and (self.state.operation_id != operation or self.state.direction != direction):
+                raise GarageControlError('operation_cancelled')
             if direction == 'open':
                 ready = self.passage_allowed is True
             else:

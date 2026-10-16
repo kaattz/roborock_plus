@@ -2,7 +2,7 @@
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz/)
 
-当前发布：**v0.7.5**，修复选项预填值被误报必填，缺失或无效数字在顶部用中文列出字段名；首页只保留运行监测和地图显示分组，旧配置值保留，新车库控制默认关闭。[更新记录](CHANGELOG.md)
+当前发布：**v0.7.6**，修复门反馈恢复后计时或估算开门仍被旧标记误拦的问题；新显式请求重新等待完整行程与余量，新车库控制默认关闭。[更新记录](CHANGELOG.md)
 
 `Roborock Plus` 是一个 Home Assistant 自定义集成，基于官方内置 `roborock` 集成演化而来。
 
@@ -91,6 +91,9 @@ v0.7.3 已修复最后提交时出现“Unknown error occurred”的重载冲突
 `current_position` 字段存在、cover 支持设置位置，都不能证明位置是真实测量。
 所选来源失联时判为未知，不自动改用计时。计时无法发现卡门、电机空转或通路障碍。
 
+v0.7.6 中，`timed` 或 `position` + `estimated` 的反馈恢复后，新显式请求不再被旧失效标记误拦，但必须重新等待该方向完整行程加余量。以本门35秒行程+10秒余量=45秒为例，这不是通用硬件默认值；旧等待作废，不会因反馈恢复而复活。
+已锁存的故障（fault）或人工保持（manual_hold）不会自动清除；`reset_garage_control` 只复核，不发送设备命令。活动任务复核后仍无通行许可时保持 `manual_hold`，等待用户明确请求 `resume_task`，再重新开门、重新计时，并沿用原会话 sid。
+
 新绑定没有通用的硬件标定值。用户只需核实所选来源对应的稳定时间、估算行程/余量，
 以及动作超时和停靠稳定时间；动作超时须覆盖该来源的最长证据等待。
 低开位或高关位阈值尤其要验证实际通行和闭合空间。旧门的 95/5、45 秒只是旧配置建议，
@@ -116,7 +119,7 @@ v0.7.3 已修复最后提交时出现“Unknown error occurred”的重载冲突
 | --- | --- |
 | `close_permission_entity` | 可选 input_boolean / binary_sensor，只读；仅 `on` 允许关闭，其他状态拒绝。留空表示没有家庭附加限制 |
 | `roborock_plus.request_garage_close` | 以 vacuum 为目标请求关闭，重新检查任务、停靠、位置和许可等守卫，无 `force` 绕过 |
-| `roborock_plus.reset_garage_control` | 重新观察并解除可恢复故障或人工保持，不移动门或机器人，不清除活动任务 |
+| `roborock_plus.reset_garage_control` | 重新观察并复核可恢复故障及人工保持，不发送设备命令、不清除活动任务；无通行许可的活动任务仍保持人工保持 |
 | `garage_open_confirmed` / `garage_closed_confirmed` | 各方向的物理确认；仅估算或无法判断时为 unknown |
 | `garage_passage_allowed` / `garage_phase` / `garage_problem` | 当前通行许可、流程阶段和阻塞故障；阶段属性含会话、原因与来源质量 |
 | `roborock_plus_garage_issue` 事件 | 故障激活/解除事件，家庭自动化自行选择通知渠道 |

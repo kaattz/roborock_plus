@@ -271,3 +271,26 @@ Review → 第一性原理：用原生section保留同页提交，只在边界�
 - `<done>` GitHub可下载T19首页分组与中文地图选项的v0.7.4，版本和说明一致；不自动关闭旧保护、不改变设备状态流，现场界面/保存及物理验收由用户升级后确认。
 
 发布前验证：上一版squash导致的5处历史冲突，在核对origin/main与本地583bae0整树一致后保留T19候选；完成合并的树与a2b43f6一致。合并后主机971 passed，离线原生HA 2026.9.4共28 passed（仅5条既有上游弃用提示），compileall通过。独立Review无P1/P2，8类变更行为有回归，此为AI场景审计而非实测行/分支覆盖率；范围与REQ-13/14、S5.2/T19一致。远端交付以PR/Release记录为准，现场UI和实物验收未虚构完成。
+
+## T21 必填误报、具名提示与移除旧字段（REQ-13、REQ-14，2026-10-16）
+
+- `<files>` config_flow.py、strings/en/zh-Hans；tests/test_options_required_feedback.py、test_options_sections.py、test_options_ui.py、test_stuck_detection_wiring.py；ha_native_garage.py、ha_native_options_sections.py、frontend_options_required.*及fixtures/homeassistant_frontend/；原req/spec/plan、设计、CHANGELOG。
+- `<action>` 去掉section空默认值，让子默认值正确初始化；按用户要求移除旧版兼容组及两个字段，保留存储值和旧平铺入口；监测数值由后端严格校验并具名提示，保留清空值及其他编辑，不保存非法输入。
+- `<verify>` 官方frontend原函数+真实HA序列化先红后绿；五数值缺项/空/多缺项/非整数/范围、0/False、无旧UI但存储保留、错误回显和最终保存；主机全量、原生HA、独立Review及REQ-13/14漂移检查，均隔离。
+- `<done>` 不再误报已有默认值未填，真实缺项能指出字段；旧字段不再显示，旧配置不被自动停用，不改变设备流程、不发布或操作设备。
+
+时间盒：用户确认30分钟并追加去掉旧版兼容字段，起点2026-10-16 11:16:47（上海），11:46:47截止；先前T19/T20批次已结束，本次独立本地修复。
+
+T21结果：主机1004 passed，离线原生HA 2026.9.4共46 passed（5条既有上游弃用提示），官方frontend 20260826.7原函数17 passed，compileall通过。原生真实OptionsFlowManager覆盖缺项/null/空串/越界拒绝且不落盘，纠正后保存并仅重载一次；前端覆盖新旧配置默认值、逐个清空后实际提交、0/False及折叠地图保留。旧版分组和两个字段已移除，旧存储值、所有权守卫保留。
+失败与修正：直接step测试未覆盖manager先执行schema的边界；新增真实manager回归先红，发现schema默认值会补回缺项、原NumberSelector会提前拦截空值。改用suggested_value预填及仅此五项的原始数值输入选择器，仍由步骤完整严格校验，真实manager四例转绿；不是用测试副本替代产品。
+Review → 第一性原理：用户只需看到实际缺项和可用默认值；保留原生表单，将显示初值与提交校验分开，不迁移存储或改变门/机器人流程。独立复审无P1/P2，REQ-13/14、S5.2及原设计无未记录漂移；可由测试表达的经验已固化回归，不重复堆lesson。未做现场浏览器或物理验收，未发布、部署或操作设备。
+本批实现与验证约20分钟，流程约6分钟（官方前端/manager边界核对、原文档更新、独立评审），在30分钟内收口；manifest保持0.7.4，修复固定为本地提交。
+
+## T22 用户指定发布 v0.7.5（2026-10-16）
+
+- `<files>` manifest.json、CHANGELOG.md、README.md、配置验收清单、本计划。
+- `<action>` 按指定升级0.7.5，合并最新origin/main，完成验证/评审后提交推送、经PR合并并发布GitHub Release；不部署HA、不操作设备。
+- `<verify>` 合并后主机全量、原生HA与官方前端回归、独立覆盖/计划审计和发布Review；核对远端main、tag、manifest与正式Release一致。
+- `<done>` GitHub可下载T21必填提示修复及旧字段移除的v0.7.5；旧配置值和门控行为保留，现场界面/保存及物理验收由用户完成。
+
+发布前验证：合并origin/main后主机1004 passed、离线原生HA 46 passed（5条既有上游弃用提示）、官方前端原函数17 passed，compileall通过。独立AI场景审计10/10有回归（非实测行/分支覆盖率），T21实现/规格无漂移，发布Review与70轮错误输入挑战无P1/P2。远端交付以PR和Release记录为准，现场UI和物理验收仍待用户完成。

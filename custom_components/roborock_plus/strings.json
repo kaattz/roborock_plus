@@ -1172,8 +1172,6 @@
         "data": {
           "charger": "Charger",
           "cleaned_area": "Cleaned area",
-          "garage_door_entity_id": "Garage door cover",
-          "garage_guard_enabled": "Garage door guard",
           "goto_path": "Go-to path",
           "ignored_obstacles": "Ignored obstacles",
           "ignored_obstacles_with_photo": "Ignored obstacles with photo",
@@ -1189,12 +1187,12 @@
           "show_background": "Show background",
           "show_rooms": "Show rooms",
           "show_walls": "Show walls",
-          "clean_command_watch_timeout": "Clean command start check",
-          "v1_local_status_poll_interval": "Local status polling interval",
-          "v1_map_position_poll_interval": "Danger-zone position polling interval",
+          "clean_command_watch_timeout": "Clean command start check (required)",
+          "v1_local_status_poll_interval": "Local status polling interval (required)",
+          "v1_map_position_poll_interval": "Danger-zone position polling interval (required)",
           "v1_stuck_detection_enabled": "Stuck detection",
-          "v1_stuck_radius": "Stuck movement tolerance",
-          "v1_stuck_window": "Stuck detection window",
+          "v1_stuck_radius": "Stuck movement tolerance (required)",
+          "v1_stuck_window": "Stuck detection window (required)",
           "vacuum_position": "Vacuum position",
           "virtual_walls": "Virtual walls",
           "zones": "Zones",
@@ -1203,8 +1201,6 @@
         "data_description": {
           "charger": "Show the charger on the map.",
           "cleaned_area": "Show the area cleaned on the map.",
-          "garage_door_entity_id": "The cover entity for the vacuum cabinet door. The door is considered open when current_position is 95 or higher.",
-          "garage_guard_enabled": "Before HA-initiated clean commands, open the cabinet door and wait until it is fully open.",
           "goto_path": "Show the go-to path on the map.",
           "ignored_obstacles": "Show ignored obstacles on the map.",
           "ignored_obstacles_with_photo": "Show ignored obstacles with photos on the map.",
@@ -1231,7 +1227,7 @@
           "zones": "Show zones on the map.",
           "do_configure_garage": "Continue to choose a V1 robot in this entry and configure its garage control. Changes on this page and the garage settings are saved together only at the end of the flow. The legacy guard is not migrated automatically."
         },
-        "description": "Choose whether to continue to garage control. The other options are grouped into monitoring, map display and legacy settings.\n\nCurrent status polling: {current_interval} seconds. Danger-zone position polling: {current_map_interval} seconds.",
+        "description": "Choose whether to continue to garage control. Other options are grouped into monitoring and map display. Numeric monitoring values are required; missing or invalid values are listed by name.\n\nCurrent status polling: {current_interval} seconds. Map-position polling: {current_map_interval} seconds.",
         "error": {
           "garage_guard_missing_config": "Select a garage door cover, or disable garage door guard."
         },
@@ -1241,12 +1237,12 @@
             "name": "Monitoring",
             "description": "Set status and position polling, clean-start checks and stuck detection.",
             "data": {
-              "v1_local_status_poll_interval": "Local status polling interval",
-              "v1_map_position_poll_interval": "Danger-zone position polling interval",
-              "clean_command_watch_timeout": "Clean command start check",
+              "v1_local_status_poll_interval": "Local status polling interval (required)",
+              "v1_map_position_poll_interval": "Danger-zone position polling interval (required)",
+              "clean_command_watch_timeout": "Clean command start check (required)",
               "v1_stuck_detection_enabled": "Stuck detection",
-              "v1_stuck_window": "Stuck detection window",
-              "v1_stuck_radius": "Stuck movement tolerance"
+              "v1_stuck_window": "Stuck detection window (required)",
+              "v1_stuck_radius": "Stuck movement tolerance (required)"
             },
             "data_description": {
               "v1_local_status_poll_interval": "Enter a value from 1 to 60 seconds. This only refreshes vacuum state, status sensor, and cleaning binary sensor.",
@@ -1303,18 +1299,6 @@
               "vacuum_position": "Show the vacuum position on the map.",
               "virtual_walls": "Show virtual walls on the map.",
               "zones": "Show zones on the map."
-            }
-          },
-          "legacy_compatibility": {
-            "name": "Legacy compatibility settings",
-            "description": "For existing garage guard users. Robots with an enabled per-robot garage binding bypass this legacy guard; other robots keep using it. The old setting is not disabled or migrated automatically.",
-            "data": {
-              "garage_guard_enabled": "Garage door guard",
-              "garage_door_entity_id": "Garage door cover"
-            },
-            "data_description": {
-              "garage_guard_enabled": "Before HA-initiated clean commands, open the cabinet door and wait until it is fully open.",
-              "garage_door_entity_id": "The cover entity for the vacuum cabinet door. The door is considered open when current_position is 95 or higher."
             }
           }
         }
@@ -1418,7 +1402,11 @@
       "handover_required": "Confirm calibration and migration from old door-control automations before enabling.",
       "duplicate_binding": "This cover is already controlled by another robot or integration entry.",
       "legacy_guard_conflict": "Another robot still uses the old global guard for this door. Resolve its protection before handover.",
-      "unsupported_configuration_version": "The saved garage configuration version is unsupported."
+      "unsupported_configuration_version": "The saved garage configuration version is unsupported.",
+      "missing_monitoring_fields": "Fill in these required monitoring fields: {fields}.",
+      "invalid_monitoring_fields": "Fill in or correct these monitoring fields: {fields}. Use whole numbers within each field's allowed range.",
+      "required_field": "This field is required.",
+      "invalid_monitoring_number": "Enter a whole number within the allowed range."
     },
     "abort": {
       "no_supported_v1": "No loaded V1 robot is available in this entry. Restore the integration connection first."

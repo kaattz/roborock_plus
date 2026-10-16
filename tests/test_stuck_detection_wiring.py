@@ -127,21 +127,19 @@ def test_stuck_entity_exists_and_reads_the_coordinator() -> None:
 
 
 def test_options_flow_exposes_the_stuck_settings() -> None:
-    text = CONFIG_FLOW.read_text(encoding="utf-8")
-    step = text.split("async def async_step_drawables", 1)[1].split(
-        "return self.async_show_form", 1
-    )[0]
+    import asyncio
+    from test_options_ui import _normal_options, _options_handler
 
-    for key in (
-        "CONF_V1_STUCK_DETECTION_ENABLED",
-        "CONF_V1_STUCK_WINDOW",
-        "CONF_V1_STUCK_RADIUS",
-    ):
-        # Shown in the form...
-        assert f"vol.Required(\n                {key}," in step, key
-        # ...and persisted. Both halves matter: a field rendered but never
-        # written back leaves the user's value silently discarded.
-        assert f"self.options[{key}] =" in step, key
+    handler = _options_handler()
+    page = asyncio.run(handler.async_step_init())
+    monitoring = next(value for marker, value in page["data_schema"].items() if marker.key == "monitoring")
+    expected = {"v1_stuck_detection_enabled": False, "v1_stuck_window": 90, "v1_stuck_radius": 350}
+    assert expected.keys() <= {marker.key for marker in monitoring.schema}
+    submitted = {**_normal_options(), **expected}
+    saved = asyncio.run(handler.async_step_drawables(submitted))
+    assert saved["type"] == "create_entry"
+    for field, value in expected.items():
+        assert saved["data"][field] == value
 
 
 def test_stuck_settings_are_translated_everywhere() -> None:

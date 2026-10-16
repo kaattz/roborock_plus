@@ -36,11 +36,16 @@ def options_schema_input(schema, flat_values):
         for marker, validator in current_schema.schema.items():
             key = getattr(marker, "schema", marker)
             if isinstance(validator, section):
-                children = group(validator.schema)
-                if children:
-                    result[key] = children
+                # Real frontend submits each visible section. With no root
+                # default, the section's own schema must fill its children.
+                result[key] = group(validator.schema)
             elif key in flat_values:
                 result[key] = flat_values[key]
+            elif "suggested_value" in (getattr(marker, "description", None) or {}):
+                # Match the frontend's initial field population. Suggestions
+                # are not backend defaults and raw manager payloads may omit
+                # or clear them afterwards to exercise actual validation.
+                result[key] = marker.description["suggested_value"]
         return result
 
     return schema(group(schema))

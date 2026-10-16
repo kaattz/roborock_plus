@@ -1,6 +1,7 @@
 import json
 import ast
 import asyncio
+import math
 from copy import deepcopy
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
@@ -102,6 +103,7 @@ def _options_handler(options=None, robots=("robot-a",)):
             self.key = key
             self.schema = key
             self.default = kwargs.get("default")
+            self.description = kwargs.get("description", {})
     class Base:
         def async_show_form(self, **kwargs):
             return {"type": "form", **kwargs}
@@ -113,12 +115,22 @@ def _options_handler(options=None, robots=("robot-a",)):
         def __init__(self, schema, options=None):
             self.schema = schema
             self.options = options or {}
+    async def translations(hass, language, category, integrations):
+        filename = "zh-Hans.json" if language == "zh-Hans" else "en.json"
+        step = json.loads((TRANSLATIONS_DIR / filename).read_text(encoding="utf-8"))["options"]["step"]["drawables"]
+        return {
+            f"component.roborock_plus.options.step.drawables.sections.monitoring.data.{key}": label
+            for key, label in step["sections"]["monitoring"]["data"].items()
+        }
     scope.update({
         "deepcopy": deepcopy,
         "OptionsFlow": Base,
         "section": Section,
+        "math": math,
+        "async_get_translations": translations,
         "vol": SimpleNamespace(Required=Marker, Optional=Marker, Schema=lambda value: value),
         "NumberSelector": lambda config: config,
+        "_OptionsNumberSelector": lambda config: config,
         "NumberSelectorConfig": dict,
         "NumberSelectorMode": SimpleNamespace(BOX="box"),
         "EntitySelector": lambda config: config,
@@ -136,6 +148,18 @@ def _options_handler(options=None, robots=("robot-a",)):
     for key in tuple(scope):
         if key.startswith(("MIN_", "MAX_", "DEFAULT_")) and key != "DEFAULT_DRAWABLES":
             scope[key] = 5
+    # The form method now validates numeric ranges itself; use real constants
+    # from their dependency-free declarations instead of placeholder bounds.
+    for filename in ("v1_status_polling.py", "v1_map_position.py", "clean_command_watch.py", "v1_stuck_detection.py"):
+        constants = ast.parse((CONFIG_FLOW.parent / filename).read_text(encoding="utf-8"))
+        for node in constants.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id.startswith(("MIN_", "MAX_", "DEFAULT_")):
+                        try:
+                            scope[target.id] = ast.literal_eval(node.value)
+                        except ValueError:
+                            pass
     extract = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), cls], type_ignores=[])
     exec(compile(ast.fix_missing_locations(extract), str(CONFIG_FLOW), "exec"), scope)
     entry = SimpleNamespace(
@@ -145,6 +169,7 @@ def _options_handler(options=None, robots=("robot-a",)):
     handler = scope["RoborockOptionsFlowHandler"](entry)
     handler.config_entry = entry
     handler.hass = SimpleNamespace(
+        config=SimpleNamespace(language="zh-Hans"),
         states=SimpleNamespace(get=lambda _: None),
         config_entries=SimpleNamespace(async_entries=lambda domain: [entry]),
     )

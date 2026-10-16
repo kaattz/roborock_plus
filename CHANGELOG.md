@@ -1,5 +1,11 @@
 # 更新记录
 
+## v0.7.7 — 2026-10-17
+
+- 修复 HA 2026.10.1 下集成无法加载：`python-roborock` 从 `5.5.1` 升到 `7.12.0`（要求 `protobuf<8,>=6.31.1`，与 HA 官方 `roborock` 集成一致），`vacuum-map-parser-roborock` 升到 `0.1.5`。旧 pin 要求 `protobuf<7`，与 HA 2026.10.1 冻结的 `protobuf==7.36.0` 冲突，安装阶段即失败。
+- 适配 `roborock 6.x/7.x` 移除的 `RoborockDockTypeCode.no_dock`，改用同值（0）的 `o0_dock`；该成员在函数体内引用，不修会在传感器每次刷新时抛 `AttributeError`。
+- 新增依赖与 API 迁移护栏：`tests/test_manifest_dependency_compatibility.py` 钉住 pin 与 protobuf 主版本的可满足性，`scripts/` 增加 import / 属性链 / 数据字段三层审计与依赖解析复现脚本。
+
 ## v0.7.6 — 2026-10-16
 
 - 修复计时或估算开门在门反馈恢复后仍被旧故障标记拦截的问题；新请求重新等待完整行程，失效的旧等待不会复活。故障复核不自动开门或续扫，活动任务等待明确恢复请求。

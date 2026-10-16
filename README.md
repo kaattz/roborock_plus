@@ -512,12 +512,19 @@ python scripts/mutation_check_blueprint.py   # 确认上面的检查真的能抓
 - **App 发起的清扫不受保护。** 从 Roborock App 启动的命令不经过 HA，
   `garage_guard` 拦不到，柜门不会自动打开。这是架构限制，不是 bug。
 - **依赖装不上时整个集成不会加载。** `manifest.json` 声明的
-  `python-roborock==5.5.1` 由 HA 在启动时从 pypi 安装；网络不通时
+  `python-roborock==7.12.0` 由 HA 在启动时从 pypi 安装；网络不通时
   `async_setup` 根本不会执行，所有 `roborock_plus.*` 服务和实体一起消失。
   2026-10-13 那晚就发生了约 3.5 小时。此时 Spook 会报自动化引用了
   「未知动作」—— 那是**掉线的症状，不是配置错误**，不要按它的建议删掉动作。
   柜门状态机已经对这种情况做了前置检查（见
   [scripts/garage_state_machine/README.md](scripts/garage_state_machine/README.md) 守卫 4）。
+- **HA 2026.10 起 `protobuf` 升到 7.x，旧版 `python-roborock` 装不上。**
+  HA 2026.10.1 在 `package_constraints.txt` 里冻结 `protobuf==7.36.0`，
+  而 `python-roborock<6` 要求 `protobuf<7`，解析必然失败，症状是
+  `Requirements for roborock_plus not found`。v0.7.6 的 `5.5.1` 属于这一类；
+  v0.7.7 起改用 `7.12.0`（要求 `protobuf<8,>=6.31.1`，与 HA 官方
+  `roborock` 集成的 pin 一致）。以后升级 HA 时先跑
+  `python scripts/reproduce_ha_requirement_conflict.py`。
 
 ## 致谢
 

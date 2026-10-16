@@ -28,6 +28,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_USERNAME
 from homeassistant.core import callback
+from homeassistant.data_entry_flow import section
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
@@ -362,8 +363,15 @@ class RoborockOptionsFlowHandler(OptionsFlow):
     ) -> ConfigFlowResult:
         """Manage status polling and map drawable options."""
         errors: dict[str, str] = {}
+        configure_garage = False
         if user_input is not None:
             user_input = dict(user_input)
+            # Sections are presentation only; keep the existing options format
+            # and accept flat submissions from already-open older forms.
+            for group in ("monitoring", "map_display", "legacy_compatibility"):
+                values = user_input.pop(group, None)
+                if values is not None:
+                    user_input.update(values)
             configure_garage = user_input.pop("do_configure_garage", False)
             self.options[CONF_V1_LOCAL_STATUS_POLL_INTERVAL] = int(
                 user_input.pop(CONF_V1_LOCAL_STATUS_POLL_INTERVAL)
@@ -389,6 +397,10 @@ class RoborockOptionsFlowHandler(OptionsFlow):
             self.options[CONF_GARAGE_DOOR_ENTITY_ID] = user_input.pop(
                 CONF_GARAGE_DOOR_ENTITY_ID, ""
             )
+            self.options[CONF_SHOW_BACKGROUND] = user_input.pop(CONF_SHOW_BACKGROUND)
+            self.options[CONF_SHOW_ROOMS] = user_input.pop(CONF_SHOW_ROOMS)
+            self.options[CONF_SHOW_WALLS] = user_input.pop(CONF_SHOW_WALLS)
+            self.options.setdefault(DRAWABLES, {}).update(user_input)
             if self.options[CONF_GARAGE_GUARD_ENABLED] and (
                 not self.options[CONF_GARAGE_DOOR_ENTITY_ID]
             ):
@@ -402,10 +414,6 @@ class RoborockOptionsFlowHandler(OptionsFlow):
                 except GarageConfigError as error:
                     errors["base"] = error.reason
             if not errors:
-                self.options[CONF_SHOW_BACKGROUND] = user_input.pop(CONF_SHOW_BACKGROUND)
-                self.options[CONF_SHOW_ROOMS] = user_input.pop(CONF_SHOW_ROOMS)
-                self.options[CONF_SHOW_WALLS] = user_input.pop(CONF_SHOW_WALLS)
-                self.options.setdefault(DRAWABLES, {}).update(user_input)
                 if configure_garage:
                     return await self.async_step_garage_select()
                 return self.async_create_entry(title="", data=self.options)
@@ -492,9 +500,6 @@ class RoborockOptionsFlowHandler(OptionsFlow):
             ),
         }
         data_schema[
-            vol.Optional("do_configure_garage", default=False)
-        ] = bool
-        data_schema[
             vol.Required(
                 CONF_V1_STUCK_DETECTION_ENABLED,
                 default=self.options.get(CONF_V1_STUCK_DETECTION_ENABLED, True),
@@ -516,7 +521,7 @@ class RoborockOptionsFlowHandler(OptionsFlow):
             data_schema[
                 vol.Required(
                     drawable.value,
-                    default=self.config_entry.options.get(DRAWABLES, {}).get(
+                    default=self.options.get(DRAWABLES, {}).get(
                         drawable, default_value
                     ),
                 )
@@ -524,21 +529,51 @@ class RoborockOptionsFlowHandler(OptionsFlow):
         data_schema[
             vol.Required(
                 CONF_SHOW_BACKGROUND,
-                default=self.config_entry.options.get(CONF_SHOW_BACKGROUND, False),
+                default=self.options.get(CONF_SHOW_BACKGROUND, False),
             )
         ] = bool
         data_schema[
             vol.Required(
                 CONF_SHOW_ROOMS,
-                default=self.config_entry.options.get(CONF_SHOW_ROOMS, True),
+                default=self.options.get(CONF_SHOW_ROOMS, True),
             )
         ] = bool
         data_schema[
             vol.Required(
                 CONF_SHOW_WALLS,
-                default=self.config_entry.options.get(CONF_SHOW_WALLS, True),
+                default=self.options.get(CONF_SHOW_WALLS, True),
             )
         ] = bool
+        monitoring_fields = {
+            CONF_V1_LOCAL_STATUS_POLL_INTERVAL, CONF_V1_MAP_POSITION_POLL_INTERVAL,
+            CONF_CLEAN_COMMAND_WATCH_TIMEOUT, CONF_V1_STUCK_DETECTION_ENABLED,
+            CONF_V1_STUCK_WINDOW, CONF_V1_STUCK_RADIUS,
+        }
+        legacy_fields = {CONF_GARAGE_GUARD_ENABLED, CONF_GARAGE_DOOR_ENTITY_ID}
+        monitoring_schema = {
+            marker: value for marker, value in data_schema.items()
+            if marker.schema in monitoring_fields
+        }
+        map_schema = {
+            marker: value for marker, value in data_schema.items()
+            if marker.schema not in (monitoring_fields | legacy_fields)
+        }
+        legacy_schema = {
+            marker: value for marker, value in data_schema.items()
+            if marker.schema in legacy_fields
+        }
+        data_schema = {
+            vol.Optional("do_configure_garage", default=configure_garage): bool,
+            vol.Required("monitoring", default=dict): section(
+                vol.Schema(monitoring_schema), {"collapsed": False}
+            ),
+            vol.Required("map_display", default=dict): section(
+                vol.Schema(map_schema), {"collapsed": True}
+            ),
+            vol.Required("legacy_compatibility", default=dict): section(
+                vol.Schema(legacy_schema), {"collapsed": True}
+            ),
+        }
         is_official_cloud = is_official_cloud_url(
             self.config_entry.data.get(CONF_BASE_URL)
         )

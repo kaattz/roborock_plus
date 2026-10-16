@@ -19,6 +19,8 @@ from homeassistant.config_entries import ConfigEntries, ConfigEntry, SOURCE_USER
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
+from ha_native_garage import options_schema_input
+
 
 PACKAGE = "custom_components.roborock_plus"
 
@@ -69,7 +71,7 @@ def test_real_options_manager_finishes_with_one_existing_listener_reload(route):
             flow.flow_id = "isolated-options-finish"
             flow.context = {}
             page = await flow.async_step_init()
-            ordinary = page["data_schema"]({
+            ordinary = options_schema_input(page["data_schema"], {
                 "v1_local_status_poll_interval": 3, "v1_map_position_poll_interval": 5,
                 "clean_command_watch_timeout": 90, "v1_stuck_detection_enabled": True,
                 "v1_stuck_window": 120, "v1_stuck_radius": 200,

@@ -45,6 +45,7 @@
 ## 界面约束
 
 - 复用 config_flow.py 的原生 Options Flow、EntitySelector、NumberSelector 和既有地图选项。
+- 首屏用原生分组区分运行监测、地图显示和旧版兼容设置；旧柜门保护/实体默认折叠，新车库入口清楚可见，保持同页提交与旧配置值，不自动关闭旧保护。
 - 参考 tests/test_options_ui.py 的轮询/绘图共同可达与翻译完整性约束；可增加门配置步骤，不能丢原选项。
 - 仓库无 .agents/rules/frontend-architect.md 和 req/spec/plan 模板；不新增自定义网页、侧栏、标题栏。
 - 复用现有危险区编辑器/存储；没有新预览、导出、打印界面，不做平行渲染实现。

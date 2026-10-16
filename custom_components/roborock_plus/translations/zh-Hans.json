@@ -771,7 +771,27 @@
           "v1_stuck_detection_enabled": "卡住检测",
           "v1_stuck_radius": "卡住判定半径",
           "v1_stuck_window": "卡住判定时长",
-          "do_configure_garage": "继续配置单机车库控制"
+          "do_configure_garage": "继续配置单机车库控制",
+          "charger": "充电座",
+          "cleaned_area": "已清扫区域",
+          "goto_path": "导航路线",
+          "ignored_obstacles": "已忽略障碍物",
+          "ignored_obstacles_with_photo": "已忽略障碍物（含照片）",
+          "mop_path": "拖地路线",
+          "no_carpet_zones": "非地毯区",
+          "no_go_zones": "禁扫区",
+          "no_mopping_zones": "禁拖区",
+          "obstacles": "障碍物",
+          "obstacles_with_photo": "障碍物（含照片）",
+          "path": "行进路线",
+          "predicted_path": "预计路线",
+          "room_names": "房间名称",
+          "show_background": "显示地图背景",
+          "show_rooms": "显示房间",
+          "show_walls": "显示墙壁",
+          "vacuum_position": "扫地机位置",
+          "virtual_walls": "虚拟墙",
+          "zones": "区域"
         },
         "data_description": {
           "clean_command_watch_timeout": "下发清扫命令后，等待这么多秒仍没有任务开始就发出告警事件（roborock_plus_clean_command_not_started）。填 0 关闭此检查。",
@@ -782,13 +802,115 @@
           "v1_stuck_detection_enabled": "扫地机应该移动却停着不动时上报——扫地机顶住柜门就是这个表现。会发出 roborock_plus_vacuum_stuck 事件并点亮「卡住」传感器。本集成只负责上报，停止扫地机交给自动化。",
           "v1_stuck_radius": "扫地机在地图坐标里允许漂移多大范围仍算「没动」。默认 200 足以滤掉静止采样的 1~2 单位抖动。如果扫地机沿边缓慢作业时被误报卡住，可以调大。",
           "v1_stuck_window": "扫地机在判定半径内停留多少秒算「卡住」。默认 120。检测需要在这个窗口内有若干次采样，所以也取决于危险区坐标轮询间隔。",
-          "do_configure_garage": "先保存本页选项，再选择本条目的 V1 扫地机配置车库；不会自动迁移旧门保护。"
+          "do_configure_garage": "勾选后继续为本条目的 V1 扫地机配置车库；本页改动会在流程最后提交时与车库设置一起保存。旧版保护不会自动迁移。",
+          "charger": "在地图上显示充电座。",
+          "cleaned_area": "在地图上显示已清扫的区域。",
+          "goto_path": "在地图上显示前往目标点的路线。",
+          "ignored_obstacles": "在地图上显示已忽略的障碍物。",
+          "ignored_obstacles_with_photo": "在地图上显示带照片的已忽略障碍物。",
+          "mop_path": "在地图上显示拖地路线。",
+          "no_carpet_zones": "在地图上显示非地毯区域。",
+          "no_go_zones": "在地图上显示禁止进入的区域。",
+          "no_mopping_zones": "在地图上显示禁止拖地的区域。",
+          "obstacles": "在地图上显示障碍物。",
+          "obstacles_with_photo": "在地图上显示带照片的障碍物。",
+          "path": "在地图上显示扫地机的行进路线。",
+          "predicted_path": "在地图上显示预计的行进路线。",
+          "room_names": "在地图上显示房间名称。",
+          "show_background": "为地图添加背景。",
+          "show_rooms": "在地图上显示房间。",
+          "show_walls": "在地图上显示墙壁。",
+          "vacuum_position": "在地图上显示扫地机的位置。",
+          "virtual_walls": "在地图上显示虚拟墙。",
+          "zones": "在地图上显示区域。"
         },
-        "description": "配置本地状态轮询、柜门保护和地图绘制选项。\n\n当前状态轮询间隔：{current_interval} 秒。\n\n危险区坐标轮询间隔：{current_map_interval} 秒（0 表示自动）。\n\n柜门保护只影响从 Home Assistant 发起的清扫命令。\n\n清扫启动确认：命令下发后若始终没有任务开始，会发出事件供自动化告警（本集成不会自动关门）。",
+        "description": "选择是否继续配置车库；其余选项按运行监测、地图显示和旧版兼容设置分组。\n\n当前状态轮询：{current_interval} 秒；危险区坐标轮询：{current_map_interval} 秒。",
         "error": {
           "garage_guard_missing_config": "请选择柜门实体，或者关闭柜门保护。"
         },
-        "title": "Roborock Plus 选项"
+        "title": "Roborock Plus 选项",
+        "sections": {
+          "monitoring": {
+            "name": "运行监测",
+            "description": "调整状态与位置采样、清扫启动确认和卡住检测。",
+            "data": {
+              "v1_local_status_poll_interval": "本地状态轮询间隔",
+              "v1_map_position_poll_interval": "危险区坐标轮询间隔",
+              "clean_command_watch_timeout": "清扫启动确认时间",
+              "v1_stuck_detection_enabled": "卡住检测",
+              "v1_stuck_window": "卡住判定时长",
+              "v1_stuck_radius": "卡住判定半径"
+            },
+            "data_description": {
+              "v1_local_status_poll_interval": "请输入 1 到 60 秒。这里只刷新扫地机状态、状态传感器、正在清扫传感器。",
+              "v1_map_position_poll_interval": "填 0 表示按当前服务器自动决定，或填 1 到 300 秒。这里控制危险区传感器读取扫地机坐标的频率。除非你自建了服务器，否则请保持 0：地图数据始终来自服务器，对 Roborock 云端轮询过快可能导致账号被限流。",
+              "clean_command_watch_timeout": "下发清扫命令后，等待这么多秒仍没有任务开始就发出告警事件（roborock_plus_clean_command_not_started）。填 0 关闭此检查。",
+              "v1_stuck_detection_enabled": "扫地机应该移动却停着不动时上报——扫地机顶住柜门就是这个表现。会发出 roborock_plus_vacuum_stuck 事件并点亮「卡住」传感器。本集成只负责上报，停止扫地机交给自动化。",
+              "v1_stuck_window": "扫地机在判定半径内停留多少秒算「卡住」。默认 120。检测需要在这个窗口内有若干次采样，所以也取决于危险区坐标轮询间隔。",
+              "v1_stuck_radius": "扫地机在地图坐标里允许漂移多大范围仍算「没动」。默认 200 足以滤掉静止采样的 1~2 单位抖动。如果扫地机沿边缓慢作业时被误报卡住，可以调大。"
+            }
+          },
+          "map_display": {
+            "name": "地图显示",
+            "description": "选择地图上显示的背景、房间、路线和标记。",
+            "data": {
+              "charger": "充电座",
+              "cleaned_area": "已清扫区域",
+              "goto_path": "导航路线",
+              "ignored_obstacles": "已忽略障碍物",
+              "ignored_obstacles_with_photo": "已忽略障碍物（含照片）",
+              "mop_path": "拖地路线",
+              "no_carpet_zones": "非地毯区",
+              "no_go_zones": "禁扫区",
+              "no_mopping_zones": "禁拖区",
+              "obstacles": "障碍物",
+              "obstacles_with_photo": "障碍物（含照片）",
+              "path": "行进路线",
+              "predicted_path": "预计路线",
+              "room_names": "房间名称",
+              "show_background": "显示地图背景",
+              "show_rooms": "显示房间",
+              "show_walls": "显示墙壁",
+              "vacuum_position": "扫地机位置",
+              "virtual_walls": "虚拟墙",
+              "zones": "区域"
+            },
+            "data_description": {
+              "charger": "在地图上显示充电座。",
+              "cleaned_area": "在地图上显示已清扫的区域。",
+              "goto_path": "在地图上显示前往目标点的路线。",
+              "ignored_obstacles": "在地图上显示已忽略的障碍物。",
+              "ignored_obstacles_with_photo": "在地图上显示带照片的已忽略障碍物。",
+              "mop_path": "在地图上显示拖地路线。",
+              "no_carpet_zones": "在地图上显示非地毯区域。",
+              "no_go_zones": "在地图上显示禁止进入的区域。",
+              "no_mopping_zones": "在地图上显示禁止拖地的区域。",
+              "obstacles": "在地图上显示障碍物。",
+              "obstacles_with_photo": "在地图上显示带照片的障碍物。",
+              "path": "在地图上显示扫地机的行进路线。",
+              "predicted_path": "在地图上显示预计的行进路线。",
+              "room_names": "在地图上显示房间名称。",
+              "show_background": "为地图添加背景。",
+              "show_rooms": "在地图上显示房间。",
+              "show_walls": "在地图上显示墙壁。",
+              "vacuum_position": "在地图上显示扫地机的位置。",
+              "virtual_walls": "在地图上显示虚拟墙。",
+              "zones": "在地图上显示区域。"
+            }
+          },
+          "legacy_compatibility": {
+            "name": "旧版兼容设置",
+            "description": "本组保留旧版门保护设置，不会自动迁移或关闭。已启用新车库绑定的扫地机会跳过旧保护；尚未迁移的其他扫地机继续使用原设置。",
+            "data": {
+              "garage_guard_enabled": "柜门保护",
+              "garage_door_entity_id": "柜门实体"
+            },
+            "data_description": {
+              "garage_guard_enabled": "HA 发起清扫命令前，先打开柜门并等待门完全打开。",
+              "garage_door_entity_id": "扫地机柜门的 cover 实体。current_position 大于等于 95 时认为门已完全打开。"
+            }
+          }
+        }
       },
       "garage_select": {
         "title": "选择车库扫地机",

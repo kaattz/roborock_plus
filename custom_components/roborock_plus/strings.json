@@ -1229,13 +1229,95 @@
           "vacuum_position": "Show the vacuum position on the map.",
           "virtual_walls": "Show virtual walls on the map.",
           "zones": "Show zones on the map.",
-          "do_configure_garage": "Keep this page’s options and continue to select this entry’s V1 robot. The old guard is not migrated automatically."
+          "do_configure_garage": "Continue to choose a V1 robot in this entry and configure its garage control. Changes on this page and the garage settings are saved together only at the end of the flow. The legacy guard is not migrated automatically."
         },
-        "description": "Configure local status polling, garage door guard, and map drawing options.\n\nCurrent status polling interval: {current_interval} seconds.\n\nDanger-zone position polling interval: {current_map_interval} seconds. 0 selects this automatically from the configured server.\n\nGarage door guard only affects clean commands started from Home Assistant.",
+        "description": "Choose whether to continue to garage control. The other options are grouped into monitoring, map display and legacy settings.\n\nCurrent status polling: {current_interval} seconds. Danger-zone position polling: {current_map_interval} seconds.",
         "error": {
           "garage_guard_missing_config": "Select a garage door cover, or disable garage door guard."
         },
-        "title": "Roborock Plus options"
+        "title": "Roborock Plus options",
+        "sections": {
+          "monitoring": {
+            "name": "Monitoring",
+            "description": "Set status and position polling, clean-start checks and stuck detection.",
+            "data": {
+              "v1_local_status_poll_interval": "Local status polling interval",
+              "v1_map_position_poll_interval": "Danger-zone position polling interval",
+              "clean_command_watch_timeout": "Clean command start check",
+              "v1_stuck_detection_enabled": "Stuck detection",
+              "v1_stuck_window": "Stuck detection window",
+              "v1_stuck_radius": "Stuck movement tolerance"
+            },
+            "data_description": {
+              "v1_local_status_poll_interval": "Enter a value from 1 to 60 seconds. This only refreshes vacuum state, status sensor, and cleaning binary sensor.",
+              "v1_map_position_poll_interval": "Enter 0 to choose automatically from the configured server, or a value from 1 to 300 seconds. This controls how often the vacuum position used by the danger-zone sensors is re-read. Leave it at 0 unless you self-host the server: map data always comes from the server, and polling Roborock's cloud too fast can get the account rate limited.",
+              "clean_command_watch_timeout": "Report clean commands that never start after this many seconds. Enter 0 to disable the check.",
+              "v1_stuck_detection_enabled": "Report when the vacuum should be moving but is not, which is how a robot pressed against the cabinet door shows up. Fires roborock_plus_vacuum_stuck and turns on the stuck binary sensor. Detection only reports; stopping the robot is left to an automation.",
+              "v1_stuck_window": "How many seconds the vacuum may stay within the movement tolerance before it is reported stuck. Default 120. Detection needs several samples inside this window, so it also depends on the danger-zone polling interval.",
+              "v1_stuck_radius": "How far the vacuum may drift, in map units, and still count as standing still. Default 200 clears the unit-or-two jitter seen between samples of a parked robot. Raise it if the robot is reported stuck while it is slowly working along an edge."
+            }
+          },
+          "map_display": {
+            "name": "Map display",
+            "description": "Choose the background, rooms, paths and markers shown on the map.",
+            "data": {
+              "charger": "Charger",
+              "cleaned_area": "Cleaned area",
+              "goto_path": "Go-to path",
+              "ignored_obstacles": "Ignored obstacles",
+              "ignored_obstacles_with_photo": "Ignored obstacles with photo",
+              "mop_path": "Mop path",
+              "no_carpet_zones": "No carpet zones",
+              "no_go_zones": "No-go zones",
+              "no_mopping_zones": "No mopping zones",
+              "obstacles": "Obstacles",
+              "obstacles_with_photo": "Obstacles with photo",
+              "path": "Path",
+              "predicted_path": "Predicted path",
+              "room_names": "Room names",
+              "show_background": "Show background",
+              "show_rooms": "Show rooms",
+              "show_walls": "Show walls",
+              "vacuum_position": "Vacuum position",
+              "virtual_walls": "Virtual walls",
+              "zones": "Zones"
+            },
+            "data_description": {
+              "charger": "Show the charger on the map.",
+              "cleaned_area": "Show the area cleaned on the map.",
+              "goto_path": "Show the go-to path on the map.",
+              "ignored_obstacles": "Show ignored obstacles on the map.",
+              "ignored_obstacles_with_photo": "Show ignored obstacles with photos on the map.",
+              "mop_path": "Show the mop path on the map.",
+              "no_carpet_zones": "Show the no carpet zones on the map.",
+              "no_go_zones": "Show the no-go zones on the map.",
+              "no_mopping_zones": "Show the no-mop zones on the map.",
+              "obstacles": "Show obstacles on the map.",
+              "obstacles_with_photo": "Show obstacles with photos on the map.",
+              "path": "Show the path on the map.",
+              "predicted_path": "Show the predicted path on the map.",
+              "room_names": "Show room names on the map.",
+              "show_background": "Add a background to the map.",
+              "show_rooms": "Show the rooms on the map.",
+              "show_walls": "Show the walls on the map.",
+              "vacuum_position": "Show the vacuum position on the map.",
+              "virtual_walls": "Show virtual walls on the map.",
+              "zones": "Show zones on the map."
+            }
+          },
+          "legacy_compatibility": {
+            "name": "Legacy compatibility settings",
+            "description": "For existing garage guard users. Robots with an enabled per-robot garage binding bypass this legacy guard; other robots keep using it. The old setting is not disabled or migrated automatically.",
+            "data": {
+              "garage_guard_enabled": "Garage door guard",
+              "garage_door_entity_id": "Garage door cover"
+            },
+            "data_description": {
+              "garage_guard_enabled": "Before HA-initiated clean commands, open the cabinet door and wait until it is fully open.",
+              "garage_door_entity_id": "The cover entity for the vacuum cabinet door. The door is considered open when current_position is 95 or higher."
+            }
+          }
+        }
       },
       "garage_select": {
         "title": "Select garage robot",

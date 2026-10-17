@@ -16,6 +16,7 @@ from .garage_config import resolve_binding, validate_binding_ownership
 from .garage_commands import SAFE_DIRECT_COMMANDS
 from .garage_control import GarageController, GarageControlError
 from .garage_session_store import GarageSessionStore
+from .garage_stage import GarageStage, summary_signature, validate_stage
 from .garage_task import GarageTaskSession, GarageTaskError, RobotObservation
 
 REGISTRY_KEY = 'roborock_plus_garage_owners'
@@ -85,6 +86,9 @@ class GarageRuntime:
         self._closed = False
         self._update_task: asyncio.Task | None = None
         self._dirty = False
+        self._stage = GarageStage()
+        self._stage_launching: object | None = None
+        self._stage_baseline_sid: str | None = None
         self.controller = GarageController(
             self.binding, evidence=self.evidence, session=self.session,
             move_door=self.move_door, door_observation=self.door_observation,
@@ -195,6 +199,12 @@ class GarageRuntime:
         return response
 
     async def persist(self) -> None:
+        # Controller.begin calls this before its first await. Capture ownership
+        # here, rather than adopting whichever task exists when sending returns.
+        if (self._stage_launching is not None and self._stage.session_id is None
+            and self.session.session_id != self._stage_baseline_sid and self.session.active):
+            self._stage.session_id = self.session.session_id
+            self._stage_start_signature = summary_signature(self.controller.robot.summary)
         payload = self.session.to_dict()
         if payload != self._last_payload:
             await self.store.async_save(self.coordinator.duid,payload)
@@ -253,19 +263,25 @@ class GarageRuntime:
             _LOGGER.exception('Garage observation failed for %s', self.coordinator.duid)
         self.publish()
 
-    async def async_send(self, command: Any, send: Callable) -> Any:
+    async def async_send(self, command: Any, send: Callable, *, _stage_owner: object | None = None) -> Any:
         name = command_name(command)
         if name not in _NEW_TASK_COMMANDS | _RESUME_COMMANDS | _DIRECT_COMMANDS | {'app_charge'}:
             raise GarageControlError('unsupported_guarded_command')
         if name in _DIRECT_COMMANDS:
             if name in ('app_stop', 'app_pause'):
+                self._stage.interrupt('user_pause' if name == 'app_pause' else 'user_stop')
                 self.controller.cancel_pending_for_user()
             result = await send()
             if name == 'app_stop' and self.session.active:
                 self.session.request_cancel()
                 await self.persist()
             self.schedule()
+            self.publish()
             return result
+        if self._stage_launching is not None and _stage_owner is not self._stage_launching:
+            raise GarageControlError('stage_in_progress')
+        if _stage_owner is None and name in _NEW_TASK_COMMANDS | {'app_charge'}:
+            self._stage.interrupt('task_replaced')
         if not self._restored or self._first_install or self.controller.phase == 'recovering':
             raise GarageControlError('session_recovery_required')
         if name in _NEW_TASK_COMMANDS or (name=='app_charge' and not self.session.active):
@@ -275,6 +291,8 @@ class GarageRuntime:
             except Exception:
                 self.controller.fault('task_end_unconfirmed')
                 raise
+        if _stage_owner is not None:
+            self._check_stage_launch(_stage_owner)
         result = await self.controller.async_execute(
             name, send, new_task=name in _NEW_TASK_COMMANDS or (name=='app_charge' and not self.session.active),
             resume=name in _RESUME_COMMANDS,
@@ -282,6 +300,100 @@ class GarageRuntime:
         self.schedule()
         self.publish()
         return result
+
+    async def async_start_stage(self, stage: dict, send: Callable, *, previous_receipt: dict | None = None) -> dict:
+        """Start one explicit stage; HA owns the sequence and its timeout."""
+        normalized = validate_stage(stage)
+        self._observe_stage()
+        if self._stage_launching is not None or self._stage.result == 'running':
+            raise GarageControlError('stage_in_progress')
+        if previous_receipt is not None:
+            self._stage.check_previous(previous_receipt, self.session.session_id)
+        if self._closed:
+            raise GarageControlError('control_unloaded')
+        owner = object()
+        self._stage_launching = owner
+        self._stage_baseline_sid = self.session.session_id
+        self._stage_previous_signature = self._stage.completion_signature if previous_receipt is not None else None
+        self._stage_main_sent = False
+        self._stage.prepare()
+        revision = self._stage.revision
+        self._stage_launch_revision = revision
+        self.publish()
+        async def guarded_send() -> Any:
+            self._check_stage_launch(owner)
+            if self._stage.session_id is None:
+                raise GarageControlError('invalid_stage_receipt')
+            for setting in normalized['settings']:
+                self._check_stage_launch(owner)
+                await send(setting['command'], deepcopy(setting['params']))
+                self._check_stage_launch(owner)
+            self._check_stage_launch(owner)
+            self._stage_main_sent = True
+            result = await send(normalized['command'], deepcopy(normalized['params']))
+            self._check_stage_launch(owner)
+            return result
+        try:
+            await self.async_send(normalized['command'], guarded_send, _stage_owner=owner)
+            self._check_stage_launch(owner)
+            return self._stage.receipt()
+        except asyncio.CancelledError:
+            self._stage.interrupt('operation_cancelled')
+            raise
+        except Exception as err:
+            if self._stage.result != 'aborted':
+                self._stage.interrupt(getattr(err, 'reason', None) or 'command_failed')
+            raise
+        finally:
+            self._stage_launching = None
+            self.publish()
+
+    def _check_stage_launch(self, owner: object) -> None:
+        # Consume only already available samples; this does not poll the robot.
+        self.controller.refresh()
+        self._observe_stage()
+        if self._stage.session_id is None:
+            if (self.session.session_id != self._stage_baseline_sid
+                or (self._stage_previous_signature is not None
+                    and summary_signature(self.controller.robot.summary) != self._stage_previous_signature)):
+                self._stage.interrupt('task_replaced')
+        elif not self._stage_main_sent and (self.session.started
+              or summary_signature(self.controller.robot.summary) != self._stage_start_signature):
+            self._stage.interrupt('task_replaced')
+        if (self._closed or self._stage_launching is not owner
+            or self._stage.revision != self._stage_launch_revision or self._stage.result == 'aborted'
+            or (self._stage.session_id is not None and self._stage.session_id != self.session.session_id)):
+            raise GarageControlError('stage_interrupted')
+
+    def _observe_stage(self) -> None:
+        stage = self._stage
+        if stage.result is None or stage.result == 'aborted':
+            return
+        if self.controller.reason:
+            stage.interrupt(self.controller.reason)
+            return
+        if stage.session_id is None:
+            return
+        facts = self.session.to_dict()
+        if self.session.session_id != stage.session_id:
+            stage.interrupt('task_replaced')
+        elif facts['cancel_requested'] or not facts['correlation_valid']:
+            stage.interrupt('task_cancelled' if facts['cancel_requested'] else 'task_end_unconfirmed')
+        elif (self.controller.robot.fresh and self.controller.robot.state == 'paused'
+              and not (self.controller._pause_session == stage.session_id and self.controller.phase in
+                       ('pausing_return', 'return_opening', 'resuming_return'))):
+            stage.interrupt('user_pause')
+        elif self.controller.robot.fresh and self.controller.robot.state in ('error', 'charging_error', 'charging_problem'):
+            stage.interrupt('robot_error')
+        elif (stage.result == 'running' and not self._stage_launching and not self.controller._pending
+              and facts['task_kind'] == 'clean' and facts['started'] and facts['ended'] and not facts['active']
+              and facts['observed_record_id'] is not None and self.session.can_close):
+            stage.result = 'succeeded'
+            stage.completion_signature = summary_signature(self.controller.robot.summary)
+
+    def stage_attributes(self) -> dict[str, Any]:
+        self._observe_stage()
+        return self._stage.attributes()
 
     async def async_routine(self, send: Callable) -> Any:
         return await self.async_send('app_start',send)
@@ -293,6 +405,7 @@ class GarageRuntime:
         self.publish()
 
     def reset(self) -> None:
+        self._stage.interrupt('control_reset')
         if self._first_install:
             raise GarageControlError('session_recovery_required')
         self.controller.reset()
@@ -303,6 +416,8 @@ class GarageRuntime:
         self.publish()
 
     def notify(self, reason: str | None) -> None:
+        if reason is not None:
+            self._stage.interrupt(reason)
         key = None if reason is None else (self.session.session_id,reason)
         if key == self._last_issue:
             return
@@ -327,6 +442,7 @@ class GarageRuntime:
         return remove
 
     def publish(self) -> None:
+        self._observe_stage()
         for listener in tuple(self._listeners):
             listener()
 
@@ -355,8 +471,13 @@ class GarageRuntime:
             return isinstance(members, list) and any(contains_door(member) for member in members)
         if target and not any(contains_door(entity_id) for entity_id in target):
             return
-        direction = 'open' if service=='open_cover' else 'close' if service=='close_cover' else 'stop'
-        self.controller.external_command(direction)
+        # Position/toggle requests move the door; only literal stop_cover can
+        # be a harmless clutch release at a confirmed closed endpoint.
+        direction = {'open_cover': 'open', 'close_cover': 'close', 'stop_cover': 'stop'}.get(service, 'move')
+        cover = self.hass.states.get(self.binding['cover_entity_id'])
+        self.controller.external_command(
+            direction, door_moving=cover is not None and cover.state in ('opening', 'closing'),
+        )
         self.publish()
 
     def _state_event(self, event: Any) -> None:
@@ -493,6 +614,7 @@ class GarageRuntime:
         await self.async_tick()
 
     def shutdown(self) -> None:
+        self._stage.interrupt('control_unloaded')
         self._closed=True
         self.controller.shutdown()
         for remove in self._unsubscribers:

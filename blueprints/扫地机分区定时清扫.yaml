@@ -283,7 +283,7 @@ variables:
     {% set rounds = ((window / interval) | round(0, 'ceil') | int) + 1 %}
     {{ [rounds, 1] | max }}
   # 窗口 0 时 deadline 就是起始时刻；第一次尝试由下面的 repeat.index == 1 保证。
-  deadline: "{{ now() + timedelta(minutes=retry_window | int(0)) }}"
+  deadline: "{{ as_timestamp(now()) + (retry_window | int(0)) * 60 }}"
 
 # 触发器由每个实例自己配（trigger 选择器），蓝图不预设。
 #
@@ -327,7 +327,7 @@ actions:
         - variables:
             should_act: >-
               {{ not is_state(task_active_entity, 'on')
-                 and (repeat.index == 1 or now() <= deadline) }}
+                 and (repeat.index == 1 or as_timestamp(now()) <= deadline) }}
             occupied: >-
               {% set sensors = presence_sensors | default([], true) %}
               {{ sensors | count > 0
@@ -401,7 +401,7 @@ actions:
                 - condition: template
                   value_template: >-
                     {{ not is_state(task_active_entity, 'on')
-                       and now() <= deadline }}
+                       and as_timestamp(now()) <= deadline }}
               then:
                 - delay:
                     minutes: "{{ retry_interval | int(5) }}"

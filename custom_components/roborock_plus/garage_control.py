@@ -109,10 +109,19 @@ class GarageController:
         if changed:
             self.notify(reason)
 
-    def external_command(self, direction: str) -> None:
-        """Yield to external control, except an already pending same-direction open."""
+    def external_command(self, direction: str, *, door_moving: bool = False) -> None:
+        """Yield to external movement; a settled closed-door stop grants no authority."""
         if direction == 'open' and self.phase in ('opening', 'return_opening'):
             return
+        if (direction == 'stop' and not door_moving and not self._pending
+            and not self._closed and not self.reason and not self._user_hold
+            and not self._pause_session and not self._closing_for_exit
+            and self.phase in ('idle', 'outside_closed', 'waiting_close_permission')):
+            self.state = self.evidence.observe(self.clock(), **self.door_observation())
+            if self.state.closed_confirmed is True:
+                # Some covers use stop at rest to release their clutch. It
+                # neither cancels a wait nor authorizes future robot movement.
+                return
         self.fault('manual_override', manual=True)
 
     def cancel_pending_for_user(self) -> None:

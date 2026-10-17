@@ -254,6 +254,32 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
             ) from err
         return await super().send(command, params)
 
+    async def async_start_garage_cleaning_stage(
+        self, stage: dict[str, Any], previous_receipt: dict[str, Any] | None = None,
+    ) -> ServiceResponse:
+        """Start one protected stage and return its exact task receipt to HA scripts."""
+        runtime = getattr(self.coordinator, 'garage_runtime', None)
+        try:
+            if runtime is None:
+                raise GarageControlError(getattr(self.coordinator, 'garage_setup_error', None) or 'garage_not_configured')
+            return await runtime.async_start_stage(
+                stage,
+                lambda command, params: super(RoborockVacuum, self).send(command, params),
+                previous_receipt=previous_receipt,
+            )
+        except (GarageControlError, GarageTaskError) as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key='garage_control_error',
+                translation_placeholders={'reason': err.reason},
+            ) from err
+        except HomeAssistantError:
+            raise
+        except Exception as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key='garage_control_error',
+                translation_placeholders={'reason': f'command_failed: {type(err).__name__}: {err}'},
+            ) from err
+
     async def async_request_garage_close(self) -> None:
         """Request closure through the same robot and household safety gates."""
         runtime = getattr(self.coordinator, 'garage_runtime', None)
@@ -788,6 +814,15 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
 class RoborockQ7Vacuum(RoborockCoordinatedEntityB01Q7, StateVacuumEntity):
     """General Representation of a Roborock vacuum."""
 
+    async def async_start_garage_cleaning_stage(
+        self, stage: dict[str, Any], previous_receipt: dict[str, Any] | None = None,
+    ) -> ServiceResponse:
+        """Reject this V1-only service before any device command."""
+        raise ServiceValidationError(
+            translation_domain=DOMAIN, translation_key='garage_control_error',
+            translation_placeholders={'reason': 'unsupported_protocol'},
+        )
+
     _attr_supported_features = (
         VacuumEntityFeature.PAUSE
         | VacuumEntityFeature.STOP
@@ -988,6 +1023,15 @@ class RoborockQ7Vacuum(RoborockCoordinatedEntityB01Q7, StateVacuumEntity):
 
 class RoborockQ10Vacuum(RoborockCoordinatedEntityB01Q10, StateVacuumEntity):
     """Representation of a Roborock Q10 vacuum."""
+
+    async def async_start_garage_cleaning_stage(
+        self, stage: dict[str, Any], previous_receipt: dict[str, Any] | None = None,
+    ) -> ServiceResponse:
+        """Reject this V1-only service before any device command."""
+        raise ServiceValidationError(
+            translation_domain=DOMAIN, translation_key='garage_control_error',
+            translation_placeholders={'reason': 'unsupported_protocol'},
+        )
 
     _attr_supported_features = (
         VacuumEntityFeature.PAUSE

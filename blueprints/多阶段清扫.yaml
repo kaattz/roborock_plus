@@ -1,0 +1,213 @@
+blueprint:
+  name: 多阶段受保护清扫
+  description: >-
+    每段独立经过 Roborock Plus 车库互锁；只有同一段清扫的成功记录与稳定停靠得到确认才进入下一段。
+    人工暂停、取消、故障、复核、重新加载或超时均停止后续；恢复机器人不会恢复旧脚本。
+    请从实际例程取得全部参数，不按阶段名称猜房间、模式或次数。
+    每段 settings 必须明确设置风机、水量、拖地路线；app_start 还必须明确重复次数。
+    本脚本不操作车库门、不自动重试，Home Assistant 重启后不续跑。
+  domain: script
+  author: kaattz
+  source_url: https://github.com/kaattz/roborock_plus/blob/main/blueprints/%E5%A4%9A%E9%98%B6%E6%AE%B5%E6%B8%85%E6%89%AB.yaml
+  homeassistant:
+    min_version: "2026.8.0"
+  input:
+    vacuum_entity:
+      name: 扫地机
+      selector:
+        entity:
+          filter:
+            - integration: roborock_plus
+              domain: vacuum
+    stage_sensor:
+      name: 这台扫地机的车库控制阶段传感器
+      description: 选择该设备的 garage_phase 传感器；脚本用它核对阶段回执，不根据实体名称猜测。
+      selector:
+        entity:
+          filter:
+            - integration: roborock_plus
+              domain: sensor
+    stages:
+      name: 真实清扫阶段列表
+      description: >-
+        输入实际例程对应的完整 JSON 列表。每段 command 为 app_start、app_segment_clean 或 app_zoned_clean；
+        params 保留原参数，settings 为 command/params 对象列表。
+        每段须包含 set_custom_mode、set_water_box_custom_mode、set_mop_mode（参数为单个整数列表）；
+        app_start 另需 set_clean_repeat_times（参数为 repeat 正整数对象）。没有预置清扫参数。
+      selector:
+        object:
+    stage_timeout_minutes:
+      name: 单段完成超时（分钟）
+      description: 超时结束整个脚本；不会因为后来停靠或恢复而继续下一段。
+      default: 180
+      selector:
+        number:
+          min: 1
+          max: 720
+          mode: box
+          unit_of_measurement: 分钟
+
+mode: single
+max_exceeded: warning
+variables:
+  vacuum_entity: !input vacuum_entity
+  stage_sensor: !input stage_sensor
+  stages: !input stages
+  stage_timeout_minutes: !input stage_timeout_minutes
+  stage_response: null
+  receipt: null
+  previous_receipt: null
+
+sequence:
+  # Validate the complete list before the first protected service call.
+  - variables:
+      stages_valid: >-
+        {% macro json_value(value) %}
+          {% set item = namespace(valid=true) %}
+          {% if value is none or value is boolean or value is string %}
+          {% elif value is number %}
+            {% set item.valid = is_number(value) %}
+          {% elif value is mapping %}
+            {% for key, child in value.items() %}
+              {% if key is not string or not (json_value(child) | bool(false)) %}
+                {% set item.valid = false %}
+              {% endif %}
+            {% endfor %}
+          {% elif value is sequence %}
+            {% for child in value %}
+              {% if not (json_value(child) | bool(false)) %}
+                {% set item.valid = false %}
+              {% endif %}
+            {% endfor %}
+          {% else %}
+            {% set item.valid = false %}
+          {% endif %}
+          {{ item.valid }}
+        {% endmacro %}
+        {% set check = namespace(valid=true) %}
+        {% if stages is not sequence or stages is string or stages is mapping or stages | count == 0 %}
+          {% set check.valid = false %}
+        {% else %}
+          {% for stage in stages %}
+            {% if stage is not mapping %}
+              {% set check.valid = false %}
+            {% else %}
+              {% if stage.keys() | reject('in', ['command', 'params', 'settings']) | list | count > 0
+                    or stage.get('command') not in ['app_start', 'app_segment_clean', 'app_zoned_clean']
+                    or not (json_value(stage.get('params')) | bool(false)) %}
+                {% set check.valid = false %}
+              {% endif %}
+              {% set settings = stage.get('settings') %}
+              {% set seen = namespace(commands=[]) %}
+              {% if settings is not sequence or settings is string or settings is mapping %}
+                {% set check.valid = false %}
+              {% else %}
+                {% for setting in settings %}
+                  {% if setting is not mapping %}
+                    {% set check.valid = false %}
+                  {% elif setting.keys() | sort != ['command', 'params'] %}
+                    {% set check.valid = false %}
+                  {% else %}
+                    {% set command = setting.command %}
+                    {% set params = setting.params %}
+                    {% if command not in ['set_custom_mode', 'set_water_box_custom_mode', 'set_mop_mode', 'set_clean_repeat_times']
+                          or command in seen.commands %}
+                      {% set check.valid = false %}
+                    {% endif %}
+                    {% set seen.commands = seen.commands + [command] %}
+                    {% if command == 'set_clean_repeat_times' %}
+                      {% if params is not mapping %}
+                        {% set check.valid = false %}
+                      {% elif params.keys() | list != ['repeat'] or params.repeat is not integer or params.repeat <= 0 %}
+                        {% set check.valid = false %}
+                      {% endif %}
+                    {% elif params is not sequence or params is string or params is mapping %}
+                      {% set check.valid = false %}
+                    {% elif params | count != 1 or params[0] is not integer %}
+                      {% set check.valid = false %}
+                    {% endif %}
+                  {% endif %}
+                {% endfor %}
+              {% endif %}
+              {% if 'set_custom_mode' not in seen.commands or 'set_water_box_custom_mode' not in seen.commands
+                    or 'set_mop_mode' not in seen.commands
+                    or (stage.get('command') == 'app_start' and 'set_clean_repeat_times' not in seen.commands) %}
+                {% set check.valid = false %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+        {{ check.valid }}
+  - if:
+      - condition: template
+        value_template: >-
+          {{ not stages_valid or stage_timeout_minutes is boolean or stage_timeout_minutes is not number
+             or not is_number(stage_timeout_minutes)
+             or stage_timeout_minutes < 1 or stage_timeout_minutes > 720
+             or states(stage_sensor) in ['unknown', 'unavailable'] }}
+    then:
+      - stop: 阶段列表、超时或阶段传感器无效；没有启动清扫。
+        error: true
+  - repeat:
+      for_each: "{{ stages }}"
+      sequence:
+        - choose:
+            - conditions: "{{ repeat.index == 1 }}"
+              sequence:
+                - action: roborock_plus.start_garage_cleaning_stage
+                  target:
+                    entity_id: "{{ vacuum_entity }}"
+                  data:
+                    stage: "{{ repeat.item }}"
+                  response_variable: stage_response
+          default:
+            - action: roborock_plus.start_garage_cleaning_stage
+              target:
+                entity_id: "{{ vacuum_entity }}"
+              data:
+                stage: "{{ repeat.item }}"
+                previous_receipt: "{{ previous_receipt }}"
+              response_variable: stage_response
+        - variables:
+            receipt: >-
+              {{ stage_response.get(vacuum_entity, stage_response) if stage_response is mapping else none }}
+        - if:
+            - condition: template
+              value_template: >-
+                {% if receipt is not mapping %}
+                  {{ true }}
+                {% else %}
+                  {{ receipt.keys() | sort != ['interruption_revision', 'runtime_id', 'session_id']
+                     or receipt.runtime_id is not string or receipt.runtime_id | length == 0
+                     or receipt.session_id is not string or receipt.session_id | length == 0
+                     or receipt.interruption_revision is not integer or receipt.interruption_revision < 0 }}
+                {% endif %}
+          then:
+            - stop: 阶段服务未返回有效回执；后续阶段已停止。
+              error: true
+        - wait_template: >-
+            {{ states(stage_sensor) in ['unknown', 'unavailable']
+               or state_attr(stage_sensor, 'stage_runtime_id') != receipt.runtime_id
+               or state_attr(stage_sensor, 'stage_session_id') != receipt.session_id
+               or state_attr(stage_sensor, 'stage_interruption_revision') is not integer
+               or state_attr(stage_sensor, 'stage_interruption_revision') != receipt.interruption_revision
+               or state_attr(stage_sensor, 'stage_result') != 'running' }}
+          timeout:
+            minutes: "{{ stage_timeout_minutes }}"
+          continue_on_timeout: false
+        - if:
+            - condition: template
+              value_template: >-
+                {{ states(stage_sensor) in ['unknown', 'unavailable']
+                   or state_attr(stage_sensor, 'stage_runtime_id') != receipt.runtime_id
+                   or state_attr(stage_sensor, 'stage_session_id') != receipt.session_id
+                   or state_attr(stage_sensor, 'stage_interruption_revision') is not integer
+                   or state_attr(stage_sensor, 'stage_interruption_revision') != receipt.interruption_revision
+                   or state_attr(stage_sensor, 'stage_result') != 'succeeded' }}
+          then:
+            - stop: >-
+                第 {{ repeat.index }} 段未成功或已被中断；后续阶段停止。
+                {{ state_attr(stage_sensor, 'stage_reason') or '回执已改变或状态未知' }}
+              error: true
+        - variables:
+            previous_receipt: "{{ receipt }}"

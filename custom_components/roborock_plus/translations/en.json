@@ -1536,6 +1536,20 @@
       "name": "Get danger zone editor context",
       "description": "Retrieves map image, calibration, current position, and saved danger zone for the editor."
     },
+    "start_garage_cleaning_stage": {
+      "name": "Start protected cleaning stage",
+      "description": "Start one explicit stage through the garage interlock and return its task receipt. Wait for the same receipt to succeed before starting the next stage; interruption, reset or reload invalidates the old sequence.",
+      "fields": {
+        "stage": {
+          "name": "Cleaning stage",
+          "description": "Explicit cleaning command, original parameters and complete fan, water and mop settings. Whole-home stages also require an explicit repeat setting."
+        },
+        "previous_receipt": {
+          "name": "Previous successful stage receipt",
+          "description": "Omit for the first stage. Pass the unchanged runtime_id, session_id and interruption_revision from the previous successful stage for all later stages."
+        }
+      }
+    },
     "request_garage_close": {
       "name": "Request guarded garage closing",
       "description": "Request closing after rechecking the task, stable dock, trusted position, household permission and manual hold. There is no force bypass."

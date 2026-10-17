@@ -72,6 +72,10 @@ def runtime(*, quality="confirmed", reached=True, passage=True, phase="task_open
         controller=SimpleNamespace(state=state, passage_allowed=passage, phase=phase, reason=reason, operation_id=7),
         session=SimpleNamespace(session_id="session-current"),
         binding={"cover_entity_id": "cover.door", "task_door_mode": "hold_open", "open_source": "position", "close_source": "contact"},
+        stage_attributes=lambda: {
+            "stage_runtime_id": "runtime-current", "stage_session_id": None,
+            "stage_interruption_revision": 0, "stage_result": None, "stage_reason": None,
+        },
     )
 
 

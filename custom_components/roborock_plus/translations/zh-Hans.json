@@ -1067,6 +1067,20 @@
       "name": "获取危险区编辑上下文",
       "description": "获取编辑器需要的地图、当前位置和危险区信息。"
     },
+    "start_garage_cleaning_stage": {
+      "name": "启动受保护的单阶段清扫",
+      "description": "经过车库门互锁启动一个明确阶段，并返回本次任务回执。只有同一回执明确成功才能执行下一阶段；人工中断、复核或重载后旧队列失效。",
+      "fields": {
+        "stage": {
+          "name": "清扫阶段",
+          "description": "明确的清扫命令、原始参数及完整吸力、水量、拖地模式设置。全屋清扫还需明确重复次数，不沿用上一阶段的未知设置。"
+        },
+        "previous_receipt": {
+          "name": "上一阶段的成功回执",
+          "description": "第一阶段不填写；后续阶段原样传入上一成功阶段返回的 runtime_id、session_id 和 interruption_revision。"
+        }
+      }
+    },
     "request_garage_close": {
       "name": "请求安全关闭车库门",
       "description": "重新核对任务、稳定停靠、受信位置、家庭许可和人工保持后请求关门，不提供强制绕过。"

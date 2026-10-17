@@ -1,0 +1,204 @@
+# scripts.yaml fragments; local handoff candidates, not installed or executed.
+# Install roborock_plus/多阶段清扫.yaml first; recheck room IDs after map changes.
+# Map 0: kitchen=5, master bedroom=1, second bedroom=6, master bathroom=2, guest bathroom=4.
+# Same observed robot defaults as the living/dining preset; medium slide-water=235.
+garage_kitchen_sweep_then_mop:
+  alias: 厨房先扫后拖（车库保护）
+  description: 该房间先扫一遍，确认成功并稳定停靠后再拖一遍；中断则不执行后续阶段。
+  use_blueprint:
+    path: roborock_plus/多阶段清扫.yaml
+    input:
+      vacuum_entity: vacuum.g20s_ultra
+      stage_sensor: sensor.ke_ting_sao_di_ji_garage_control_phase
+      stage_timeout_minutes: 180
+      stages:
+      - command: app_segment_clean
+        params:
+        - segments:
+          - 5
+          repeat: 1
+        settings:
+        - command: set_custom_mode
+          params:
+          - 102
+        - command: set_water_box_custom_mode
+          params:
+          - 200
+        - command: set_mop_mode
+          params:
+          - 300
+      - command: app_segment_clean
+        params:
+        - segments:
+          - 5
+          repeat: 1
+        settings:
+        - command: set_custom_mode
+          params:
+          - 105
+        - command: set_water_box_custom_mode
+          params:
+          - 235
+        - command: set_mop_mode
+          params:
+          - 300
+garage_master_bedroom_sweep_then_mop:
+  alias: 主卧先扫后拖（车库保护）
+  description: 该房间先扫一遍，确认成功并稳定停靠后再拖一遍；中断则不执行后续阶段。
+  use_blueprint:
+    path: roborock_plus/多阶段清扫.yaml
+    input:
+      vacuum_entity: vacuum.g20s_ultra
+      stage_sensor: sensor.ke_ting_sao_di_ji_garage_control_phase
+      stage_timeout_minutes: 180
+      stages:
+      - command: app_segment_clean
+        params:
+        - segments:
+          - 1
+          repeat: 1
+        settings:
+        - command: set_custom_mode
+          params:
+          - 102
+        - command: set_water_box_custom_mode
+          params:
+          - 200
+        - command: set_mop_mode
+          params:
+          - 300
+      - command: app_segment_clean
+        params:
+        - segments:
+          - 1
+          repeat: 1
+        settings:
+        - command: set_custom_mode
+          params:
+          - 105
+        - command: set_water_box_custom_mode
+          params:
+          - 235
+        - command: set_mop_mode
+          params:
+          - 300
+garage_second_bedroom_sweep_then_mop:
+  alias: 次卧先扫后拖（车库保护）
+  description: 该房间先扫一遍，确认成功并稳定停靠后再拖一遍；中断则不执行后续阶段。
+  use_blueprint:
+    path: roborock_plus/多阶段清扫.yaml
+    input:
+      vacuum_entity: vacuum.g20s_ultra
+      stage_sensor: sensor.ke_ting_sao_di_ji_garage_control_phase
+      stage_timeout_minutes: 180
+      stages:
+      - command: app_segment_clean
+        params:
+        - segments:
+          - 6
+          repeat: 1
+        settings:
+        - command: set_custom_mode
+          params:
+          - 102
+        - command: set_water_box_custom_mode
+          params:
+          - 200
+        - command: set_mop_mode
+          params:
+          - 300
+      - command: app_segment_clean
+        params:
+        - segments:
+          - 6
+          repeat: 1
+        settings:
+        - command: set_custom_mode
+          params:
+          - 105
+        - command: set_water_box_custom_mode
+          params:
+          - 235
+        - command: set_mop_mode
+          params:
+          - 300
+garage_master_bathroom_sweep_then_mop:
+  alias: 主卫先扫后拖（车库保护）
+  description: 该房间先扫一遍，确认成功并稳定停靠后再拖一遍；中断则不执行后续阶段。
+  use_blueprint:
+    path: roborock_plus/多阶段清扫.yaml
+    input:
+      vacuum_entity: vacuum.g20s_ultra
+      stage_sensor: sensor.ke_ting_sao_di_ji_garage_control_phase
+      stage_timeout_minutes: 180
+      stages:
+      - command: app_segment_clean
+        params:
+        - segments:
+          - 2
+          repeat: 1
+        settings:
+        - command: set_custom_mode
+          params:
+          - 102
+        - command: set_water_box_custom_mode
+          params:
+          - 200
+        - command: set_mop_mode
+          params:
+          - 300
+      - command: app_segment_clean
+        params:
+        - segments:
+          - 2
+          repeat: 1
+        settings:
+        - command: set_custom_mode
+          params:
+          - 105
+        - command: set_water_box_custom_mode
+          params:
+          - 235
+        - command: set_mop_mode
+          params:
+          - 300
+garage_guest_bathroom_sweep_then_mop:
+  alias: 外卫先扫后拖（车库保护）
+  description: 该房间先扫一遍，确认成功并稳定停靠后再拖一遍；中断则不执行后续阶段。
+  use_blueprint:
+    path: roborock_plus/多阶段清扫.yaml
+    input:
+      vacuum_entity: vacuum.g20s_ultra
+      stage_sensor: sensor.ke_ting_sao_di_ji_garage_control_phase
+      stage_timeout_minutes: 180
+      stages:
+      - command: app_segment_clean
+        params:
+        - segments:
+          - 4
+          repeat: 1
+        settings:
+        - command: set_custom_mode
+          params:
+          - 102
+        - command: set_water_box_custom_mode
+          params:
+          - 200
+        - command: set_mop_mode
+          params:
+          - 300
+      - command: app_segment_clean
+        params:
+        - segments:
+          - 4
+          repeat: 1
+        settings:
+        - command: set_custom_mode
+          params:
+          - 105
+        - command: set_water_box_custom_mode
+          params:
+          - 235
+        - command: set_mop_mode
+          params:
+          - 300

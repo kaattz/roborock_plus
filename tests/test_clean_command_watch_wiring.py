@@ -40,7 +40,7 @@ def test_vacuum_watch_runs_after_the_command_is_sent() -> None:
 
     assert "def _watch_clean_command" in vacuum
     for method in ("async_start", "async_clean_segments", "async_send_command"):
-        body = vacuum.split(f"async def {method}", 1)[1].split("\n    async def ", 1)[0]
+        body = vacuum.split(f"async def {method}(", 1)[1].split("\n    async def ", 1)[0]
         assert "_watch_clean_command" in body, method
         assert body.index("self.send") < body.index("_watch_clean_command"), method
 

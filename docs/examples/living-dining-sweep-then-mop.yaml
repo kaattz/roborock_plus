@@ -1,0 +1,38 @@
+# scripts.yaml fragment; local handoff candidate, not installed or executed.
+# Install blueprints/多阶段清扫.yaml at the blueprint path below first.
+# User-confirmed rooms: both living room and dining room, sweep then mop.
+# Read-only map: flag 0, living room=3, dining room=7; recheck after map changes.
+# Defaults captured from this robot: balanced fan, medium slide-water, standard route.
+# This model's medium water is 235, not the older non-slide code 202.
+garage_living_dining_sweep_then_mop:
+  alias: 客餐厅先扫后拖（车库保护）
+  description: 两个房间先扫一遍，确认成功并稳定停靠后再拖一遍；中断则不执行后续阶段。
+  use_blueprint:
+    path: roborock_plus/多阶段清扫.yaml
+    input:
+      vacuum_entity: vacuum.g20s_ultra
+      stage_sensor: sensor.ke_ting_sao_di_ji_garage_control_phase
+      stage_timeout_minutes: 180
+      stages:
+        - command: app_segment_clean
+          params:
+            - segments: [3, 7]
+              repeat: 1
+          settings:
+            - command: set_custom_mode
+              params: [102]
+            - command: set_water_box_custom_mode
+              params: [200]
+            - command: set_mop_mode
+              params: [300]
+        - command: app_segment_clean
+          params:
+            - segments: [3, 7]
+              repeat: 1
+          settings:
+            - command: set_custom_mode
+              params: [105]
+            - command: set_water_box_custom_mode
+              params: [235]
+            - command: set_mop_mode
+              params: [300]

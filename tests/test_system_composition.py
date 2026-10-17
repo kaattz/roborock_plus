@@ -44,7 +44,8 @@ def _blueprint_path() -> Path:
     candidates = [
         path
         for path in BLUEPRINTS.glob("*.yaml")
-        if "cleaning" in path.name or "清扫" in path.name
+        if ("cleaning" in path.name or "清扫" in path.name)
+        and yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader).get("blueprint", {}).get("domain") == "automation"
     ]
     if len(candidates) != 1:
         raise AssertionError(

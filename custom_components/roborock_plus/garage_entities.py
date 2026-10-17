@@ -82,6 +82,8 @@ class GarageDiagnosticEntity(RoborockEntity):
             "cover_entity_id": binding.get("cover_entity_id"),
             "task_door_mode": binding.get("task_door_mode", "hold_open"),
         }
+        if runtime is not None:
+            attributes.update(runtime.stage_attributes())
         for direction in ("open", "close"):
             endpoint = getattr(state, direction, None)
             attributes[f"{direction}_quality"] = getattr(endpoint, "quality", "unknown")

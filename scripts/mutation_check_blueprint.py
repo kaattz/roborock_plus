@@ -16,6 +16,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+import yaml
 
 REPO = Path(__file__).resolve().parent.parent
 BLUEPRINTS = REPO / "blueprints"
@@ -31,7 +32,8 @@ def _blueprint() -> Path:
     candidates = [
         path
         for path in BLUEPRINTS.glob("*.yaml")
-        if "cleaning" in path.name or "清扫" in path.name
+        if ("cleaning" in path.name or "清扫" in path.name)
+        and yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader).get("blueprint", {}).get("domain") == "automation"
     ]
     if len(candidates) != 1:
         raise SystemExit(

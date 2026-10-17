@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -33,7 +34,8 @@ def _blueprint_path() -> Path:
     candidates = [
         path
         for path in (ROOT / "blueprints").glob("*.yaml")
-        if "cleaning" in path.name or "清扫" in path.name
+        if ("cleaning" in path.name or "清扫" in path.name)
+        and yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader).get("blueprint", {}).get("domain") == "automation"
     ]
     assert len(candidates) == 1, f"expected one cleaning blueprint: {candidates}"
     return candidates[0]

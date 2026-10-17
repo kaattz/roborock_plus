@@ -113,7 +113,7 @@ def _walk_actions(node, path: str = "actions") -> list[tuple[str, dict]]:
     return found
 
 
-def validate_action_structure(config: dict) -> list[str]:
+def validate_action_structure(config: dict, action_key: str = "actions") -> list[str]:
     """Check the shapes HA's action schema requires.
 
     The first version of this blueprint was rejected by Home Assistant's importer
@@ -123,7 +123,7 @@ def validate_action_structure(config: dict) -> list[str]:
     as a blueprint catches that, which is why this exists.
     """
     problems: list[str] = []
-    for path, node in _walk_actions(config.get("actions")):
+    for path, node in _walk_actions(config.get(action_key), action_key):
         # `if:` must be a list of conditions, and `then:` its sibling.
         if "if" in node and not isinstance(node["if"], list):
             problems.append(f"{path}: 'if' must be a list of conditions")
@@ -187,8 +187,9 @@ def validate(path: Path) -> list[str]:
         if required not in blueprint:
             problems.append(f"blueprint.{required} is required")
 
-    if blueprint.get("domain") != "automation":
-        problems.append(f"unexpected domain: {blueprint.get('domain')!r}")
+    domain = blueprint.get("domain")
+    if domain not in ("automation", "script"):
+        problems.append(f"unexpected domain: {domain!r}")
 
     declared = declared_inputs(blueprint)
     used = collect_inputs(config)
@@ -203,16 +204,18 @@ def validate(path: Path) -> list[str]:
             "declared but never referenced: " + ", ".join(sorted(unused))
         )
 
-    # An automation blueprint must carry triggers and actions, or importing it
-    # produces something that can never run.
-    for required in ("triggers", "actions"):
+    # Script blueprints carry a sequence; automations still require both their
+    # triggers and actions. Both use the same nested action structure checks.
+    action_key = "sequence" if domain == "script" else "actions"
+    required_keys = ("sequence",) if domain == "script" else ("triggers", "actions")
+    for required in required_keys:
         if required not in config:
             problems.append(f"missing top-level '{required}:'")
 
-    if not isinstance(config.get("actions"), list):
-        problems.append("actions must be a list")
+    if not isinstance(config.get(action_key), list):
+        problems.append(f"{action_key} must be a list")
     else:
-        problems.extend(validate_action_structure(config))
+        problems.extend(validate_action_structure(config, action_key))
 
     return problems
 

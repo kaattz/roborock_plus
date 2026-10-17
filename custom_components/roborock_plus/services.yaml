@@ -1,3 +1,22 @@
+start_garage_cleaning_stage:
+  name: Start protected cleaning stage
+  description: Starts one explicit cleaning stage through the garage interlock and returns its task receipt. HA scripts must wait for this receipt's succeeded result before starting the next stage. User interruption, reset and reload invalidate old receipts.
+  target:
+    entity:
+      integration: roborock_plus
+      domain: vacuum
+  fields:
+    stage:
+      name: Cleaning stage
+      description: Explicit command, original parameters and complete fan, water and mop settings. Whole-home stages also require repeat settings. Unknown or incomplete stages are rejected before movement.
+      required: true
+      selector:
+        object: {}
+    previous_receipt:
+      name: Previous successful stage receipt
+      description: Omit for the first stage. Later stages must pass the unchanged runtime_id, session_id and interruption_revision returned by the previous successful stage.
+      selector:
+        object: {}
 request_garage_close:
   name: Request garage closing
   description: Requests garage closing after rechecking the task, stable dock, trusted position, household permission and manual hold. No force bypass is available.

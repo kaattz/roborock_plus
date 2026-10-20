@@ -80,7 +80,7 @@ def test_explicit_stop_does_not_convert_existing_manual_hold_to_idle():
     replay.controller.external_command("stop")
     assert replay.controller.reason == "manual_override"
     assert replay.controller.phase == "manual_hold"
-    assert replay.controller.operation_id >= operation
+    assert replay.controller.operation_id == operation
     assert not replay.robot_calls and not replay.door_calls
 
 
@@ -89,9 +89,14 @@ def test_closed_stop_does_not_bypass_outstanding_holds_or_lifecycle_flags(flag):
     replay = RecoveryReplay()
     replay.handover()
     setattr(replay.controller, flag, True)
+    before = (replay.controller.reason, replay.controller.phase, replay.controller.operation_id)
     replay.controller.external_command("stop")
-    assert replay.controller.reason == "manual_override"
-    assert replay.controller.phase == "manual_hold"
+    if flag == "_user_hold":
+        assert replay.controller._user_hold is True
+        assert (replay.controller.reason, replay.controller.phase, replay.controller.operation_id) == before
+    else:
+        assert replay.controller.reason == "manual_override"
+        assert replay.controller.phase == "manual_hold"
 
 
 @pytest.mark.parametrize("phase", [

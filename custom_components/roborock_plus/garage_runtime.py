@@ -85,6 +85,7 @@ class GarageRuntime:
         self._restored = False
         self._closed = False
         self._update_task: asyncio.Task | None = None
+        self._safety_task: asyncio.Task | None = None
         self._dirty = False
         self._stage = GarageStage()
         self._stage_launching: object | None = None
@@ -575,6 +576,18 @@ class GarageRuntime:
             return
         self._dirty=True
         if self._update_task is not None and not self._update_task.done():
+            if self._restored and (self._safety_task is None or self._safety_task.done()):
+                async def safety_update() -> None:
+                    try:
+                        await self.controller.async_brake_pending_return()
+                    except Exception as err:
+                        if not self.controller.reason:
+                            self.controller.fault(getattr(err, 'reason', None) or 'session_recovery_required')
+                        _LOGGER.exception('Garage safety observation failed for %s', self.coordinator.duid)
+                    self.publish()
+                self._safety_task = self.hass.async_create_task(
+                    safety_update(), name='roborock_plus_garage_safety',
+                )
             return
         async def update() -> None:
             while self._dirty and not self._closed:
@@ -622,6 +635,8 @@ class GarageRuntime:
         self._unsubscribers.clear()
         if self._update_task is not None:
             self._update_task.cancel()
+        if self._safety_task is not None:
+            self._safety_task.cancel()
         owners=self.hass.data.get(REGISTRY_KEY,{})
         if owners.get(self.binding['cover_entity_id']) is self:
             owners.pop(self.binding['cover_entity_id'])

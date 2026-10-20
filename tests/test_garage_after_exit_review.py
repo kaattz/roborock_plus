@@ -55,7 +55,9 @@ def test_closed_task_reports_loss_of_robot_observability():
         await r.depart()
         r.fresh = False
         await r.poll()
-        assert r.controller.reason is not None
+        assert r.controller.reason is None
+        await r.poll(r.controller.binding['operation_timeout_seconds'] + .1)
+        assert r.controller.reason == 'observation_timeout'
         assert r.controller.phase == "blocked"
     asyncio.run(exercise())
 

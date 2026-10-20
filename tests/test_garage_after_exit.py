@@ -171,7 +171,9 @@ def test_lost_robot_observations_outside_closed_are_reported_not_silently_ignore
         await r.depart()
         r.fresh = False
         await r.poll()
-        assert r.controller.reason == "position_untrusted"
+        assert r.controller.reason is None
+        await r.poll(r.controller.binding["operation_timeout_seconds"] + .1)
+        assert r.controller.reason == "observation_timeout"
         assert r.controller.phase == "blocked"
         assert len(r.closes()) == 1
     asyncio.run(exercise())
@@ -247,6 +249,152 @@ def test_loss_of_outside_guard_stops_an_in_task_close():
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("silence", ["position", "status"])
+def test_transient_silence_during_close_wait_does_not_latch_task_end(silence):
+    """A missing sample cannot prove the robot came back.
+
+    Replays 2026-10-18 09:02:24.94: the door was already closing, the robot was
+    confirmed outside, and one unusable observation latched a permanent fault.
+    Without STOP, abort the close by reopening; do not blindly finish closing.
+    """
+    async def exercise():
+        r = ExitReplay()
+        r.handover()
+        await r.start()
+        r.outside = False
+        await r.poll(state="cleaning", cleaning=1, docked=False)
+        steps = {"n": 0}
+
+        def one_silent_sample(replay):
+            if replay.controller.phase != "closing":
+                return
+            steps["n"] += 1
+            if steps["n"] == 1:
+                if silence == "position":
+                    replay.outside = None
+                else:
+                    replay.fresh = False
+            elif steps["n"] == 2:
+                replay.outside = True
+                replay.fresh = True
+
+        r.on_sleep = one_silent_sample
+        r.outside = True
+        await r.poll()
+        assert steps["n"] >= 1
+        assert r.controller.reason is None
+        assert r.controller.phase == "task_open"
+        assert r.open_contact == "on"
+        assert len(r.closes()) == 1
+        assert "sleep" not in [event[0] for event in r.events]
+    asyncio.run(exercise())
+
+
+def test_silence_does_not_swallow_a_close_that_already_completed():
+    """The physical close may finish while observations are missing.
+
+    If the endpoint is reached, the already-commanded close succeeded; waiting
+    for a liveness sample that never comes would turn a completed close into a
+    timeout fault.
+    """
+    async def exercise():
+        r = ExitReplay()
+        r.handover()
+        await r.start()
+        r.outside = False
+        await r.poll(state="cleaning", cleaning=1, docked=False)
+
+        def silence_at_closed_endpoint(replay):
+            if replay.controller.phase == "closing" and replay.close_contact == "on":
+                replay.outside = None
+
+        r.on_sleep = silence_at_closed_endpoint
+        r.outside = True
+        await r.poll()
+        assert len(r.closes()) == 1
+        assert r.close_contact == "on"
+        assert r.controller.reason is None
+        assert r.controller.phase == "outside_closed"
+    asyncio.run(exercise())
+
+
+def test_latched_fault_is_logged_once_with_its_reason(caplog):
+    """`task_end_unconfirmed` used to change state without leaving any trace."""
+    async def exercise():
+        r = ExitReplay()
+        r.handover()
+        await r.start()
+        r.outside = False
+        await r.poll(state="cleaning", cleaning=1, docked=False)
+
+        def returned_inside(replay):
+            if replay.controller.phase == "closing":
+                replay.outside = False
+
+        r.on_sleep = returned_inside
+        r.outside = True
+        await r.poll()
+        assert r.controller.reason == "task_end_unconfirmed"
+
+    with caplog.at_level("WARNING"):
+        asyncio.run(exercise())
+    records = [record for record in caplog.records
+               if record.name.endswith("garage_control")]
+    assert len(records) == 1
+    assert "task_end_unconfirmed" in records[0].getMessage()
+    assert records[0].levelname == "WARNING"
+
+
+@pytest.mark.parametrize("signal", ["docked", "cancel", "leaves_cleaning"])
+def test_each_contradiction_term_stops_a_close_that_silence_would_not(signal):
+    """Silence is tolerated; positive evidence against the departure is not.
+
+    Covers the three contradiction terms that do not surface through
+    `outside_danger_zone`, so a future edit cannot quietly drop one of them
+    while the transient-silence test still passes.
+    """
+    async def exercise():
+        r = ExitReplay()
+        r.handover()
+        await r.start()
+        r.outside = False
+        await r.poll(state="cleaning", cleaning=1, docked=False)
+
+        def contradict(replay):
+            if replay.controller.phase != "closing":
+                return
+            if signal == "docked":
+                replay.state, replay.docked = "charging", True
+            elif signal == "cancel":
+                replay.session.request_cancel()
+            else:
+                replay.state = "paused"
+
+        r.on_sleep = contradict
+        r.outside = True
+        await r.poll()
+        assert r.controller.reason == "task_end_unconfirmed"
+        assert r.controller.phase == "blocked"
+        assert len(r.closes()) == 1
+        assert ("robot", "app_resume") not in r.events
+
+    asyncio.run(exercise())
+
+
+def test_repeated_faults_with_the_same_reason_log_once(caplog):
+    """A latched controller must not flood the log on every observation."""
+    replay = Replay()
+    replay.handover()
+    with caplog.at_level("WARNING"):
+        replay.controller.fault("task_end_unconfirmed")
+        replay.controller.fault("task_end_unconfirmed")
+        replay.controller.fault("task_end_unconfirmed")
+    records = [record for record in caplog.records
+               if record.name.endswith("garage_control")]
+    assert len(records) == 1
+    assert "task_end_unconfirmed" in records[0].getMessage()
+
+
 @pytest.mark.parametrize("record", [
     {"begin": 1006, "end": 1010, "complete": 0},
     {"begin": 500, "end": 600, "complete": 1},
@@ -292,9 +440,9 @@ def test_return_braking_is_independent_of_resume_authority(initial):
         r.controller.send_robot = send
         await r.poll(state="returning_home", cleaning=0, returning=1)
         pause = r.events.index(("robot", "app_pause"))
-        assert r.events.index(("door", "open"), pause) > pause
+        assert not any(event[0] == "door" for event in r.events[pause:])
         assert r.state == "paused"
-        assert r.open_contact == "on"
+        assert r.close_contact == "on"
         assert r.controller.phase == "blocked"
         assert ("robot", "app_resume") not in r.events
     asyncio.run(exercise())

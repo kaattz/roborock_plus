@@ -16,7 +16,7 @@ from homeassistant import loader
 from homeassistant.config_entries import ConfigEntries, ConfigEntry, SOURCE_USER
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType, section
-from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.data_entry_flow import FlowManagerIndexView
 from homeassistant.helpers.translation import async_get_translations
 import voluptuous as vol
 
@@ -94,7 +94,7 @@ def test_native_home_sections_have_real_expandable_serializer_and_collapse_state
                 if isinstance(validator, section)
             }
             assert set(sections) == {"monitoring", "map_display"}
-            serialized = cv.to_field_list(schema, custom_serializer=cv.custom_serializer)
+            serialized = FlowManagerIndexView(None)._prepare_result_json(page)["data_schema"]
             assert serialized[0]["name"] == "do_configure_garage"
             groups = {field["name"]: field for field in serialized if field["type"] == "expandable"}
             assert groups["monitoring"]["expanded"] is True

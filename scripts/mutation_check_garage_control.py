@@ -18,10 +18,20 @@ TESTS = [
     'test_garage_transit.py',
     'test_garage_after_exit.py', 'test_garage_after_exit_review.py',
     'test_garage_after_exit_runtime.py',
+    'test_garage_recovery.py',
 ]
 # Targets are exact on purpose: an outdated harness fails rather than silently
 # claiming coverage when the production decision no longer exists.
 MUTATIONS = [
+    ('garage_control.py', 'fault suppresses safety braking', "        if (self.binding.get('task_door_mode') == 'after_exit'\n                and self._is_returning() and self.passage_allowed is not True):", "        if self.reason:\n            return\n        if (self.binding.get('task_door_mode') == 'after_exit'\n                and self._is_returning() and self.passage_allowed is not True):"),
+    ('garage_control.py', 'old close releases a new safety pause owner', '        if self._pending_operation == operation:\n            self._pending = False', '        if True:\n            self._pending = False'),
+    ('garage_control.py', 'replacement task inherits close return authority', '            if self.session.session_id != session_id:\n                self.fault(\'session_recovery_required\')', '            pass'),
+    ('garage_control.py', 'late feedback erases an expired observation wait', '        elif self.clock() >= self._observation_deadline:\n            self.fault(\'observation_timeout\')', '        elif False:\n            pass'),
+    ('garage_control.py', 'gap recovery RPC ignores remaining deadline', '        timeout = asyncio.timeout(remaining)', '        timeout = asyncio.timeout(None)'),
+    ('garage_control.py', 'blind close continues through missing observations', '                        await self._recover_close_observation(operation, deadline)\n                        continue', '                        pass'),
+    ('garage_control.py', 'outside closed gap immediately latches', '                self._wait_outside_observation()', "                self.fault('position_untrusted')"),
+    ('garage_control.py', 'observation retries extend original deadline', "            if self.clock() >= deadline:\n                raise GarageControlError('observation_timeout')", "            deadline = self.clock() + self.binding['operation_timeout_seconds']"),
+    ('garage_control.py', 'closed clutch release overwrites an existing fault', '            and not self._closed\n            and not self._pause_session', '            and not self._closed and not self.reason\n            and not self._pause_session'),
     ('garage_control.py', 'omit after-exit workflow', '        if await self._update_after_exit():', '        if False:'),
     ('garage_control.py', 'status refresh forges a fresh map crossing', 'elif token is not None and token != self._position_sample:', 'elif token is not None:'),
     ('garage_control.py', 'close after uncertain position', "and getattr(self.robot, 'outside_danger_zone', None) is True", 'and True'),

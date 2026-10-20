@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
+
+_LOGGER = logging.getLogger(__name__)
 
 _PREPARING_STATES = frozenset({'starting','washing_the_mop','washing_the_mop_2','attaching_the_mop','detaching_the_mop'})
 _RESUMED_STATES = frozenset({'cleaning','spot_cleaning','zoned_cleaning','segment_cleaning',
@@ -16,6 +19,10 @@ _RETURN_STATES = frozenset({'docking', 'returning_home', 'going_to_wash_the_mop'
 
 class _ReturnPreempted(Exception):
     """A fresh return observation supersedes an in-task closing operation."""
+
+
+class _DepartureCloseAborted(Exception):
+    """Our close was reversed safely; a later real departure may close again."""
 
 
 class GarageControlError(ValueError):
@@ -61,6 +68,8 @@ class GarageController:
         self.state: Any = None
         self.robot: Any = None
         self._pending = False
+        self._pending_operation: int | None = None
+        self._operations: set[int] = set()
         self._closed = False
         self._start_deadline: float | None = None
         self._expect_resume = False
@@ -69,8 +78,12 @@ class GarageController:
         self._exit_due = False
         self._position_sample: Any = None
         self._closing_for_exit = False
+        self._closing_session_id: str | None = None
         self._pause_session: str | None = None
         self._user_hold = False
+        self._observation_deadline: float | None = None
+        self._observation_session_id: str | None = None
+        self._return_brake_attempted = False
 
     @property
     def passage_allowed(self) -> bool | None:
@@ -100,23 +113,40 @@ class GarageController:
 
     def fault(self, reason: str, *, manual: bool = False) -> None:
         """Invalidate waiting operations; recovery of a sensor is not a reset."""
+        previous_phase = self.phase
         self.operation_id += 1
         self._pause_session = None
+        self._observation_deadline = self._observation_session_id = None
         self.evidence.invalidate(reason)
         changed = self.reason != reason
         self.reason = reason
         self.phase = 'manual_hold' if manual else 'blocked'
         if changed:
+            robot = self.robot
+            utc, sampled = getattr(robot, 'utc', None), getattr(robot, 'sample_utc', None)
+            age = utc - sampled if isinstance(utc, (int, float)) and isinstance(sampled, (int, float)) else None
+            _LOGGER.warning(
+                'Garage control %s: reason=%s previous_phase=%s phase=%s operation=%s '
+                'state=%s fresh=%s trusted=%s outside=%s status_sample_age=%s '
+                'map_sample=%s session=%s task=%s',
+                'held for manual handling' if manual else 'blocked',
+                reason, previous_phase, self.phase, self.operation_id,
+                getattr(robot, 'state', None), getattr(robot, 'fresh', None),
+                getattr(robot, 'position_trusted', None), getattr(robot, 'outside_danger_zone', None),
+                age, getattr(robot, 'position_sample_id', None), self.session.session_id,
+                {key: self.session.to_dict().get(key) for key in
+                 ('active', 'started', 'task_kind', 'correlation_valid', 'cancel_requested')},
+            )
             self.notify(reason)
 
     def external_command(self, direction: str, *, door_moving: bool = False) -> None:
         """Yield to external movement; a settled closed-door stop grants no authority."""
         if direction == 'open' and self.phase in ('opening', 'return_opening'):
             return
-        if (direction == 'stop' and not door_moving and not self._pending
-            and not self._closed and not self.reason and not self._user_hold
+        if (direction == 'stop' and not door_moving and not self._pending and not self._operations
+            and not self._closed
             and not self._pause_session and not self._closing_for_exit
-            and self.phase in ('idle', 'outside_closed', 'waiting_close_permission')):
+            and self.phase in ('idle', 'outside_closed', 'waiting_close_permission', 'blocked', 'manual_hold')):
             self.state = self.evidence.observe(self.clock(), **self.door_observation())
             if self.state.closed_confirmed is True:
                 # Some covers use stop at rest to release their clutch. It
@@ -132,6 +162,9 @@ class GarageController:
                 self._pause_session = None
                 self._exit_due = False
                 self.phase = 'manual_hold'
+        if self.reason and self._pending:
+            self.operation_id += 1
+            self._pause_session = None
         if not self.reason and (self._pending or self.phase in (
             'awaiting_start', 'pausing_return', 'return_opening', 'resuming_return',
         )):
@@ -153,7 +186,7 @@ class GarageController:
 
     def reset(self) -> None:
         """Reconcile on explicit request, preserving any outstanding task."""
-        if self._pending:
+        if self._pending or self._operations:
             raise GarageControlError('operation_in_progress')
         self.refresh()
         if not self.robot.fresh or not self.door_observation().get('cover_available'):
@@ -168,6 +201,9 @@ class GarageController:
             if self.session.reason == 'session_recovery_required':
                 self.session.reconcile_active(self.robot)
         self.reason = None
+        self._observation_deadline = None
+        self._observation_session_id = None
+        self._return_brake_attempted = False
         # An active task without passage needs a new explicit request. Reset
         # must not restart its door operation or let background ticks relock it.
         self._user_hold = self.session.active and self.passage_allowed is not True
@@ -176,11 +212,20 @@ class GarageController:
 
     def _acquire(self) -> int:
         self._check()
-        if self._pending:
+        if self._pending or self._operations:
             raise GarageControlError('operation_in_progress')
         self._pending = True
         self.operation_id += 1
+        self._pending_operation = self.operation_id
+        self._operations.add(self.operation_id)
         return self.operation_id
+
+    def _release(self, operation: int) -> None:
+        """An obsolete operation must not release a newer safety pause."""
+        self._operations.discard(operation)
+        if self._pending_operation == operation:
+            self._pending = False
+            self._pending_operation = None
 
     def _preflight(self, direction: str) -> None:
         """Reject already invalid sources before sending a physical command."""
@@ -208,9 +253,18 @@ class GarageController:
                         await self.move_door('stop', operation)
                     raise GarageControlError('close_not_allowed')
                 if not (self._exit_can_close() if self._closing_for_exit else self.session.can_close):
-                    if self.supports_stop():
-                        await self.move_door('stop', operation)
-                    raise GarageControlError('task_end_unconfirmed')
+                    if self._closing_for_exit and not self._exit_contradicted():
+                        if self.state.closed_confirmed is True:
+                            # Accept a physical endpoint, never robot authority.
+                            self._observation_deadline = deadline
+                            self._observation_session_id = self.session.session_id
+                            return
+                        await self._recover_close_observation(operation, deadline)
+                        continue
+                    else:
+                        if self.supports_stop():
+                            await self.move_door('stop', operation)
+                        raise GarageControlError('task_end_unconfirmed')
             endpoint = self.state.open if direction == 'open' else self.state.close
             if endpoint.reason in ('endpoint_conflict', 'feedback_unavailable'):
                 raise GarageControlError(endpoint.reason)
@@ -233,6 +287,69 @@ class GarageController:
             if self.clock() >= deadline:
                 raise GarageControlError(f'{direction}_timeout')
             await self.sleep(min(0.25, deadline - self.clock()))
+
+    async def _recover_close_observation(self, operation: int, deadline: float) -> None:
+        """Stop our close before waiting for data; never extend its deadline."""
+        session_id = self.session.session_id
+        stopped = self.supports_stop()
+        self.evidence.invalidate('observation_wait')
+        _LOGGER.warning('Garage close interrupted for observation: operation=%s fresh=%s trusted=%s outside=%s',
+                        operation, self.robot.fresh, self.robot.position_trusted,
+                        getattr(self.robot, 'outside_danger_zone', None))
+        if stopped:
+            try:
+                await self._move_before_deadline('stop', operation, deadline)
+            except GarageControlError:
+                raise
+            except Exception:
+                self._check(operation)
+                _LOGGER.warning('Garage stop failed; reversing our close to open', exc_info=True)
+                stopped = False
+        self._check(operation)
+        if not stopped:
+            await self._move_before_deadline('open', operation, deadline)
+            self._check(operation)
+            self.evidence.note_command('open', self.clock(), operation)
+        while True:
+            self._check(operation)
+            self.refresh()
+            if self._is_returning():
+                raise _ReturnPreempted
+            if self.session.session_id != session_id or self._exit_contradicted():
+                raise GarageControlError('task_end_unconfirmed')
+            if not self.close_allowed():
+                raise GarageControlError('close_not_allowed')
+            endpoint = self.state.close if stopped else self.state.open
+            if endpoint.reason in ('feedback_unavailable', 'endpoint_conflict'):
+                raise GarageControlError(endpoint.reason)
+            if self.clock() >= deadline:
+                raise GarageControlError('observation_timeout')
+            if self._exit_can_close():
+                if stopped:
+                    self.evidence.invalidate('closing')
+                    await self._move_before_deadline('close', operation, deadline)
+                    self._check(operation)
+                    self.evidence.note_command('close', self.clock(), operation)
+                    return
+                if self.passage_allowed is True:
+                    self._exit_due = self._departure_armed = False
+                    raise _DepartureCloseAborted
+            await self.sleep(min(.25, deadline - self.clock()))
+
+    async def _move_before_deadline(self, direction: str, operation: int, deadline: float) -> None:
+        self._check(operation)
+        remaining = deadline - self.clock()
+        if remaining <= 0:
+            raise GarageControlError('observation_timeout')
+        timeout = asyncio.timeout(remaining)
+        try:
+            async with timeout:
+                await self.move_door(direction, operation)
+        except TimeoutError:
+            if timeout.expired():
+                raise GarageControlError('observation_timeout') from None
+            raise
+        self._check(operation)
 
     async def _open(self, operation: int) -> None:
         self.refresh()
@@ -300,7 +417,7 @@ class GarageController:
                 self.fault(getattr(err, 'reason', None) or 'command_failed')
             raise
         finally:
-            self._pending = False
+            self._release(operation)
 
     async def async_request_close(self) -> None:
         """The single protected close entry for final docking and family policies."""
@@ -330,10 +447,52 @@ class GarageController:
                 self.fault(getattr(err, 'reason', None) or 'command_failed')
             raise
         finally:
-            self._pending = False
+            self._release(operation)
 
     def _is_returning(self) -> bool:
         return bool(self.robot.fresh and self.robot.state in _RETURN_STATES and not self.robot.docked)
+
+    def _exit_contradicted(self) -> bool:
+        """Separate positive contradictions from unavailable observations."""
+        facts = self.session.to_dict()
+        if (not self.session.active or not self.session.started or self.session.task_kind != 'clean'
+                or (self._closing_session_id is not None and self.session.session_id != self._closing_session_id)
+                or facts.get('correlation_valid') is False
+                or facts.get('cancel_requested')):
+            return True
+        if self.robot.fresh and self.robot.docked:
+            return True
+        outside = getattr(self.robot, 'outside_danger_zone', None)
+        if self.robot.fresh and self.robot.position_trusted and outside is False:
+            return True
+        # A new state that is neither cleaning nor transport is a real change of
+        # intent; an unchanged cleaning state proves nothing either way.
+        return self.robot.fresh and self.robot.state not in _CLEANING_STATES
+
+    def _observation_missing(self) -> bool:
+        return (not self.robot.fresh or not self.robot.position_trusted
+                or getattr(self.robot, 'outside_danger_zone', None) is None)
+
+    def _wait_outside_observation(self) -> None:
+        """Wait without issuing commands; full revalidation ends this interval."""
+        if self._observation_deadline is None:
+            self._observation_deadline = self.clock() + self.binding['operation_timeout_seconds']
+            self._observation_session_id = self.session.session_id
+            _LOGGER.warning('Garage observation waiting: phase=%s fresh=%s trusted=%s outside=%s',
+                            self.phase, self.robot.fresh, self.robot.position_trusted,
+                            getattr(self.robot, 'outside_danger_zone', None))
+        if self.clock() >= self._observation_deadline:
+            self.fault('observation_timeout')
+
+    def _reconcile_observation_wait(self) -> None:
+        if self._observation_deadline is None:
+            return
+        if self.session.session_id != self._observation_session_id:
+            self.fault('session_recovery_required')
+        elif self.clock() >= self._observation_deadline:
+            self.fault('observation_timeout')
+        elif not self._observation_missing():
+            self._observation_deadline = self._observation_session_id = None
 
     def _exit_can_close(self) -> bool:
         return bool(self.session.active and self.session.started
@@ -391,6 +550,7 @@ class GarageController:
     async def _return_through_door(self) -> None:
         """Only our observed pause may be followed by an automatic resume."""
         operation = self._acquire()
+        self._return_brake_attempted = True
         try:
             if self.send_robot is None:
                 raise GarageControlError('unsupported_return_interlock')
@@ -414,15 +574,17 @@ class GarageController:
             await self.send_robot('app_pause')
             await self._wait_robot(operation, sample, paused=True, context=context)
             self._check(operation)
-            await self._open(operation)
-            # Opening can take a long time. Reconcile the task and held pause
-            # before sending the one command that continues the original intent.
-            self.refresh()
-            self._check(operation)
             if authority_error is not None:
                 raise GarageControlError(authority_error)
             if context is None:
                 raise GarageControlError('session_recovery_required')
+            self._check_pause_context(context)
+            if self._user_hold:
+                raise GarageControlError('operation_cancelled')
+            await self._open(operation)
+            # No authority captured before the pause can be adopted later.
+            self.refresh()
+            self._check(operation)
             self._check_pause_context(context)
             if not self.robot.fresh or self.robot.state != 'paused' or self.passage_allowed is not True:
                 raise GarageControlError('pause_not_observed')
@@ -431,6 +593,7 @@ class GarageController:
             await self.send_robot('app_resume')
             await self._wait_robot(operation, sample, paused=False, context=context)
             self.phase = 'returning'
+            self._return_brake_attempted = False
         except asyncio.CancelledError:
             self.fault('operation_cancelled')
             raise
@@ -438,14 +601,83 @@ class GarageController:
             if not self.reason:
                 self.fault(getattr(err, 'reason', None) or 'command_failed')
         finally:
-            self._pause_session = None
-            self._pending = False
+            if self._pending_operation == operation:
+                self._pause_session = None
+            self._release(operation)
+
+    async def _brake_return_only(self) -> None:
+        """A fault may deny movement authority, never physical return braking."""
+        if self._return_brake_attempted or self._pending or self._closed:
+            return
+        self._return_brake_attempted = True
+        self._pending = True
+        self.operation_id += 1
+        operation = self.operation_id
+        self._pending_operation = operation
+        self._operations.add(operation)
+        sample = getattr(self.robot, 'sample_id', None)
+        deadline = self.clock() + self.start_timeout
+        try:
+            if self.send_robot is None:
+                raise GarageControlError('unsupported_return_interlock')
+            await self.send_robot('app_pause')
+            while True:
+                if self._closed or operation != self.operation_id:
+                    raise GarageControlError('operation_cancelled')
+                self.refresh()
+                if (self.robot.fresh and self.robot.state == 'paused' and not self.robot.docked
+                        and getattr(self.robot, 'sample_id', None) != sample):
+                    if not self.reason and not self._user_hold:
+                        self.fault('session_recovery_required')
+                    return
+                if self.clock() >= deadline:
+                    raise GarageControlError('pause_not_observed')
+                await self.sleep(min(.25, deadline - self.clock()))
+        except asyncio.CancelledError:
+            if not self.reason:
+                self.fault('operation_cancelled')
+            raise
+        except Exception as err:
+            if not self.reason:
+                self.fault(getattr(err, 'reason', None) or 'command_failed')
+            else:
+                _LOGGER.warning('Garage safety pause failed; original fault retained: reason=%s pause_error=%s',
+                                self.reason, getattr(err, 'reason', None) or type(err).__name__)
+        finally:
+            self._release(operation)
+
+    async def _handle_return(self) -> None:
+        facts = self.session.to_dict()
+        if (self.reason or self._user_hold or not self.session.active or not self.session.started
+                or facts.get('cancel_requested') or facts.get('correlation_valid') is False):
+            await self._brake_return_only()
+        elif not self._return_brake_attempted:
+            await self._return_through_door()
+
+    async def async_brake_pending_return(self) -> None:
+        """Safety-only entry: never advance an ordinary task beside a door RPC."""
+        if self._closed or not self._pending or not self._closing_for_exit:
+            return
+        self.refresh()
+        if not self._is_returning() or self.passage_allowed is True:
+            return
+        # The old RPC may still finish. Revoke it without replacing an existing
+        # fault/manual hold, and let only the safety pause take ownership.
+        if not self.reason:
+            self.fault('operation_cancelled')
+        # Release ownership, not the old operation's lifetime. Its finally is
+        # the only place that retires it and permits a later explicit reset.
+        self._pending = False
+        self._pending_operation = None
+        self._closing_for_exit = False
+        await self._brake_return_only()
 
     async def _close_after_departure(self) -> None:
         """Close on a real crossing without adding a pause to HA departure."""
         operation = self._acquire()
         returning = False
         self._closing_for_exit = True
+        session_id = self._closing_session_id = self.session.session_id
         try:
             self.refresh()
             self._check(operation)
@@ -462,8 +694,15 @@ class GarageController:
             self.phase = 'outside_closed'
         except _ReturnPreempted:
             returning = True
+            if self.session.session_id != session_id:
+                self.fault('session_recovery_required')
             # Pause the robot first. Once confirmed, open_cover reverses our
             # unfinished close; an optional stop RPC must not delay braking.
+        except _DepartureCloseAborted:
+            self._exit_due = self._departure_armed = False
+            self._observation_deadline = None
+            self._observation_session_id = None
+            self.phase = 'task_open'
         except asyncio.CancelledError:
             self.fault('operation_cancelled')
             raise
@@ -472,9 +711,10 @@ class GarageController:
                 self.fault(getattr(err, 'reason', None) or 'command_failed')
         finally:
             self._closing_for_exit = False
-            self._pending = False
-        if returning and not self.reason:
-            await self._return_through_door()
+            self._closing_session_id = None
+            self._release(operation)
+        if returning or (self.reason and self._is_returning()):
+            await self._handle_return()
 
     async def _update_after_exit(self) -> bool:
         if self.binding.get('task_door_mode') != 'after_exit':
@@ -483,10 +723,15 @@ class GarageController:
             self.phase = 'manual_hold'
             return True
         if self.phase == 'outside_closed' and self.session.active:
-            if not self.robot.fresh:
-                self.fault('position_untrusted')
-            elif self.state.close.reason in ('feedback_unavailable', 'endpoint_conflict'):
+            if self.state.close.reason in ('feedback_unavailable', 'endpoint_conflict'):
                 self.fault(self.state.close.reason)
+            elif self._observation_missing():
+                self._wait_outside_observation()
+            else:
+                self._observation_deadline = None
+                self._observation_session_id = None
+                if getattr(self.robot, 'outside_danger_zone', None) is False and not self.robot.docked:
+                    self.fault('position_untrusted')
             return True
         if self._exit_due and self._exit_can_close() and self.close_allowed():
             await self._close_after_departure()
@@ -498,15 +743,17 @@ class GarageController:
         if self._closed:
             return
         self.refresh()
-        if self.reason:
-            return
+        self._reconcile_observation_wait()
         if self._pending:
+            await self.async_brake_pending_return()
             return
-        # A lineage failure must not prevent braking an active return toward
-        # a closed garage. Manual holds still revoke all automatic authority.
-        if (self.binding.get('task_door_mode') == 'after_exit' and not self._user_hold
-            and self.session.active and self._is_returning() and self.passage_allowed is not True):
-            await self._return_through_door()
+        if self.robot.fresh and self.robot.state not in _RETURN_STATES:
+            self._return_brake_attempted = False
+        if (self.binding.get('task_door_mode') == 'after_exit'
+                and self._is_returning() and self.passage_allowed is not True):
+            await self._handle_return()
+            return
+        if self.reason:
             return
         if self.session.to_dict().get('correlation_valid') is False:
             self.fault(self.session.reason or 'session_recovery_required')

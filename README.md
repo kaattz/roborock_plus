@@ -138,9 +138,11 @@ v0.7.6 中，`timed` 或 `position` + `estimated` 的反馈恢复后，新显式
 2. 核对所有会操作同一扇门的自动化，停用旧 `roborock_garage_door_statemachine` 及其
    `*_plus` 前身的主动门控。升级不会按名称自动关闭或删除任何家庭自动化。
 3. 逐项处理无人关门、洗衣机占用、自动解锁和手动按键：自动关门改走
-   `roborock_plus.request_garage_close`；释放离合须在可靠停稳后，旧解锁自动化可继续使用 `cover.stop_cover`。
+   `roborock_plus.request_garage_close`；需要开门通行（例如折叠门联动）改走
+   `roborock_plus.request_garage_open`；释放离合须在可靠停稳后，旧解锁自动化可继续使用 `cover.stop_cover`。
    可信全闭且没有门控等待时，这条停止不再新增人工保持；推窗器由此释放离合后可手动或电动开门。
-   行进中停止、其他外部移动仍按人工接管处理，已有人工保持不会自动解除。
+   行进中停止、任务进行中的外部移动仍按人工接管处理，已有人工保持不会自动解除；
+   空闲且门已静止时的外部开门/关门只记录、不锁存（v0.8.0）。
 4. 多机使用旧全局 guard 时，逐台确认保护关系。同门仍被另一台机器人依赖时，新绑定拒绝接管；
    可将另一台绑定到它自己的门，不能静默解除它的保护。同一机器人的旧 guard 可以转发到新控制器。
 5. 完成来源标定后明确勾选交接确认，再启用新绑定。单机器人也需要确认；不同时运行新旧主动状态机。
@@ -154,11 +156,12 @@ v0.7.6 中，`timed` 或 `position` + `estimated` 的反馈恢复后，新显式
 | --- | --- |
 | `close_permission_entity` | 可选 input_boolean / binary_sensor，只读；仅 `on` 允许关闭，其他状态拒绝。留空表示没有家庭附加限制 |
 | `roborock_plus.request_garage_close` | 以 vacuum 为目标请求关闭，重新检查任务、停靠、位置和许可等守卫，无 `force` 绕过 |
+| `roborock_plus.request_garage_open` | 以 vacuum 为目标请求**通行开门**：重查反馈与端点守卫后开门，等完整行程才报告可通行；已可通行时不发命令。关闭许可不参与判断（它只限制关门），无 `force` 绕过 |
 | `roborock_plus.reset_garage_control` | 重新观察并复核可恢复故障及人工保持，不发送设备命令、不清除活动任务；无通行许可的活动任务仍保持人工保持 |
 | `roborock_plus.start_garage_cleaning_stage` | 受保护发起一个明确清扫阶段并返回回执；下一段携带前段成功回执再次复核，由 HA 脚本串行编排 |
 | `garage_open_confirmed` / `garage_closed_confirmed` | 各方向的物理确认；仅估算或无法判断时为 unknown |
 | `garage_passage_allowed` / `garage_phase` / `garage_problem` | 当前通行许可、流程阶段和阻塞故障；阶段属性含会话、原因与来源质量 |
-| `roborock_plus_garage_issue` 事件 | 故障激活/解除事件，家庭自动化自行选择通知渠道 |
+| `roborock_plus_garage_issue` 事件 | 故障激活/解除事件，含 `reason`、`phase`、`previous_phase`、`session_id` 等字段，家庭自动化自行选择通知渠道 |
 
 清扫日程、房间选择、家庭占用和通知继续由自动化决定。家庭许可限制关闭，不能绕过安全守卫；
 许可恢复也不清除人工保持或故障。人工操作优先，控制器不会立即抢回门，下一次明确请求仍需完整检查。

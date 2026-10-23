@@ -24,6 +24,13 @@ request_garage_close:
     entity:
       integration: roborock_plus
       domain: vacuum
+request_garage_open:
+  name: Request garage opening
+  description: Requests garage opening for an explicit household passage and waits for the full travel before reporting the door as passable. No force bypass is available. The close permission is not consulted, because it only restricts closing.
+  target:
+    entity:
+      integration: roborock_plus
+      domain: vacuum
 reset_garage_control:
   name: Recheck garage control
   description: Rechecks garage control and clears recoverable faults or manual hold without moving the door or robot. Active tasks remain recorded.

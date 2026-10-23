@@ -1,0 +1,63 @@
+# 柜门控制被接管时推送告警
+#
+# 起因（2026-10-22 / 10-23 实测）：车库控制进入 manual_hold 或 blocked 时，
+# 后续每一条清扫命令都会被拒绝，但**没有任何通知**。用户是靠「扫地机不动」
+# 才发现的：
+#
+#   14:00:24  Garage control held for manual handling: reason=manual_override
+#   14:47:40  公区打扫第 1 次 → clean_area → manual_override 拒绝
+#   14:54 / 15:00 / 15:07 / 15:13  四次重试均被拒
+#   15:20:11  蓝图发出「30 分钟内未能启动清扫」—— 已经是 33 分钟之后
+#
+# 集成已经在每次进入 manual_hold / blocked 时 fire `roborock_plus_garage_issue`，
+# 解除时 fire active=false。这条自动化只把它变成一条能看见的告警。
+#
+# ── 为什么只报 active=true ───────────────────────────────────────────────
+#
+# active=false 只在 reset_garage_control 或内部复核后出现，而 reset 是**用户自己
+# 点的**。再推一条「已解除」只是噪音，与 automations/README.md 的「不刷告警」
+# 一致。所以解除静默。
+#
+# ── 为什么 manual_hold 和 blocked 都报 ──────────────────────────────────
+#
+# blocked 是「反馈失联 / 端点冲突 / 恢复快照」这类非人为故障，同样会让清扫命令
+# 被拒（feedback_unavailable、endpoint_conflict…）。只报人工接管会漏掉一半的
+# 卡死原因。
+#
+# ── 这条自动化绝对不做的事 ──────────────────────────────────────────────
+#
+#   · 不调用 reset_garage_control —— 自动解除会奖励「在任务中动门」，
+#     正是 2026-10-23 那批改动要避免的行为。解除必须由人明确决定。
+#   · 不调用任何 cover.* / vacuum.* / button.*
+#   · 不调用 automation.trigger
+#
+# 属于「只读可见性」自动化：它唯一的作用是让你知道出了什么事。
+#
+# id 不能改。它是 HA 的 unique_id，改了等于换一个自动化：历史断掉、
+# 实体注册表的身份丢失。
+id: '1791600000001'
+alias: 车库控制接管告警
+description: >-
+  车库控制进入 manual_hold 或 blocked 时推送一条告警，说明原因、当前阶段和
+  接管前阶段。这类故障会让后续清扫命令全部被拒，以前没有任何通知。
+
+  只报 active=true；解除（用户自己 reset）时不推送。不自动解除、不操作门或
+  机器人。
+triggers:
+- trigger: event
+  event_type: roborock_plus_garage_issue
+conditions: []
+actions:
+- if:
+  - condition: template
+    value_template: "{{ trigger.event.data.active is true }}"
+  then:
+  - action: script.alert_notify
+    data:
+      level: warning
+      title: 柜门控制已接管
+      # 单行写完：`>-` 会把换行折叠成空格，中文标点后多出一个空格。
+      message: "柜门控制已暂停自动流程：{{ trigger.event.data.reason }}\n\n阶段：{{ trigger.event.data.phase }}（此前 {{ trigger.event.data.previous_phase or '未知' }}）\n门：{{ trigger.event.data.cover_entity_id }}\n机器人：{{ trigger.event.data.vacuum_entity_id or '未知' }}\n\n这会阻止后续清扫命令，直到你显式解除（roborock_plus.reset_garage_control）。本通知不会自动解除，也不会操作门或机器人。"
+  else: []
+mode: queued
+max: 10

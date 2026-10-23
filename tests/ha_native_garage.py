@@ -196,13 +196,113 @@ def test_native_service_registration_and_forbidden_force_argument():
             hass = HomeAssistant(directory)
             services.async_setup_services(hass)
             registered = hass.services.async_services()["roborock_plus"]
-            for name in ("request_garage_close", "reset_garage_control"):
+            for name in ("request_garage_close", "request_garage_open", "reset_garage_control"):
                 assert hass.services.has_service("roborock_plus", name)
                 schema = registered[name].schema
                 schema({"entity_id": "vacuum.memory_robot"})
                 with pytest.raises(vol.Invalid):
                     schema({"entity_id": "vacuum.memory_robot", "force": True})
             await hass.async_block_till_done()
+
+    asyncio.run(exercise())
+
+
+def test_native_request_open_uses_the_integration_own_door_command():
+    """``request_garage_open`` must move the door under the runtime's context.
+
+    If the door command went out anonymously the very same event would be read
+    back as an outside takeover and latch ``manual_hold`` -- the loop this service
+    exists to break. This asserts the command arrives, is attributed to the
+    runtime, and leaves a trustworthy passage fact behind.
+    """
+    async def exercise():
+        runtime_module = importlib.import_module(f"{PACKAGE}.garage_runtime")
+        with TemporaryDirectory() as directory:
+            hass = HomeAssistant(directory)
+            moment = {"now": 0.0, "utc": 1000.0}
+            commands = []
+            entry = NS(entry_id="isolated-entry", options={
+                "garage_control_version": 1, "garage_bindings": {"memory-robot": binding()},
+            })
+            hass.config_entries = MemoryEntries(entry)
+            summary = NS(records=[1], clean_count=1,
+                         last_clean_record=NS(begin=500, end=600, complete=1))
+
+            async def refresh_summary():
+                return None
+
+            status = NS(state=NS(name="charging"), in_cleaning=0, in_returning=0)
+            coordinator = NS(
+                duid="memory-robot", duid_slug="memory_robot", config_entry=entry,
+                device_info={"identifiers": {("roborock_plus", "memory-robot")}},
+                last_update_success=True, update_interval=timedelta(seconds=1),
+                data=NS(status=status, clean_summary=summary),
+                properties_api=NS(clean_summary=NS(refresh=refresh_summary),
+                                  map_content=NS(map_data=NS(charger=NS(x=5, y=5)))),
+                resolve_vacuum_position=lambda: NS(trusted=True, x=5, y=5, from_dock=True),
+                async_add_listener=lambda _: (lambda: None), garage_setup_error=None,
+            )
+
+            def sample(advance=0):
+                moment["now"] += advance
+                moment["utc"] += advance
+                coordinator.garage_status_sample = {
+                    "sampled_at": datetime.fromtimestamp(moment["utc"], timezone.utc),
+                    "state": status.state.name, "in_cleaning": status.in_cleaning,
+                    "in_returning": status.in_returning,
+                }
+
+            sample()
+
+            @callback
+            def state_door(opened, context=None):
+                hass.states.async_set("cover.memory_garage", "open" if opened else "closed",
+                                      {"supported_features": 11,
+                                       "current_position": 100 if opened else 0}, context=context)
+                hass.states.async_set("binary_sensor.memory_open", "on" if opened else "off",
+                                      context=context)
+                hass.states.async_set("binary_sensor.memory_closed", "off" if opened else "on",
+                                      context=context)
+
+            state_door(False)
+
+            async def door_service(call):
+                commands.append(call.service)
+                if call.service == "open_cover":
+                    state_door(True, call.context)
+
+            for service in ("open_cover", "close_cover", "stop_cover"):
+                hass.services.async_register("cover", service, door_service)
+
+            runtime = runtime_module.GarageRuntime(
+                hass, coordinator, binding(), store=MemorySessionStore(),
+                zone_provider=lambda: NS(min_x=0, max_x=10, min_y=0, max_y=10),
+                clock=lambda: moment["now"], utc=lambda: moment["utc"],
+            )
+            coordinator.garage_runtime = runtime
+            await runtime.async_start()
+            sample(1)
+            await runtime.async_tick()
+            assert runtime.controller.reason is None
+            runtime.controller.phase = "idle"
+            runtime.controller.refresh()
+            try:
+                task = asyncio.create_task(runtime.async_request_open())
+                for _ in range(400):
+                    await asyncio.sleep(0.01)
+                    if task.done():
+                        break
+                    sample(1)
+                    await runtime.async_tick()
+                await task
+                await hass.async_block_till_done()
+                assert commands == ["open_cover"], commands
+                assert runtime.controller.reason is None, runtime.controller.reason
+                assert runtime.controller.passage_allowed is True
+                assert runtime.controller.phase == "idle"
+            finally:
+                runtime.shutdown()
+                await hass.async_block_till_done()
 
     asyncio.run(exercise())
 

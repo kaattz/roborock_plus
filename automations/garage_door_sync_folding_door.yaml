@@ -1,0 +1,78 @@
+# 车库门联动柜门
+#
+# 目的（用户确认 2026-10-23）：折叠门打开时，由**电机**把洗衣机柜门开到可通行位，
+# 让人能进出。不是「松开离合让人手拉」—— 那只是 2026-10-23 早先的一次误判。
+#
+# ── 为什么不再直接发 cover.open_cover ────────────────────────────────────
+#
+# 集成（garage_runtime._service_event + garage_control.external_command）用
+# `event.context.id in self._contexts` 区分自己/外部，而 `_contexts` 只记录运行时
+# 自己发起的调用。外部自动化拿不到这个身份，open/close/stop/set_position/toggle
+# 五个服务全在拦截名单。锁存 manual_hold 后**所有**清扫命令一律被拒：
+#
+#   2026-10-22 16:08:38.384  folding_door_contact_state off→on
+#   2026-10-22 16:08:38.389  本条自动化 → cover.open_cover
+#   2026-10-22 16:08:38.389  WARNING Garage control held for manual handling:
+#                            reason=manual_override previous_phase=idle phase=manual_hold
+#   2026-10-23 12:48:26      公区打扫 → vacuum.clean_area
+#                            → Garage control rejected the operation: manual_override
+#   2026-10-23 14:47:40      同样再卡 33 分钟（5 次重试后 15:20 才告警）
+#
+# 而且即便绕过拦截，直接 open_cover 也不会被承认「可通行」：`open_source: timed`
+# 且没有本控制器的命令 → door_evidence 返回 command_required，下次清扫仍要重新
+# 开门并再等 45 秒。门的电机被无谓驱动两次。
+#
+# ── 现在：roborock_plus.request_garage_open ─────────────────────────────
+#
+# 集成侧新增的受控开门入口（v0.8.0），语义对称于 request_garage_close：
+#
+#   · 重查全部守卫（反馈可用、端点无冲突、无恢复快照、无既有故障/人工保持）
+#   · 已经可通行时**幂等短路**，不发任何设备命令
+#   · 否则发开门命令，等完整行程+余量（本门 35+10=45 秒）
+#   · 记录命令，使 `garage_passage_allowed` 真正变 true；下次清扫不必重复开门
+#   · 关闭许可不参与判断（它只限制关门）
+#
+# 所以这条自动化只做一件事：**请求集成开门**。门怎么开、开没开、开没开到位，
+# 由集成负责，不在自动化里重实现。也不在这里重试 —— 重试属于日程蓝图的语义
+# （retry_window），这里是「人到门口就该开」的一次性请求。
+#
+# ── 失败时会发生什么 ────────────────────────────────────────────────────
+#
+# 服务失败会抛 ServiceValidationError，自动化标记为 error（HA 的轨迹里可见）。
+# 用户侧的告警不靠这里，而靠 `automations/roborock_garage_issue_notify.yaml`
+# 消费集成的 `roborock_plus_garage_issue` 事件 —— 单一真相源，不重复。
+#
+# id 不能改。它是 HA 的 unique_id，改了等于换一个自动化：历史断掉、
+# 实体注册表的身份丢失。
+id: '1746705574425'
+alias: 车库门联动柜门
+description: >-
+  折叠门打开时，请求集成把洗衣机柜门开到可通行位（门是手自一体，但这条走电机）。
+
+  原先直接发 cover.open_cover，本意只是"可通行"；但集成把任何非自身发起的外部
+  门命令判为人工接管，锁存 manual_hold 后所有清扫命令一律被拒
+  （2026-10-22 16:08 与 2026-10-23 14:00 两次，最长卡了 33 分钟）。
+
+  改用 roborock_plus.request_garage_open：走同一套守卫、等完整行程、
+  让 passage_allowed 真正生效。已经可通行时不发命令。
+triggers:
+- trigger: state
+  entity_id: binary_sensor.folding_door_contact_state
+  # from/to 必须加引号：YAML 1.1 里裸 off/on 会被解析成布尔值，
+  # 那样触发器永远匹配不上 'off'/'on' 这两个字符串状态。
+  from: 'off'
+  to: 'on'
+conditions: []
+actions:
+  # 已经可通行就什么都不做：请求的语义是「让我通过」，不是「让电机转」。
+  # 这一步也避免每次折叠门开合都白驱动一次门。
+- if:
+  - condition: state
+    entity_id: binary_sensor.ke_ting_sao_di_ji_garage_passage_allowed
+    state: 'on'
+  then: []
+  else:
+  - action: roborock_plus.request_garage_open
+    target:
+      entity_id: vacuum.g20s_ultra
+mode: single

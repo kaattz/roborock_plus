@@ -293,6 +293,19 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
                 translation_placeholders={'reason': err.reason},
             ) from err
 
+    async def async_request_garage_open(self) -> None:
+        """Request passage through the same robot and door evidence gates."""
+        runtime = getattr(self.coordinator, 'garage_runtime', None)
+        try:
+            if runtime is None:
+                raise GarageControlError(getattr(self.coordinator, 'garage_setup_error', None) or 'garage_not_configured')
+            await runtime.async_request_open()
+        except (GarageControlError, GarageTaskError) as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key='garage_control_error',
+                translation_placeholders={'reason': err.reason},
+            ) from err
+
     async def async_reset_garage_control(self) -> None:
         """Reconcile controller facts without issuing a hardware action."""
         runtime = getattr(self.coordinator, 'garage_runtime', None)

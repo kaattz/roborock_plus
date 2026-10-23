@@ -202,11 +202,38 @@ def test_runtime_classifies_closed_stop_using_live_feedback():
     assert boundaries.events == []
 
 
-@pytest.mark.parametrize("service", ["toggle", "set_cover_position", "open_cover", "close_cover"])
+@pytest.mark.parametrize("service", ["toggle", "set_cover_position"])
 def test_other_external_commands_never_borrow_the_closed_stop_exemption(service):
+    """Position/toggle move in a direction that depends on where the door is, so
+    they qualify for neither the stop exemption nor the 2026-10-23 no-conflict one."""
     _, runtime = closed_runtime()
     runtime._service_event(service_event(service))
     assert runtime.controller.reason == "manual_override"
+
+
+@pytest.mark.parametrize("service", ["open_cover", "close_cover"])
+def test_an_unconflicted_open_or_close_is_observed_without_a_hold(service):
+    """2026-10-23: an idle controller on a settled door has nothing to collide with.
+
+    These two parameters used to assert a hold here. That expectation WAS the
+    defect: it stranded two real clean runs (tests/test_garage_external_open.py
+    has the traces), so it moves to "no hold" for this non-conflicting setup.
+    The conflicting counterpart is the test right below and must stay strict.
+    """
+    _, runtime = closed_runtime()
+    runtime._service_event(service_event(service))
+    assert runtime.controller.reason is None
+    assert runtime.controller.phase == "idle"
+
+
+@pytest.mark.parametrize("service", ["open_cover", "close_cover"])
+def test_open_or_close_during_a_task_still_holds(service):
+    """The safety property the old parameters really existed for."""
+    _, runtime = closed_runtime()
+    runtime.controller.phase = "task_open"
+    runtime._service_event(service_event(service))
+    assert runtime.controller.reason == "manual_override"
+    assert runtime.controller.phase == "manual_hold"
 
 
 @pytest.mark.parametrize("state", ["opening", "closing"])

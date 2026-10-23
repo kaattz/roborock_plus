@@ -15,6 +15,16 @@ _RESUMED_STATES = frozenset({'cleaning','spot_cleaning','zoned_cleaning','segmen
                             'going_to_target','docking','returning_home','going_to_wash_the_mop'})
 _CLEANING_STATES = frozenset({'cleaning', 'spot_cleaning', 'zoned_cleaning', 'segment_cleaning'})
 _RETURN_STATES = frozenset({'docking', 'returning_home', 'going_to_wash_the_mop'})
+# Phases with no workflow of our own in flight. An external door command here has
+# nothing to collide with; anywhere else it might be about to fight a task or a
+# door already travelling.
+_NO_CONFLICT_PHASES = frozenset({'idle', 'outside_closed', 'waiting_close_permission'})
+# The same rejections _preflight() refuses to move on. "No conflict" is only
+# meaningful when the evidence itself is trustworthy.
+_BLOCKING_ENDPOINT_REASONS = frozenset({
+    'endpoint_conflict', 'feedback_unavailable', 'restored_snapshot',
+    'invalid_clock', 'invalid_configuration',
+})
 
 
 class _ReturnPreempted(Exception):
@@ -64,6 +74,7 @@ class GarageController:
         self.send_robot = send_robot
         self.phase = 'recovering'
         self.reason: str | None = None
+        self.previous_phase: str | None = None
         self.operation_id = 0
         self.state: Any = None
         self.robot: Any = None
@@ -114,6 +125,7 @@ class GarageController:
     def fault(self, reason: str, *, manual: bool = False) -> None:
         """Invalidate waiting operations; recovery of a sensor is not a reset."""
         previous_phase = self.phase
+        self.previous_phase = previous_phase
         self.operation_id += 1
         self._pause_session = None
         self._observation_deadline = self._observation_session_id = None
@@ -152,7 +164,55 @@ class GarageController:
                 # Some covers use stop at rest to release their clutch. It
                 # neither cancels a wait nor authorizes future robot movement.
                 return
+        if self._no_conflict_for_external(direction, door_moving=door_moving):
+            # Nothing is running that this command could fight. Record it and let
+            # it happen: the point of holding is to avoid stealing the door from a
+            # person, not to punish a later schedule for an earlier manual move.
+            _LOGGER.info(
+                'Garage control observed external %s with no conflict: phase=%s state=%s '
+                'fresh=%s trusted=%s outside=%s session=%s',
+                direction, self.phase, getattr(self.robot, 'state', None),
+                getattr(self.robot, 'fresh', None), getattr(self.robot, 'position_trusted', None),
+                getattr(self.robot, 'outside_danger_zone', None), self.session.session_id,
+            )
+            return
         self.fault('manual_override', manual=True)
+
+    def _no_conflict_for_external(self, direction: str, *, door_moving: bool) -> bool:
+        """Is this external command purely an observation, or does it collide?
+
+        The judgement used to be "did we issue it". That is the wrong question:
+        an external open at an idle controller on a settled door has nothing to
+        collide with, while the same open during a task or a moving door can hurt
+        someone. Size the collision, not the caller.
+
+        Stops are deliberately excluded. Releasing the clutch only makes sense at
+        a trusted closed endpoint (where the door cannot fall), and that case has
+        its own, stricter exemption above. Granting stops this wider one would
+        release the motor of a heavy door whose position we cannot vouch for.
+        """
+        if direction not in ('open', 'close'):
+            # 'stop' keeps its endpoint-checked exemption; 'move' (set_position /
+            # toggle) moves in a direction that depends on where the door already
+            # is, so there is no "no conflict" form of it and it never qualifies
+            # (2026-10-15 spec: 不得借用停止豁免).
+            return False
+        if self._closed or self.reason:
+            return False
+        if self._pending or self._operations:
+            return False
+        if self._pause_session or self._closing_for_exit:
+            return False
+        if self.phase not in _NO_CONFLICT_PHASES:
+            return False
+        if door_moving:
+            return False
+        state = self.state
+        if state is None or not state.cover_available:
+            return False
+        reasons = {state.open.reason, state.close.reason}
+        return not (reasons & _BLOCKING_ENDPOINT_REASONS)
+
 
     def cancel_pending_for_user(self) -> None:
         """Revoke queued movement before forwarding a user's stop or pause."""
@@ -437,6 +497,52 @@ class GarageController:
                 self._check(operation)
                 self.evidence.note_command('close', self.clock(), operation)
                 await self._wait('close', operation)
+            self.phase = 'idle'
+            await self.persist()
+        except asyncio.CancelledError:
+            self.fault('operation_cancelled')
+            raise
+        except Exception as err:
+            if not self.reason:
+                self.fault(getattr(err, 'reason', None) or 'command_failed')
+            raise
+        finally:
+            self._release(operation)
+
+    async def async_request_open(self) -> None:
+        """The single protected open entry for explicit household passage requests.
+
+        Symmetric to ``async_request_close`` with two deliberate differences:
+
+        * The family permission is NOT consulted. That permission only restricts
+          closing (REQ-9); a household that blocked automatic closing has not
+          asked to be locked in.
+        * ``session.can_close`` is NOT consulted. It demands a settled dock and a
+          known-idle task, which is exactly what a "somebody wants to walk in"
+          request contradicts. Concurrency is handled by ``_acquire`` and by the
+          phase rejections instead.
+
+        An already-passable door is a no-op: the point is to have a door you can
+        walk through, not to make the motor move.
+
+        No separate ``cover_available`` guard here: ``refresh()`` folds that fact
+        into the endpoint evidence, so ``_preflight`` already refuses with the same
+        ``feedback_unavailable`` reason. Duplicating it looked defensive but was
+        unreachable -- a guard no test can reach is a guard that will rot.
+        """
+        self.refresh()
+        self._check()
+        self._preflight('open')
+        if self.passage_allowed is True:
+            return
+        operation = self._acquire()
+        try:
+            self.phase = 'return_opening' if self._pause_session else 'opening'
+            self.evidence.invalidate('opening')
+            await self.move_door('open', operation)
+            self._check(operation)
+            self.evidence.note_command('open', self.clock(), operation)
+            await self._wait('open', operation)
             self.phase = 'idle'
             await self.persist()
         except asyncio.CancelledError:

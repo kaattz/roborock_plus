@@ -288,6 +288,14 @@ App 上两次采样之间完整发生的暂停再恢复不可保证发现，不�
 idle/outside_closed/waiting_close_permission 且无 pending、既有故障/人工保持或卸载时，
 视为不干扰后续电动操作的释放离合，不新增人工保持、不发送设备命令、不增加通行许可。
 只按实时事实分类，不按自动化名称或调用者白名单；toggle/set_cover_position 不得借用停止豁免。
+2026-10-23 修正（v0.8.0，详见 [本批 spec](2026-10-23-spec-garage-external-open.md) S11.1）：
+外部 open/close 在「无冲突」时也只记录不锁存 —— 控制器 phase 属于
+idle/outside_closed/waiting_close_permission、无活动任务、无 pending、无在途 operation、
+无 pause/closing 流程、门未报告运动、两端点证据无反馈失联/端点冲突/恢复快照时。
+其余一切情形保持原中止/人工保持语义。该豁免**不授予通行**：不产生本控制器的命令，
+`timed` 来源下 passage_allowed 仍为 unknown，下一次清扫仍须完整开门一次。
+同步新增 `roborock_plus.request_garage_open` 作为受控开门入口（不查关闭许可、
+不查 session.can_close），并给 garage_issue 事件补 `previous_phase`。
 开关门、启动/返航等待、未知/估算全闭或来源失效仍保留原中止/人工保持语义，既有保持不自动解除。
 旧关门后解锁自动化保持原触发和 stop_cover，不新增服务或配置参数。
 本屋推窗器关门后必须收到停止命令释放离合，随后才能手动和电动开门；上述判断只影响

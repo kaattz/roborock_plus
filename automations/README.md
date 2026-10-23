@@ -21,7 +21,7 @@
 当前真实 V1 只开放任务期间不主动关门的 `hold_open`，`after_exit` 拒绝启用；
 App、厂商定时和机器人实体按键的动作不经过 HA，不能依靠此流程事前保护。
 
-## 四个自动化
+## 六个自动化
 
 | 文件 | HA unique_id | entity_id |
 | --- | --- | --- |
@@ -29,6 +29,21 @@ App、厂商定时和机器人实体按键的动作不经过 HA，不能依靠�
 | `roborock_stuck_or_error_stop.yaml` | `1791390713215` | `automation.roborock_stuck_or_error_stop` |
 | `roborock_clean_command_not_started.yaml` | `1791372324572` | `automation.roborock_clean_command_not_started` |
 | `vacuum_garage_door_auto_unlock.yaml` | `1788771256556` | `automation.vacuum_garage_door_auto_unlock` |
+| `garage_door_sync_folding_door.yaml` | `1746705574425` | `automation.garage_door_sync_folding_door` |
+| `roborock_garage_issue_notify.yaml` | `1791600000001` | `automation.roborock_garage_issue_notify` |
+
+**`garage_door_sync_folding_door.yaml` 不是新文件，是从 HA 回写的现有自动化。**
+折叠门打开时，它请集成把车库门开到可通行位。曾经直接发 `cover.open_cover`，
+但集成把任何非自身发起的外部门命令都判为人工接管并锁存 `manual_hold`，之后
+所有清扫命令一律被拒 —— 2026-10-22 16:08 和 2026-10-23 14:00 两次，最长卡了
+33 分钟。现在改调 `roborock_plus.request_garage_open`（v0.8.0 新增）：走同一套
+守卫、等完整行程、让 `garage_passage_allowed` 真正生效。细节见文件头注释。
+
+**`roborock_garage_issue_notify.yaml` 是只读告警**，不要再给它加动作。
+它订阅集成的 `roborock_plus_garage_issue` 事件，`active=true` 时推一条 warning
+（原因、阶段、接管前阶段、门、机器人），`active=false` 静默。
+**它不调用 `reset_garage_control`，也不碰任何 `cover.*` / `vacuum.*` / `button.*`。**
+自动解除会奖励「在任务中动门」，正是这套改动要避免的行为；解除必须由人明确决定。
 
 **这个目录是给人看的版本管理,不是自动同步源。**
 

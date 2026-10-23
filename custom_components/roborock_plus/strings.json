@@ -1554,6 +1554,10 @@
       "name": "Request guarded garage closing",
       "description": "Request closing after rechecking the task, stable dock, trusted position, household permission and manual hold. There is no force bypass."
     },
+    "request_garage_open": {
+      "name": "Request guarded garage opening",
+      "description": "Request opening for an explicit household passage and wait for the full travel before reporting the door as passable. There is no force bypass. The close permission is not consulted because it only restricts closing."
+    },
     "reset_garage_control": {
       "name": "Recheck garage control",
       "description": "Reobserve and clear recoverable faults or manual hold without moving the door or robot or erasing an active task. The next explicit request still passes all guards."

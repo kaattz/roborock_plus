@@ -405,6 +405,12 @@ class GarageRuntime:
         await self.controller.async_request_close()
         self.publish()
 
+    async def async_request_open(self) -> None:
+        if self._first_install:
+            raise GarageControlError('session_recovery_required')
+        await self.controller.async_request_open()
+        self.publish()
+
     def reset(self) -> None:
         self._stage.interrupt('control_reset')
         if self._first_install:
@@ -432,6 +438,10 @@ class GarageRuntime:
                 'vacuum_entity_id':getattr(self.coordinator,'garage_vacuum_entity_id',None),
                 'cover_entity_id':self.binding['cover_entity_id'],'session_id':issue[0],
                 'phase':self.controller.phase,'reason':issue[1],'severity':'error','active':active,
+                # Which phase the controller was in when it lost control. Lets a
+                # consumer tell "held while a task was running" from "held while
+                # the house was quiet", which are very different stories.
+                'previous_phase':getattr(self.controller,'previous_phase',None) if active else None,
             })
         self.publish()
 

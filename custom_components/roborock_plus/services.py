@@ -13,6 +13,7 @@ SET_VACUUM_GOTO_POSITION_SERVICE_NAME = "set_vacuum_goto_position"
 GET_VACUUM_CURRENT_POSITION_SERVICE_NAME = "get_vacuum_current_position"
 RESUME_TASK_SERVICE_NAME = "resume_task"
 REQUEST_GARAGE_CLOSE_SERVICE_NAME = "request_garage_close"
+REQUEST_GARAGE_OPEN_SERVICE_NAME = "request_garage_open"
 RESET_GARAGE_CONTROL_SERVICE_NAME = "reset_garage_control"
 START_GARAGE_CLEANING_STAGE_SERVICE_NAME = "start_garage_cleaning_stage"
 GET_DOCK_POSITION_SERVICE_NAME = "get_dock_position"
@@ -67,6 +68,16 @@ def async_setup_services(hass: HomeAssistant) -> None:
         entity_domain=VACUUM_DOMAIN,
         schema=None,
         func="async_request_garage_close",
+        supports_response=SupportsResponse.NONE,
+    )
+
+    service.async_register_platform_entity_service(
+        hass,
+        DOMAIN,
+        REQUEST_GARAGE_OPEN_SERVICE_NAME,
+        entity_domain=VACUUM_DOMAIN,
+        schema=None,
+        func="async_request_garage_open",
         supports_response=SupportsResponse.NONE,
     )
 

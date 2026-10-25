@@ -70,10 +70,6 @@ from .const import (
     REGION_CUSTOM,
     REGION_OPTIONS,
 )
-from .garage_guard import (
-    CONF_GARAGE_DOOR_ENTITY_ID,
-    CONF_GARAGE_GUARD_ENABLED,
-)
 from .garage_config import (
     CONF_GARAGE_BINDINGS,
     CONF_GARAGE_CONTROL_VERSION,
@@ -427,21 +423,11 @@ class RoborockOptionsFlowHandler(OptionsFlow):
             self.options[CONF_V1_STUCK_DETECTION_ENABLED] = bool(
                 user_input.pop(CONF_V1_STUCK_DETECTION_ENABLED, self.options.get(CONF_V1_STUCK_DETECTION_ENABLED, True))
             )
-            self.options[CONF_GARAGE_GUARD_ENABLED] = bool(
-                user_input.pop(CONF_GARAGE_GUARD_ENABLED, self.options.get(CONF_GARAGE_GUARD_ENABLED, False))
-            )
-            self.options[CONF_GARAGE_DOOR_ENTITY_ID] = user_input.pop(
-                CONF_GARAGE_DOOR_ENTITY_ID, self.options.get(CONF_GARAGE_DOOR_ENTITY_ID, "")
-            )
             self.options[CONF_SHOW_BACKGROUND] = user_input.pop(CONF_SHOW_BACKGROUND)
             self.options[CONF_SHOW_ROOMS] = user_input.pop(CONF_SHOW_ROOMS)
             self.options[CONF_SHOW_WALLS] = user_input.pop(CONF_SHOW_WALLS)
             self.options.setdefault(DRAWABLES, {}).update(user_input)
-            if not errors and self.options[CONF_GARAGE_GUARD_ENABLED] and (
-                not self.options[CONF_GARAGE_DOOR_ENTITY_ID]
-            ):
-                errors["base"] = "garage_guard_missing_config"
-            elif not errors:
+            if not errors:
                 try:
                     validate_legacy_guard_ownership(
                         self.options, entry_id=self.config_entry.entry_id,

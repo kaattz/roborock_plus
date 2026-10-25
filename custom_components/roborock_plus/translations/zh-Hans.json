@@ -659,7 +659,8 @@
               "manual_hold": "人工接管保持",
               "pausing_return": "正在暂停返航并等待确认",
               "return_opening": "返航已暂停，正在开门",
-              "resuming_return": "门已全开，恢复同一返航"
+              "resuming_return": "门已全开，恢复同一返航",
+              "controlled_exit": "受控出库中"
             }
           },
           "reason": {

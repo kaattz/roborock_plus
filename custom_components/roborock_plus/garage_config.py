@@ -19,8 +19,35 @@ NUMERIC_RANGES = {
     "position_settle_seconds": (0, 60),
     "operation_timeout_seconds": (1, 1800),
     "dock_settle_seconds": (1, 300),
+    "controlled_exit_x": (0, 65535),
+    "controlled_exit_y": (0, 65535),
+    "controlled_exit_timeout_seconds": (10, 300),
 }
 EVIDENCE_SOURCES = ("contact", "position", "timed")
+
+# Controlled exit: drive the robot straight out of the cabinet before a clean
+# command, close the door at the waypoint, then start cleaning.
+#
+# The default waypoint is this household's measured geometry: the robot parks at
+# (25696, 28439) and the danger zone's lower edge is y=27123, so y=26500 is
+# 747mm past that edge -- enough to rotate, not so far that the trip looks like a
+# detour. It is only a form default; enabling the feature requires the operator
+# to state all three numbers explicitly, because default-x-with-custom-y is a
+# combination nobody has verified.
+DEFAULT_CONTROLLED_EXIT_X = 25696
+DEFAULT_CONTROLLED_EXIT_Y = 26500
+DEFAULT_CONTROLLED_EXIT_TIMEOUT = 120
+
+# How close the reported position must be to the waypoint to count as arrived.
+# Robot docking precision is not zero; demanding the exact point would time out
+# forever. 400mm is smaller than the body, so the robot really is "there".
+CONTROLLED_EXIT_TOLERANCE_MM = 400
+
+CONTROLLED_EXIT_FIELDS = (
+    "controlled_exit_x",
+    "controlled_exit_y",
+    "controlled_exit_timeout_seconds",
+)
 
 
 def required_timing_fields(binding: Mapping[str, Any]) -> tuple[str, ...]:
@@ -110,7 +137,7 @@ def _entity(value: Any, domains: tuple[str, ...], field: str) -> None:
 
 def _validate_supplied_fields(binding: Mapping[str, Any]) -> None:
     """Validate supplied values independently of whether a draft is complete."""
-    for key in ("enabled", "allow_estimated", "handover_confirmed"):
+    for key in ("enabled", "allow_estimated", "handover_confirmed", "controlled_exit_enabled"):
         if key in binding and not isinstance(binding[key], bool):
             raise GarageConfigError("invalid_boolean_value", key)
     for key, (minimum, maximum) in {**NUMERIC_RANGES, "open_position": (0, 100), "close_position": (0, 100)}.items():
@@ -196,6 +223,13 @@ def validate_binding(binding: Mapping[str, Any], *, supported: bool = True) -> d
         _entity(permission, ("input_boolean", "binary_sensor"), "close_permission_entity")
     if not result.get("handover_confirmed", False):
         raise GarageConfigError("handover_required", "handover_confirmed")
+    if result.get("controlled_exit_enabled", False):
+        # Enabling requires all three numbers stated by the operator. A default
+        # x paired with a custom y is a geometry nobody measured.
+        for key in CONTROLLED_EXIT_FIELDS:
+            if key not in result:
+                raise GarageConfigError("missing_controlled_exit_target", key)
+            _number(result, key, *NUMERIC_RANGES[key])
     return result
 
 
@@ -223,35 +257,24 @@ def validate_binding_ownership(
     entry_id: str,
     entries: Iterable[tuple[str, Mapping[str, Any], Iterable[str]]],
 ) -> None:
-    """Reject another owner or an unresolved robot using the old global guard.
+    """Reject a cover already claimed by an enabled binding in another entry.
 
-    ``entries`` contains (entry_id, options, V1 duids). An unloaded entry with a
-    matching old guard and no known duids is an unresolved conflict as well.
-    The runtime must repeat this check; the UI is not an ownership registry.
+    The flat global guard used to be a second owner to check against. It is gone,
+    so ownership is now decided purely between native bindings.
     """
     if binding.get("enabled") is not True:
         return
     cover = binding.get("cover_entity_id")
-    for other_entry_id, options, v1_duids in entries:
+    for other_entry_id, options, _v1_duids in entries:
         others = options.get(CONF_GARAGE_BINDINGS, {})
         if not isinstance(others, Mapping):
             raise GarageConfigError("invalid_binding")
         for other_duid, other in others.items():
             if other_entry_id == entry_id and other_duid == duid:
                 continue
-            if isinstance(other, Mapping) and other.get("enabled") is True and other.get("cover_entity_id") == cover:
+            if (isinstance(other, Mapping) and other.get("enabled") is True
+                    and other.get("cover_entity_id") == cover):
                 raise GarageConfigError("duplicate_binding", "cover_entity_id")
-        if options.get("garage_guard_enabled") is not True or options.get("garage_door_entity_id") != cover:
-            continue
-        known_duids = tuple(v1_duids)
-        if not known_duids:
-            raise GarageConfigError("legacy_guard_conflict", "cover_entity_id")
-        for other_duid in known_duids:
-            if other_entry_id == entry_id and other_duid == duid:
-                continue
-            other = others.get(other_duid)
-            if not isinstance(other, Mapping) or other.get("enabled") is not True:
-                raise GarageConfigError("legacy_guard_conflict", "cover_entity_id")
 
 
 def validate_legacy_guard_ownership(
@@ -260,33 +283,9 @@ def validate_legacy_guard_ownership(
     entry_id: str,
     entries: Iterable[tuple[str, Mapping[str, Any], Iterable[str]]],
 ) -> None:
-    """Prevent an old-guard edit from taking a cover already managed natively.
+    """Retired: the flat guard this protected no longer exists.
 
-    Unmigrated multi-robot global guards remain compatible when the cover has
-    no native owner. Robots with enabled native bindings forward directly, so
-    they are not legacy users of a leftover global option.
+    Kept as a no-op so callers written against the old API keep importing, and so
+    the removal is visible here rather than as a silent disappearance. Ownership
+    between native bindings is enforced by ``validate_binding_ownership``.
     """
-    cover = options.get("garage_door_entity_id")
-    if options.get("garage_guard_enabled") is not True or not cover:
-        return
-    entries = tuple(entries)
-    own = options.get(CONF_GARAGE_BINDINGS, {})
-    if not isinstance(own, Mapping):
-        raise GarageConfigError("invalid_binding")
-    duids = next((tuple(duids) for other_entry_id, _, duids in entries if other_entry_id == entry_id), ())
-    if duids and all(
-        isinstance(own.get(duid), Mapping) and own[duid].get("enabled") is True
-        for duid in duids
-    ):
-        return
-    for _, other_options, _ in entries:
-        others = other_options.get(CONF_GARAGE_BINDINGS, {})
-        if not isinstance(others, Mapping):
-            raise GarageConfigError("invalid_binding")
-        if any(
-            isinstance(binding, Mapping)
-            and binding.get("enabled") is True
-            and binding.get("cover_entity_id") == cover
-            for binding in others.values()
-        ):
-            raise GarageConfigError("legacy_guard_conflict", "cover_entity_id")

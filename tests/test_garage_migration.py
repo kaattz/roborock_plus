@@ -81,18 +81,24 @@ def test_explicitly_enabled_binding_defaults_to_hold_open_and_single_robot_can_f
     runtime.check_legacy_ownership(hass, options, "robot-a")
 
 
-def test_other_legacy_robot_is_rejected_by_configuration_and_runtime_ownership(modules):
+def test_the_retired_legacy_pair_carries_no_authority_any_more(modules):
+    """A leftover flat-guard pair must not decide ownership or block anything.
+
+    It used to act as a second owner. That guard is removed, so the same options
+    now pass both the binding-ownership check and the (inert) legacy helper: the
+    native bindings are the only authority left.
+    """
     config, runtime = modules
     options = {
         "garage_control_version": 1, "garage_bindings": {"robot-a": binding()},
         "garage_guard_enabled": True, "garage_door_entity_id": "cover.garage",
     }
-    with pytest.raises(config.GarageConfigError, match="legacy_guard_conflict"):
-        config.validate_binding_ownership(binding(), duid="robot-a", entry_id="entry", entries=[("entry", options, ("robot-a", "robot-b"))])
+    config.validate_binding_ownership(
+        binding(), duid="robot-a", entry_id="entry",
+        entries=[("entry", options, ("robot-a", "robot-b"))])
     owner = NS(coordinator=coordinator(options))
     hass = NS(data={runtime.REGISTRY_KEY: {"cover.garage": owner}})
-    with pytest.raises(runtime.GarageControlError, match="duplicate_binding"):
-        runtime.check_legacy_ownership(hass, options, "robot-b")
+    runtime.check_legacy_ownership(hass, options, "robot-b")
 
 
 def test_different_native_doors_can_replace_the_old_global_guard_per_robot(modules):

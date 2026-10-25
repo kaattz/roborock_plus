@@ -33,10 +33,9 @@ from .entity import (
     RoborockEntity,
     RoborockEntityV1,
 )
-from .garage_guard import async_guard_garage_open
 from .garage_control import GarageControlError
 from .garage_task import GarageTaskError
-from .garage_runtime import configured as is_garage_configured, check_legacy_ownership
+from .garage_runtime import configured as is_garage_configured
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -226,18 +225,21 @@ class RoborockRoutineButtonEntity(RoborockEntity, ButtonEntity):
         self.entity_description = entity_description
 
     async def async_press(self, **kwargs: Any) -> None:
-        """Press the button."""
+        """Press the button.
+
+        There is no unguarded path any more. A routine runs server-side, outside
+        Home Assistant's view, so it must go through the runtime: otherwise the
+        door is never opened and the robot drives into it. Refusing when the
+        controller is absent is safer than silently running without an interlock.
+        """
         from homeassistant.exceptions import ServiceValidationError
         try:
-            if is_garage_configured(self._coordinator):
-                runtime = getattr(self._coordinator, 'garage_runtime', None)
-                if runtime is None:
-                    raise GarageControlError(getattr(self._coordinator, 'garage_setup_error', None) or 'session_recovery_required')
-                await runtime.async_routine(lambda: self._coordinator.execute_routines(self._routine_id))
-            else:
-                check_legacy_ownership(self.hass, self._coordinator.config_entry.options, self._coordinator.duid)
-                await async_guard_garage_open(self.hass, self._coordinator.config_entry.options)
-                await self._coordinator.execute_routines(self._routine_id)
+            runtime = getattr(self._coordinator, 'garage_runtime', None)
+            if runtime is None:
+                raise GarageControlError(
+                    getattr(self._coordinator, 'garage_setup_error', None)
+                    or 'session_recovery_required')
+            await runtime.async_routine(lambda: self._coordinator.execute_routines(self._routine_id))
         except (GarageControlError, GarageTaskError) as err:
             raise ServiceValidationError(
                 translation_domain='roborock_plus', translation_key='garage_control_error',

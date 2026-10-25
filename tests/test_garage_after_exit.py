@@ -100,17 +100,63 @@ def test_return_requires_observed_pause_and_original_resume(failure, reason):
     asyncio.run(exercise())
 
 
-def test_unknown_position_and_manual_pause_cannot_create_departure():
+def test_an_unknown_sample_alone_cannot_create_a_departure():
+    """UNKNOWN IS NOT A DEPARTURE.
+
+    The flag is armed by an explicit "inside" reading and fired by a later
+    explicit "outside" one. A poll with no position at all must not substitute
+    for either. This test used to assert the opposite for a different sequence
+    (inside -> unknown -> outside), which pinned the 2026-10-25 defect: there the
+    robot really did leave, and the unknown sample was one missed read that
+    threw the arming away.
+    """
     async def exercise():
         r = ExitReplay()
         r.handover()
         await r.start()
         await r.poll(state="cleaning", cleaning=1, docked=False)
+        # Simulate a controller that never saw the robot inside this trip.
+        r.controller._departure_armed = False
         r.outside = None
         await r.poll()
+        assert not r.controller._departure_armed, "a missed sample cannot arm"
         r.outside = True
         await r.poll()
-        assert not r.closes()
+        assert not r.closes(), "an unarmed controller must not close on a first sighting outside"
+    asyncio.run(exercise())
+
+
+def test_a_missed_sample_does_not_lose_a_real_departure():
+    """THE 2026-10-25 BUG: inside -> unknown -> outside must still close.
+
+    Measured live: the door stayed open for 2m52s until it was shut by hand,
+    because one unknown sample cleared the arming and every later "outside"
+    reading found nothing to fire. The local server was answering map requests
+    twice a second throughout.
+    """
+    async def exercise():
+        r = ExitReplay()
+        r.handover()
+        await r.start()
+        await r.poll(state="cleaning", cleaning=1, docked=False)
+        r.outside = False
+        await r.poll()
+        assert r.controller._departure_armed, "an explicit inside reading arms the departure"
+        r.outside = None
+        await r.poll()
+        assert r.controller._departure_armed, "a missed sample must not disarm"
+        r.outside = True
+        await r.poll()
+        assert len(r.closes()) == 1, "the real departure must still close the door"
+    asyncio.run(exercise())
+
+
+def test_manual_pause_cannot_create_departure():
+    async def exercise():
+        r = ExitReplay()
+        r.handover()
+        await r.start()
+        await r.poll(state="cleaning", cleaning=1, docked=False)
         r.outside = False
         await r.poll(state="paused")
         r.outside = True

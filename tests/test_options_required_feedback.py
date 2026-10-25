@@ -17,7 +17,6 @@ NUMBERS = (
 
 def payload():
     flat = _normal_options()
-    legacy = {key: flat.pop(key) for key in ("garage_guard_enabled", "garage_door_entity_id")}
     monitoring = {key: flat.pop(key) for key in (*NUMBERS, "v1_stuck_detection_enabled")}
     return {"do_configure_garage": False, "monitoring": monitoring, "map_display": flat}
 
@@ -91,8 +90,13 @@ def test_multiple_missing_fields_are_all_listed():
     assert labels[NUMBERS[3]] in page["description_placeholders"]["fields"]
 
 
-def test_hidden_legacy_values_survive_new_payload_and_valid_zero_false():
-    previous = {"garage_guard_enabled": True, "garage_door_entity_id": "cover.previous", "retained": 42}
+def test_unrelated_saved_values_survive_a_new_payload_and_valid_zero_false():
+    """A form that does not mention a stored key must not erase it.
+
+    ``retained`` stands in for any option the flow does not render; the flat
+    garage-guard pair used to be the real-world case and is now gone.
+    """
+    previous = {"retained": 42}
     handler = _options_handler(deepcopy(previous))
     submitted = payload()
     submitted["monitoring"].update({"v1_map_position_poll_interval": 0, "clean_command_watch_timeout": 0, "v1_stuck_detection_enabled": False})

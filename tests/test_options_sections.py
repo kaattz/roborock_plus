@@ -51,13 +51,11 @@ def test_grouped_submit_preserves_existing_values_and_original_storage_shape():
     previous = {
         "unrelated": {"preserved": True}, "garage_bindings": {"robot-z": {"enabled": False}},
         "garage_initialized_duids": ["robot-z"], "drawables": {"existing_overlay": True},
-        "garage_guard_enabled": True, "garage_door_entity_id": "cover.legacy",
     }
     handler = _options_handler(previous)
     values = _normal_options()
     values.update({"clean_command_watch_timeout": 0, "v1_stuck_detection_enabled": False,
-                   "show_rooms": False, "path": False, "garage_guard_enabled": True,
-                   "garage_door_entity_id": "cover.legacy"})
+                   "show_rooms": False, "path": False})
     submitted = grouped(values)
     original_payload = deepcopy(submitted)
     result = asyncio.run(handler.async_step_drawables(submitted))
@@ -66,8 +64,6 @@ def test_grouped_submit_preserves_existing_values_and_original_storage_shape():
     assert saved["clean_command_watch_timeout"] == 0
     assert saved["v1_stuck_detection_enabled"] is False
     assert saved["show_rooms"] is False
-    assert saved["garage_guard_enabled"] is True
-    assert saved["garage_door_entity_id"] == "cover.legacy"
     assert saved["drawables"] == {"existing_overlay": True, "path": False}
     assert saved["garage_bindings"] == previous["garage_bindings"]
     assert saved["garage_initialized_duids"] == ["robot-z"]
@@ -95,7 +91,13 @@ def test_grouped_new_garage_navigation_keeps_options_pending_until_final_save():
     assert not GROUPS & handler.options.keys()
 
 
-def test_legacy_conflict_remains_visible_and_preserves_grouped_edits():
+def test_a_stale_flat_guard_key_no_longer_blocks_a_grouped_edit():
+    """A leftover option must not resurrect a conflict the flow can no longer fix.
+
+    The flat guard is retired, so its keys carry no authority. Submitting a form
+    that still mentions them must save normally rather than surface an error the
+    user has no control to clear.
+    """
     previous = {"garage_guard_enabled": True, "garage_door_entity_id": "cover.door"}
     handler = _options_handler(previous)
     other = SimpleNamespace(
@@ -107,13 +109,7 @@ def test_legacy_conflict_remains_visible_and_preserves_grouped_edits():
               "garage_door_entity_id": "cover.door", "show_rooms": False,
               "do_configure_garage": True}
     page = asyncio.run(handler.async_step_drawables(grouped(values)))
-    assert page["type"] == "form"
-    assert page["errors"]["base"] == "legacy_guard_conflict"
-    assert section_defaults(page, "monitoring")["v1_local_status_poll_interval"] == 3
-    assert section_defaults(page, "map_display")["show_rooms"] is False
-    checkbox = next(marker for marker in page["data_schema"] if marker.key == "do_configure_garage")
-    assert checkbox.default is True
-    assert handler.config_entry.options == previous
+    assert "legacy_guard_conflict" not in (page.get("errors") or {}).values()
 
 
 def test_group_field_translations_follow_the_native_frontend_lookup_path():

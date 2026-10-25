@@ -255,52 +255,35 @@ def test_resolve_enabled_errors_are_visible(config):
     assert config.resolve_binding(options, "v1")["cover_entity_id"] == "cover.garage"
 
 
-def test_ownership_rejects_other_binding_and_legacy_protected_robot(config):
+def test_ownership_rejects_a_door_another_enabled_binding_already_holds(config):
+    """Ownership is now decided purely between native bindings.
+
+    The flat guard used to be a second owner to check against; with it gone the
+    only conflict that can exist is two enabled bindings claiming one cover.
+    """
     entries = [("entry", {"garage_bindings": {"other": binding()}}, ("v1", "other"))]
     with pytest.raises(config.GarageConfigError, match="duplicate_binding"):
         config.validate_binding_ownership(binding(), duid="v1", entry_id="entry", entries=entries)
-    entries = [("entry", {"garage_guard_enabled": True, "garage_door_entity_id": "cover.garage"}, ("v1", "other"))]
-    with pytest.raises(config.GarageConfigError, match="legacy_guard_conflict"):
-        config.validate_binding_ownership(binding(), duid="v1", entry_id="entry", entries=entries)
-    entries = [("other_entry", {"garage_guard_enabled": True, "garage_door_entity_id": "cover.garage"}, ("other",))]
-    with pytest.raises(config.GarageConfigError, match="legacy_guard_conflict"):
-        config.validate_binding_ownership(binding(), duid="v1", entry_id="entry", entries=entries)
 
 
-def test_ownership_allows_same_single_robot_legacy_forwarding_and_disabled_drafts(config):
-    entries = [("entry", {"garage_guard_enabled": True, "garage_door_entity_id": "cover.garage", "garage_bindings": {"v1": binding()}}, ("v1",))]
+def test_ownership_ignores_disabled_bindings_in_other_entries(config):
+    entries = [("entry", {"garage_bindings": {"other": binding(enabled=False)}}, ("v1", "other"))]
+    config.validate_binding_ownership(binding(), duid="v1", entry_id="entry", entries=entries)
+
+
+def test_ownership_allows_a_robot_holding_its_own_door(config):
+    entries = [("entry", {"garage_bindings": {"v1": binding()}}, ("v1",))]
     config.validate_binding_ownership(binding(), duid="v1", entry_id="entry", entries=entries)
     config.validate_binding_ownership({"enabled": False}, duid="v1", entry_id="entry", entries=entries)
 
 
-def test_legacy_guard_allows_other_robot_already_forwarded_to_its_own_door(config):
-    entries = [("entry", {
-        "garage_guard_enabled": True, "garage_door_entity_id": "cover.garage",
-        "garage_bindings": {"other": binding(cover_entity_id="cover.other")},
-    }, ("v1", "other"))]
-    config.validate_binding_ownership(binding(), duid="v1", entry_id="entry", entries=entries)
-
-
-def test_unknown_unloaded_legacy_protection_must_be_resolved(config):
-    entries = [("unloaded", {"garage_guard_enabled": True, "garage_door_entity_id": "cover.garage"}, ())]
-    with pytest.raises(config.GarageConfigError, match="legacy_guard_conflict"):
-        config.validate_binding_ownership(binding(), duid="v1", entry_id="entry", entries=entries)
-
-
-def test_legacy_edit_rejects_new_owner_but_preserves_legacy_only_multirobot(config):
+def test_the_retired_legacy_ownership_check_is_a_no_op(config):
+    """The flat guard is gone, so its ownership check must not reject anything."""
     legacy = {"garage_guard_enabled": True, "garage_door_entity_id": "cover.garage"}
-    current = ("entry", legacy, ("v1", "other"))
-    config.validate_legacy_guard_ownership(legacy, entry_id="entry", entries=[current])
+    config.validate_legacy_guard_ownership(legacy, entry_id="entry", entries=[("entry", legacy, ("v1", "other"))])
     owner = ("new", {"garage_bindings": {"third": binding()}}, ("third",))
-    with pytest.raises(config.GarageConfigError, match="legacy_guard_conflict"):
-        config.validate_legacy_guard_ownership(legacy, entry_id="entry", entries=[current, owner])
-
-
-def test_legacy_edit_allows_same_robot_forwarding_but_not_its_unbound_peer(config):
-    own = {"garage_guard_enabled": True, "garage_door_entity_id": "cover.garage", "garage_bindings": {"v1": binding()}}
-    config.validate_legacy_guard_ownership(own, entry_id="entry", entries=[("entry", own, ("v1",))])
-    with pytest.raises(config.GarageConfigError, match="legacy_guard_conflict"):
-        config.validate_legacy_guard_ownership(own, entry_id="entry", entries=[("entry", own, ("v1", "other"))])
+    config.validate_legacy_guard_ownership(
+        legacy, entry_id="entry", entries=[("entry", legacy, ("v1", "other")), owner])
 
 
 @pytest.mark.parametrize("version", [True, "1", 1.0, None])

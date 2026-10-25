@@ -36,13 +36,10 @@ def vacuum_class():
             raise ControlError('duplicate_binding')
     namespace=dict(Base=Base,Any=Any,RoborockCommand=str,HomeAssistantError=HAError,ServiceValidationError=HAError,
                    DOMAIN='roborock_plus',GarageControlError=ControlError,GarageTaskError=ControlError,
-                   is_garage_configured=lambda c:c.managed,check_legacy_ownership=ownership,
+                   is_garage_configured=lambda c:c.managed,
                    should_guard_clean_command=lambda c:c=='app_start',
                    select_resume_command_for_clean_command=lambda c:'app_resume',
                    command_name=lambda c:c,command_value=lambda c:c)
-    async def legacy(*args,**kwargs):
-        args[0].events.append(('legacy_open',))
-    namespace['async_guard_garage_open']=legacy
     resume_namespace = {}
     exec(compile((ROOT/'resume_logic.py').read_text(encoding='utf-8'), str(ROOT/'resume_logic.py'), 'exec'), resume_namespace)
     namespace.update({key: resume_namespace[key] for key in ('select_resume_command', 'select_start_or_resume_command')})
@@ -83,12 +80,19 @@ def test_enabled_but_failed_runtime_cannot_fall_back_to_unguarded_send():
     assert not e.events
 
 
-def test_legacy_ownership_is_checked_before_old_guard_opens_door():
-    e,_=instance(managed=False)
-    e.hass.owner='other'
-    with pytest.raises(Exception,match='duplicate_binding'):
-        asyncio.run(e._async_guard_clean_command('app_start'))
+def test_an_unmanaged_entry_never_reaches_a_flat_guard_because_it_is_gone():
+    """There is no unguarded door-opening path left.
+
+    The flat guard used to be the fallback for entries without a native binding.
+    It is removed, so ``_async_guard_clean_command`` only records the resume
+    command and never touches a cover itself. A robot without a native binding is
+    therefore not silently driven through a shut door: nothing opens it, and the
+    runtime refuses the command.
+    """
+    e, _ = instance(managed=False)
+    asyncio.run(e._async_guard_clean_command('app_start'))
     assert ('legacy_open',) not in e.events
+    assert e.events == []
 
 
 def test_new_binding_does_not_run_legacy_door_wait_before_managed_send():

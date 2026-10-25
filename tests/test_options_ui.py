@@ -42,12 +42,17 @@ def test_options_flow_combines_status_polling_and_drawables() -> None:
     assert "self.async_create_entry" in drawables_step
 
 
-def test_options_flow_exposes_garage_guard_fields() -> None:
+def test_options_flow_no_longer_exposes_the_flat_garage_guard() -> None:
+    """The flat guard is retired; offering its options again would be a lie.
+
+    It could only open/close a door and knew nothing about tasks or the robot's
+    position, so every cover decision now belongs to the native controller.
+    """
     config_flow = CONFIG_FLOW.read_text(encoding="utf-8")
 
     assert "EntitySelector(" in config_flow
-    assert "CONF_GARAGE_GUARD_ENABLED" in config_flow
-    assert "CONF_GARAGE_DOOR_ENTITY_ID" in config_flow
+    assert "CONF_GARAGE_GUARD_ENABLED" not in config_flow
+    assert "CONF_GARAGE_DOOR_ENTITY_ID" not in config_flow
     assert "CONF_GARAGE_OPEN_SCRIPT_ENTITY_ID" not in config_flow
 
 
@@ -184,8 +189,6 @@ def _normal_options():
         "v1_stuck_detection_enabled": True,
         "v1_stuck_window": 120,
         "v1_stuck_radius": 200,
-        "garage_guard_enabled": False,
-        "garage_door_entity_id": "",
         "show_background": False,
         "show_rooms": True,
         "show_walls": True,
@@ -301,28 +304,29 @@ def test_after_exit_description_requires_return_pause_and_hardware_acceptance():
         assert "app_resume" in description
 
 
-def test_native_ui_rejects_same_door_cross_entry_and_other_legacy_robot():
+def test_native_ui_rejects_a_door_another_entry_already_owns():
+    """The only cross-entry conflict left is two bindings on one cover."""
     handler = _options_handler(robots=("robot-a", "robot-b"))
     asyncio.run(handler.async_step_garage_select({"duid": "robot-a"}))
     other = SimpleNamespace(entry_id="other", options={"garage_bindings": {"other-robot": _valid_garage()}}, runtime_data=SimpleNamespace(v1=[]))
     handler.hass.config_entries.async_entries = lambda _: [handler.config_entry, other]
     result = _submit_garage(handler, _valid_garage())
     assert "duplicate_binding" in result["errors"].values()
-    handler.options.update({"garage_guard_enabled": True, "garage_door_entity_id": "cover.door"})
-    handler.hass.config_entries.async_entries = lambda _: [handler.config_entry]
-    result = _submit_garage(handler, _valid_garage())
-    assert "legacy_guard_conflict" in result["errors"].values()
 
 
-def test_legacy_options_edit_cannot_steal_a_new_binding_door():
+def test_a_retired_flat_guard_option_is_not_silently_honoured():
+    """Submitting the old keys must not create a second owner.
+
+    They are no longer read at all, so a form carrying them saves normally and
+    the native bindings decide ownership on their own.
+    """
     handler = _options_handler()
     other = SimpleNamespace(entry_id="other", options={"garage_bindings": {"other-robot": _valid_garage()}}, runtime_data=SimpleNamespace(v1=[]))
     handler.hass.config_entries.async_entries = lambda _: [handler.config_entry, other]
     value = _normal_options()
-    value.update({"garage_guard_enabled": True, "garage_door_entity_id": "cover.door"})
+    value.update({"garage_guard_enabled": True, "garage_door_entity_id": "cover.other"})
     result = asyncio.run(handler.async_step_drawables(value))
-    assert result["type"] == "form"
-    assert result["errors"]["base"] == "legacy_guard_conflict"
+    assert "legacy_guard_conflict" not in (result.get("errors") or {}).values()
 
 
 def test_safety_configuration_fields_and_errors_are_translated():

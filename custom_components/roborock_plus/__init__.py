@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from datetime import timedelta
 import logging
 from typing import Any
@@ -39,6 +39,7 @@ from .const import (
     MAP_SCALE,
     PLATFORMS,
 )
+from .garage_config import CONF_GARAGE_BINDINGS
 from .coordinator import (
     RoborockB01Q7UpdateCoordinator,
     RoborockB01Q10UpdateCoordinator,
@@ -69,9 +70,74 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
+LEGACY_GUARD_ENABLED = 'garage_guard_enabled'
+LEGACY_GUARD_COVER = 'garage_door_entity_id'
+
+
+async def _async_migrate_retired_guard(hass: HomeAssistant, entry: Any) -> None:
+    """Move a retired flat-guard configuration onto the native bindings.
+
+    Before the controller existed there was one flat pair of options,
+    ``garage_guard_enabled`` / ``garage_door_entity_id``, consumed by a module
+    that could only open and close the cover. That module is gone, so the keys
+    must not linger: an Options page offering a control that does nothing is
+    worse than no control at all.
+
+    The migration copies only what the old pair actually expressed -- which cover
+    was protected -- and writes the produced binding **disabled**. Evidence
+    sources, travel times, settle windows and the handover acknowledgement were
+    never part of the old configuration, so inventing them would assert safety
+    facts nobody measured. The operator completes the binding in the UI.
+
+    An existing enabled binding is never touched: it already carries a verified
+    configuration.
+    """
+    options = dict(entry.options)
+    if LEGACY_GUARD_ENABLED not in options and LEGACY_GUARD_COVER not in options:
+        return
+
+    enabled = options.get(LEGACY_GUARD_ENABLED) is True
+    cover = options.get(LEGACY_GUARD_COVER)
+    bindings = options.get(CONF_GARAGE_BINDINGS)
+    bindings = dict(bindings) if isinstance(bindings, Mapping) else {}
+
+    if enabled and isinstance(cover, str) and cover:
+        migrated: dict[str, Any] = {}
+        for duid, binding in bindings.items():
+            if not isinstance(binding, Mapping):
+                continue
+            if binding.get('enabled') is True:
+                # Already the owner of a real configuration; leave it alone.
+                continue
+            if binding.get('cover_entity_id') not in (None, cover):
+                # A different door was configured later; the flat pair is stale.
+                continue
+            candidate = dict(binding)
+            candidate['cover_entity_id'] = cover
+            candidate['enabled'] = False
+            migrated[duid] = candidate
+        bindings.update(migrated)
+        if migrated:
+            _LOGGER.info(
+                'Migrated the retired garage guard of %s to %s binding(s); '
+                'open the options to complete and enable them',
+                entry.entry_id, len(migrated))
+        else:
+            _LOGGER.info(
+                'Retired garage guard of %s dropped: no binding needed migration',
+                entry.entry_id)
+
+    options.pop(LEGACY_GUARD_ENABLED, None)
+    options.pop(LEGACY_GUARD_COVER, None)
+    if bindings:
+        options[CONF_GARAGE_BINDINGS] = bindings
+    hass.config_entries.async_update_entry(entry, options=options)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: RoborockConfigEntry) -> bool:
     """Set up Roborock Plus from a config entry."""
     await async_cleanup_map_storage(hass, entry.entry_id)
+    await _async_migrate_retired_guard(hass, entry)
 
     user_data = UserData.from_dict(entry.data[CONF_USER_DATA])
     user_params = UserParams(

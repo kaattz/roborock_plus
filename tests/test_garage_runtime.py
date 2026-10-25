@@ -169,13 +169,20 @@ def test_missing_real_charger_never_proves_safe_final_dock():
     assert r.robot_observation().position_trusted is False
 
 
-def test_legacy_other_robot_cannot_open_an_owned_cover():
-    m=runtime_module()
-    b=Boundaries()
-    r=b.create()
-    b.hass.data[m.REGISTRY_KEY]={'cover.door':r}
-    with pytest.raises(Exception,match='duplicate_binding'):
-        m.check_legacy_ownership(b.hass, {'garage_guard_enabled':True,'garage_door_entity_id':'cover.door'}, 'other')
+def test_the_retired_legacy_ownership_check_no_longer_refuses_anything():
+    """The flat guard is gone, so this helper must be inert.
+
+    Ownership between native bindings is enforced by validate_binding_ownership;
+    keeping the old refusal here would mean two places decide the same thing.
+    """
+    m = runtime_module()
+    b = Boundaries()
+    r = b.create()
+    b.hass.data[m.REGISTRY_KEY] = {'cover.door': r}
+    m.check_legacy_ownership(
+        b.hass,
+        {'garage_guard_enabled': True, 'garage_door_entity_id': 'cover.door'},
+        'other')
 
 
 def test_unknown_raw_command_cannot_bypass_runtime():

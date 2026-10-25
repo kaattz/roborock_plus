@@ -27,6 +27,12 @@ _LOGGER = logging.getLogger(__name__)
 _NEW_TASK_COMMANDS = frozenset({
     'app_start', 'app_segment_clean', 'app_zoned_clean', 'app_spot', 'app_goto_target',
 })
+# The commands that actually begin cleaning. ``app_goto_target`` is deliberately
+# absent: it is the vehicle for the controlled exit itself, so treating it as a
+# clean would recurse.
+_CONTROLLED_EXIT_COMMANDS = frozenset({
+    'app_start', 'app_segment_clean', 'app_zoned_clean', 'app_spot',
+})
 _RESUME_COMMANDS = frozenset({'app_resume', 'app_resume_build_map'})
 _DIRECT_COMMANDS = SAFE_DIRECT_COMMANDS
 _MOVING_STATES = frozenset({
@@ -51,12 +57,12 @@ def configured(coordinator: Any) -> bool:
 
 
 def check_legacy_ownership(hass: Any, options: Mapping[str, Any], duid: str) -> None:
-    """A second robot cannot use the legacy global option to touch an owned door."""
-    if not options.get('garage_guard_enabled'):
-        return
-    owner = getattr(hass, 'data', {}).get(REGISTRY_KEY, {}).get(options.get('garage_door_entity_id'))
-    if owner is not None and owner.coordinator.duid != duid:
-        raise GarageControlError('duplicate_binding')
+    """Retired with the flat guard; ownership is enforced between native bindings.
+
+    Native bindings already refuse a cover another enabled binding holds (see
+    ``validate_binding_ownership``), so there is no second owner left to check
+    against here.
+    """
 
 
 class GarageRuntime:
@@ -185,17 +191,29 @@ class GarageRuntime:
             blocking=True, context=context,
         )
 
-    async def async_control_command(self, command: str) -> Any:
-        """Send only the controller's pause/resume, preserving the original task."""
+    async def async_control_command(self, command: str, params: Any = None) -> Any:
+        """Send the controller's own robot commands.
+
+        Pause/resume preserve the original task; ``app_goto_target`` is the
+        controlled-exit waypoint. Anything else is refused: the controller must
+        not acquire a general-purpose command channel by accident.
+        """
         name = command_name(command)
-        if name not in ('app_pause', 'app_resume'):
+        if name not in ('app_pause', 'app_resume', 'app_goto_target'):
             raise GarageControlError('unsupported_guarded_command')
+        if name == 'app_goto_target':
+            if (not isinstance(params, (list, tuple)) or len(params) != 2
+                    or any(type(value) is not int for value in params)):
+                raise GarageControlError('invalid_controlled_exit_target')
         if self._closed:
             raise GarageControlError('control_unloaded')
         if not self._restored or self._first_install:
             raise GarageControlError('session_recovery_required')
-        self.coordinator.last_resume_command = 'app_resume'
-        response = await self.coordinator.properties_api.command.send(name)
+        if name == 'app_goto_target':
+            response = await self.coordinator.properties_api.command.send(name, list(params))
+        else:
+            self.coordinator.last_resume_command = 'app_resume'
+            response = await self.coordinator.properties_api.command.send(name)
         await self.coordinator.async_refresh()
         return response
 
@@ -294,6 +312,13 @@ class GarageRuntime:
                 raise
         if _stage_owner is not None:
             self._check_stage_launch(_stage_owner)
+        if self._should_controlled_exit(name):
+            # Drive the robot out of the cabinet and shut the door before the
+            # clean command is sent. The command itself still goes through
+            # async_execute below, which will see the robot already outside and
+            # therefore not demand passage (see garage_control.async_execute).
+            await self.controller.async_run_controlled_exit(
+                self._controlled_exit_settings())
         result = await self.controller.async_execute(
             name, send, new_task=name in _NEW_TASK_COMMANDS or (name=='app_charge' and not self.session.active),
             resume=name in _RESUME_COMMANDS,
@@ -301,6 +326,37 @@ class GarageRuntime:
         self.schedule()
         self.publish()
         return result
+
+    def _controlled_exit_settings(self) -> dict[str, Any]:
+        return {
+            'x': int(self.binding['controlled_exit_x']),
+            'y': int(self.binding['controlled_exit_y']),
+            'timeout': float(self.binding['controlled_exit_timeout_seconds']),
+        }
+
+    def _should_controlled_exit(self, name: str) -> bool:
+        """Return whether this clean command should be preceded by an exit run.
+
+        Only a brand-new clean gets the treatment. ``session.active`` is the one
+        reliable way to tell: a wash-and-resume keeps the same session and sends
+        ``app_resume``, but a user who stops in the app and presses start again
+        produces a *new* clean command while the old session may still be active.
+        Inserting an exit run then would collide with ``task_already_active``.
+
+        Everything else falls through to the ordinary path untouched: the
+        feature being off must be invisible.
+        """
+        if not self.binding.get('controlled_exit_enabled'):
+            return False
+        if name not in _CONTROLLED_EXIT_COMMANDS:
+            return False
+        if self.session.active:
+            return False
+        if self.controller.phase not in ('idle', 'outside_closed'):
+            return False
+        if self.controller.reason is not None:
+            return False
+        return True
 
     async def async_start_stage(self, stage: dict, send: Callable, *, previous_receipt: dict | None = None) -> dict:
         """Start one explicit stage; HA owns the sequence and its timeout."""

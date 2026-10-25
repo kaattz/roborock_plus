@@ -961,7 +961,11 @@
           "operation_timeout_seconds": "门动作超时",
           "dock_settle_seconds": "停靠稳定时间",
           "allow_estimated": "接受门到位估算风险",
-          "handover_confirmed": "确认门控制权交接"
+          "handover_confirmed": "确认门控制权交接",
+          "controlled_exit_enabled": "清扫前受控出库",
+          "controlled_exit_x": "出库目标点 X",
+          "controlled_exit_y": "出库目标点 Y",
+          "controlled_exit_timeout_seconds": "出库到达超时"
         },
         "data_description": {
           "open_travel_seconds": "必填，1–600 秒。用秒表测门从全关到完全打开的时间，实测35秒就填35。此项没有通用默认值，不能用建议值代替实测。",
@@ -972,7 +976,11 @@
           "operation_timeout_seconds": "初次建议至少90秒，已有较长行程时会给出更大的建议值。必须大于最长到位等待：例如开门35秒加余量10秒，需要大于45秒，可填90秒。超时只会阻塞，不会放行机器人。",
           "dock_settle_seconds": "建议5秒，可填1–300秒。回到基站后等待状态稳定，至少两次新鲜观测跨越这段时间；旧样本不计。",
           "allow_estimated": "计时无法发现卡门、电机空转或通路障碍。使用计时或估算位置时必须明确接受，估算不会显示为已确认到位。",
-          "handover_confirmed": "我已标定端点和时长、确认没有待续任务且机器人安全停靠、停用旧主动门控自动化，并将自动关门改用 request_garage_close。旧全局保护涉及的其他机器人须先逐台处理。"
+          "handover_confirmed": "我已标定端点和时长、确认没有待续任务且机器人安全停靠、停用旧主动门控自动化，并将自动关门改用 request_garage_close。旧全局保护涉及的其他机器人须先逐台处理。",
+          "controlled_exit_enabled": "清扫前先把机器人直线开出柜门到指定目标点，到点关门，然后才发清扫命令。只有机器人出库时会蹭到旁边的门才需要开启。",
+          "controlled_exit_x": "地图坐标，单位毫米。默认值取自本屋实测几何；启用时必须三项全部填写。",
+          "controlled_exit_y": "地图坐标，单位毫米。",
+          "controlled_exit_timeout_seconds": "等待到达目标点的最长时间。是否到达按坐标判定，不靠这个超时。"
         }
       }
     },

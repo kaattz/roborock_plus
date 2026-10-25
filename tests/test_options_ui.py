@@ -152,6 +152,12 @@ def _options_handler(options=None, robots=("robot-a",)):
     })
     for key in tuple(scope):
         if key.startswith(("MIN_", "MAX_", "DEFAULT_")) and key != "DEFAULT_DRAWABLES":
+            # Neutralize tuning constants so assertions do not depend on
+            # production numbers. The controlled-exit waypoint is different: it
+            # is a measured coordinate the UI must show verbatim, so stubbing it
+            # would make the "defaults describe the geometry" test meaningless.
+            if key.startswith("DEFAULT_CONTROLLED_EXIT"):
+                continue
             scope[key] = 5
     # The form method now validates numeric ranges itself; use real constants
     # from their dependency-free declarations instead of placeholder bounds.
@@ -361,7 +367,7 @@ def test_timed_source_skips_feedback_and_only_shows_estimate_timing():
     asyncio.run(handler.async_step_garage_select({"duid": "robot-a"}))
     page = asyncio.run(handler.async_step_garage(_garage_basics()))
     assert page["step_id"] == "garage_timing"
-    assert _page_keys(page) == {"open_travel_seconds", "close_travel_seconds", "travel_margin_seconds", "operation_timeout_seconds", "dock_settle_seconds", "allow_estimated", "handover_confirmed"}
+    assert _page_keys(page) == {"open_travel_seconds", "close_travel_seconds", "travel_margin_seconds", "operation_timeout_seconds", "dock_settle_seconds", "allow_estimated", "handover_confirmed", "controlled_exit_enabled"}
     for marker in page["data_schema"]:
         if marker.key in ("open_travel_seconds", "close_travel_seconds"):
             assert marker.default is None
@@ -386,7 +392,7 @@ def test_contact_source_requires_polarity_then_only_contact_stabilization():
     assert missing["step_id"] == "garage_feedback"
     page = asyncio.run(handler.async_step_garage_feedback({"open_contact": "binary_sensor.open", "close_contact": "binary_sensor.closed", "open_contact_state": "off", "close_contact_state": "on"}))
     assert page["step_id"] == "garage_timing"
-    assert _page_keys(page) == {"contact_settle_seconds", "operation_timeout_seconds", "dock_settle_seconds", "handover_confirmed"}
+    assert _page_keys(page) == {"contact_settle_seconds", "operation_timeout_seconds", "dock_settle_seconds", "handover_confirmed", "controlled_exit_enabled"}
 
 
 @pytest.mark.parametrize("kind,extra", [("measured", set()), ("estimated", {"open_travel_seconds", "close_travel_seconds", "travel_margin_seconds", "allow_estimated"})])
@@ -396,7 +402,7 @@ def test_position_feedback_kind_controls_visible_timing(kind, extra):
     page = asyncio.run(handler.async_step_garage(_garage_basics(open_source="position", close_source="position")))
     assert _page_keys(page) == {"position_kind", "open_position", "close_position"}
     page = asyncio.run(handler.async_step_garage_feedback({"position_kind": kind, "open_position": 95, "close_position": 5}))
-    assert _page_keys(page) == {"position_settle_seconds", "operation_timeout_seconds", "dock_settle_seconds", "handover_confirmed"} | extra
+    assert _page_keys(page) == {"position_settle_seconds", "operation_timeout_seconds", "dock_settle_seconds", "handover_confirmed", "controlled_exit_enabled"} | extra
 
 
 def test_source_switch_and_reentry_preserve_inactive_hardware_values():

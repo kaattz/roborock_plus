@@ -1368,7 +1368,11 @@
           "operation_timeout_seconds": "Door operation timeout",
           "dock_settle_seconds": "Dock stabilization time",
           "allow_estimated": "Accept estimated door endpoints",
-          "handover_confirmed": "Confirm control handover"
+          "handover_confirmed": "Confirm control handover",
+          "controlled_exit_enabled": "Controlled exit before cleaning",
+          "controlled_exit_x": "Exit waypoint X",
+          "controlled_exit_y": "Exit waypoint Y",
+          "controlled_exit_timeout_seconds": "Exit waypoint timeout"
         },
         "data_description": {
           "open_travel_seconds": "Enter the measured full travel time in seconds (1–600). A timed or estimated source waits the full journey; there is no universal default.",
@@ -1379,7 +1383,11 @@
           "operation_timeout_seconds": "Initially suggested at least 90 seconds, or more for an already known longer travel. Must exceed the longest endpoint wait. For 35 seconds of travel plus 10 seconds of margin, choose more than 45 seconds, such as 90. A timeout blocks movement; it never grants passage.",
           "dock_settle_seconds": "Suggested: 5 seconds, adjustable from 1 to 300. At least two fresh dock observations must span this window; repeated old samples do not count.",
           "allow_estimated": "Timing cannot detect a jam, motor slip, or obstruction. Accept explicitly to use timed or estimated position evidence; estimates never become confirmed endpoints.",
-          "handover_confirmed": "I calibrated endpoints/timing, checked that no task needs resuming and that the robot is safely docked, disabled old active door-control automations, and routed automatic closing through request_garage_close. Other robots sharing the legacy guard must be handled first."
+          "handover_confirmed": "I calibrated endpoints/timing, checked that no task needs resuming and that the robot is safely docked, disabled old active door-control automations, and routed automatic closing through request_garage_close. Other robots sharing the legacy guard must be handled first.",
+          "controlled_exit_enabled": "Drive the robot straight out of the cabinet to a waypoint and shut the door before any clean command. Leave off unless the robot grazes a door on its way out.",
+          "controlled_exit_x": "Map coordinate in millimetres. The default is this household's measured geometry; enabling requires all three values.",
+          "controlled_exit_y": "Map coordinate in millimetres.",
+          "controlled_exit_timeout_seconds": "How long to wait for the waypoint before giving up. Reaching it is judged by position, not by this timeout."
         }
       }
     },

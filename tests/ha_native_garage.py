@@ -157,7 +157,11 @@ def test_native_options_schema_and_saved_duid_binding(mode, source):
             assert result["type"] == "create_entry"
             assert result["data"]["garage_control_version"] == 1
             saved = result["data"]["garage_bindings"]["memory-robot"]
-            assert saved == {**previous, **basics, "allow_estimated": source == "timed"}
+            # The timing step now also carries the controlled-exit switch, which
+            # this fixture leaves off. It is stored explicitly so a later enable
+            # does not have to guess what was meant.
+            assert saved == {**previous, **basics, "allow_estimated": source == "timed",
+                             "controlled_exit_enabled": False}
             assert result["data"]["garage_initialized_duids"] == ["memory-robot"]
             assert "open_source" not in result["data"].get("drawables", {})
 

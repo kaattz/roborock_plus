@@ -73,6 +73,9 @@ from .const import (
 from .garage_config import (
     CONF_GARAGE_BINDINGS,
     CONF_GARAGE_CONTROL_VERSION,
+    DEFAULT_CONTROLLED_EXIT_TIMEOUT,
+    DEFAULT_CONTROLLED_EXIT_X,
+    DEFAULT_CONTROLLED_EXIT_Y,
     EVIDENCE_SOURCES,
     GARAGE_CONTROL_VERSION,
     NUMERIC_RANGES,
@@ -771,6 +774,12 @@ class RoborockOptionsFlowHandler(OptionsFlow):
         if "timed" in sources or ("position" in sources and values.get("position_kind") == "estimated"):
             fields.append("allow_estimated")
         fields.append("handover_confirmed")
+        fields.append("controlled_exit_enabled")
+        if values.get("controlled_exit_enabled"):
+            # Only ask for the waypoint once the feature is switched on: an
+            # off feature should not demand three numbers nobody will use.
+            fields.extend(("controlled_exit_x", "controlled_exit_y",
+                           "controlled_exit_timeout_seconds"))
         return tuple(fields)
 
     def _garage_error_form(self, error: GarageConfigError) -> ConfigFlowResult:
@@ -796,11 +805,26 @@ class RoborockOptionsFlowHandler(OptionsFlow):
     ) -> ConfigFlowResult:
         values = self._garage_values()
         timing_suggestions = suggested_timing_values(values) if step_id == "garage_timing" else {}
-
+        if step_id == "garage_timing":
+            # Prefill the waypoint from the measured geometry. These are form
+            # defaults only: validation still refuses to enable the feature
+            # unless the operator states all three values.
+            for key, value in (
+                ('controlled_exit_x', DEFAULT_CONTROLLED_EXIT_X),
+                ('controlled_exit_y', DEFAULT_CONTROLLED_EXIT_Y),
+                ('controlled_exit_timeout_seconds', DEFAULT_CONTROLLED_EXIT_TIMEOUT),
+            ):
+                if key not in values:
+                    timing_suggestions[key] = value
         def field(key: str, default: Any = None) -> Any:
-            marker = vol.Required if step_id in ("garage_feedback", "garage_timing") and key not in (
+            # The waypoint numbers are only shown once the switch is on, so they
+            # cannot be Required: a hidden Required field would block the form.
+            optional = (
                 "allow_estimated", "handover_confirmed",
-            ) else vol.Optional
+                "controlled_exit_enabled", "controlled_exit_x",
+                "controlled_exit_y", "controlled_exit_timeout_seconds",
+            )
+            marker = vol.Required if step_id in ("garage_feedback", "garage_timing") and key not in optional else vol.Optional
             if key in values and values[key] not in (None, ""):
                 return marker(key, default=values[key])
             if default is not None:
@@ -827,6 +851,7 @@ class RoborockOptionsFlowHandler(OptionsFlow):
             field("close_permission_entity"): EntitySelector(EntitySelectorConfig(domain=["input_boolean", "binary_sensor"])),
             field("allow_estimated", False): bool,
             field("handover_confirmed", False): bool,
+            field("controlled_exit_enabled", False): bool,
         }
         for key, (minimum, maximum) in {
             **NUMERIC_RANGES, "open_position": (0, 100), "close_position": (0, 100)
@@ -835,7 +860,11 @@ class RoborockOptionsFlowHandler(OptionsFlow):
             selectors[field(key, default)] = NumberSelector(NumberSelectorConfig(
                 min=minimum, max=maximum, step=1,
                 mode=NumberSelectorMode.BOX,
-                unit_of_measurement="%" if key.endswith("_position") else "s",
+                unit_of_measurement=(
+                    "%" if key.endswith("_position")
+                    else "mm" if key in ("controlled_exit_x", "controlled_exit_y")
+                    else "s"
+                ),
             ))
         visible = (*self._garage_fields(step_id), *extra_fields)
         data_schema = {key: selector for key, selector in selectors.items() if key.schema in visible}

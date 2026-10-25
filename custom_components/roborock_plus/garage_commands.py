@@ -55,3 +55,31 @@ SETTING_COMMANDS = frozenset({
 SAFE_DIRECT_COMMANDS = READ_ONLY_COMMANDS | SETTING_COMMANDS | frozenset({
     "app_pause", "app_stop", "find_me",
 })
+
+# Commands that may move the robot out of its dock, so a clean they trigger has
+# to go through the garage controller. Moved here from the retired flat guard:
+# the classification belongs with the other command lists, not with the door
+# handling that used to consume it.
+GUARDED_CLEAN_COMMANDS = frozenset({
+    "APP_GOTO_TARGET",
+    "APP_START",
+    "APP_SEGMENT_CLEAN",
+    "APP_SPOT",
+    "APP_ZONED_CLEAN",
+    "app_goto_target",
+    "app_start",
+    "app_segment_clean",
+    "app_spot",
+    "app_zoned_clean",
+})
+
+
+def command_value(command: object) -> str:
+    """Return the Roborock wire command value for an enum or a plain string."""
+    value = getattr(command, "value", None)
+    return str(value) if value is not None else str(command)
+
+
+def should_guard_clean_command(command: object) -> bool:
+    """Return whether a command may move the robot out of its dock."""
+    return command_value(command) in GUARDED_CLEAN_COMMANDS

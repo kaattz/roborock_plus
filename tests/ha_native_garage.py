@@ -53,8 +53,9 @@ def options_schema_input(schema, flat_values):
 
 def test_native_imports_all_changed_production_modules():
     for name in (
-        "config_flow", "coordinator", "garage_config", "door_evidence", "garage_guard",
-        "garage_task", "garage_control", "garage_session_store", "garage_runtime",
+        "config_flow", "coordinator", "garage_config", "door_evidence",
+        "garage_commands", "garage_task", "garage_control", "garage_session_store",
+        "garage_runtime",
         "garage_entities", "binary_sensor", "sensor", "vacuum", "button", "services",
     ):
         module = importlib.import_module(f"{PACKAGE}.{name}")

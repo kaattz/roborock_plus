@@ -982,7 +982,8 @@
               "manual_hold": "Manual control hold",
               "pausing_return": "Pausing return; waiting for confirmation",
               "return_opening": "Return paused; opening door",
-              "resuming_return": "Door open; resuming the same return"
+              "resuming_return": "Door open; resuming the same return",
+              "controlled_exit": "Driving out of the cabinet"
             }
           },
           "reason": {

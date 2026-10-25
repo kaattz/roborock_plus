@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
@@ -56,7 +57,7 @@ class GarageController:
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         start_timeout: float = 60.0,
-        send_robot: Callable[[str], Awaitable[Any]] | None = None,
+        send_robot: Callable[..., Awaitable[Any]] | None = None,
     ) -> None:
         self.binding = binding
         self.evidence = evidence
@@ -76,6 +77,8 @@ class GarageController:
         self.reason: str | None = None
         self.previous_phase: str | None = None
         self.operation_id = 0
+        self._controlled_exit_target: tuple[int, int] | None = None
+        self._controlled_exit_deadline: float | None = None
         self.state: Any = None
         self.robot: Any = None
         self._pending = False
@@ -480,8 +483,11 @@ class GarageController:
             await self._open(operation)
             self.refresh()
             self._check(operation)
-            if self.passage_allowed is not True:
-                raise GarageControlError('feedback_unavailable')
+            if not self._robot_is_outside():
+                # The robot still has to drive through the doorway, so the door
+                # must be usable before any clean command.
+                if self.passage_allowed is not True:
+                    raise GarageControlError('feedback_unavailable')
             if not self.robot.fresh:
                 raise GarageControlError('position_untrusted')
             if new_task:
@@ -495,7 +501,7 @@ class GarageController:
             self._check(operation)
             # No await between this final observation/check and invoking send.
             self.refresh()
-            if self.passage_allowed is not True:
+            if not self._robot_is_outside() and self.passage_allowed is not True:
                 raise GarageControlError('feedback_unavailable')
             self._check(operation)
             self.phase = 'awaiting_start'
@@ -544,6 +550,154 @@ class GarageController:
             raise
         finally:
             self._release(operation)
+
+    async def async_run_controlled_exit(self, settings: dict) -> None:
+        """Drive straight out of the cabinet, then shut the door behind the robot.
+
+        Why this shape of sequence exists
+        ---------------------------------
+        The cabinet is the robot's only way in or out: the door must be open for
+        it to leave and closed while it cleans. Left to plan its own departure,
+        the robot's docking manoeuvre swings far enough right to graze the closed
+        door beside the cabinet (measured 2026-10-25, 373mm of clearance).
+
+        An earlier design watched for ``docked -> cleaning`` and paused the robot
+        to open the door. That failed in the field: the state change arrives after
+        the robot has already moved, so the pause landed mid-manoeuvre in a tight
+        opening and the resumed robot spun in place forever. Nothing here
+        interrupts the robot: it is given one waypoint and driven there.
+
+        The door is held open for the whole trip (``_update_after_exit`` returns
+        early while ``phase == 'controlled_exit'``), then closed at the waypoint,
+        before the clean command is issued.
+
+        Failure is terminal for this attempt: the caller must not fall through to
+        sending the clean command, because a shut door is the whole point and a
+        robot that has not cleared the cabinet must not start working inside it.
+        """
+        target = (settings['x'], settings['y'])
+        timeout = settings['timeout']
+        self.refresh()
+        self._check()
+        self._preflight('open')
+        if not (self.robot.fresh and self.robot.position_trusted):
+            self.fault('position_untrusted')
+            raise GarageControlError('position_untrusted')
+        operation = self._acquire()
+        self._controlled_exit_target = target
+        self._controlled_exit_deadline = self.clock() + timeout
+        try:
+            await self._open(operation)
+            self._check(operation)
+            if self.send_robot is None:
+                raise GarageControlError('unsupported_controlled_exit')
+            self.phase = 'controlled_exit'
+            self.evidence.invalidate('opening')
+            await self.send_robot('app_goto_target', list(target))
+            await self._wait_controlled_exit(operation)
+            await self._close_after_controlled_exit(operation)
+        except asyncio.CancelledError:
+            self.fault('operation_cancelled')
+            raise
+        except Exception as err:
+            if not self.reason:
+                self.fault(getattr(err, 'reason', None) or 'controlled_exit_failed')
+            raise
+        finally:
+            self._controlled_exit_target = None
+            self._controlled_exit_deadline = None
+            self._release(operation)
+
+    async def _wait_controlled_exit(self, operation: int) -> None:
+        """Wait for the waypoint using measured coordinates, never a state guess.
+
+        Position is the only direct fact here. ``going_to_target`` cannot tell
+        "arrived" from "stopped for some other reason", and a fixed sleep cannot
+        tell either. The tolerance exists because docking precision is not zero.
+        """
+        from .garage_config import CONTROLLED_EXIT_TOLERANCE_MM
+
+        while True:
+            self._check(operation)
+            self.refresh()
+            if self._controlled_exit_arrived():
+                return
+            if self._controlled_exit_deadline is not None and self.clock() >= self._controlled_exit_deadline:
+                raise GarageControlError('controlled_exit_failed')
+            await asyncio.sleep(0.2)
+
+    def _robot_is_outside(self) -> bool:
+        """Return whether the robot is confirmed past the danger zone already.
+
+        When true, a clean command does not need the door to be passable: the
+        robot is not going to drive through the doorway, it is already on the far
+        side of it. This is what makes "shut the door, then start cleaning" a
+        coherent sequence instead of a deadlock.
+
+        Every clause is load-bearing:
+
+        * ``fresh`` and ``position_trusted`` -- an old or contradictory reading
+          must never be enough to wave a robot through a shut door.
+        * ``outside_danger_zone is True`` -- not None, not None-because-unknown.
+          The observation layer already refuses to compute this from a
+          dock-substituted position unless the charger marker itself sits inside
+          the zone (see ``garage_runtime.robot_observation``), so a docked robot
+          cannot masquerade as "outside" here.
+        * ``not docked`` -- a robot sitting on its dock has not left, whatever a
+          stale coordinate says.
+        """
+        return bool(
+            getattr(self.robot, 'fresh', False)
+            and getattr(self.robot, 'position_trusted', False) is True
+            and getattr(self.robot, 'outside_danger_zone', None) is True
+            and not getattr(self.robot, 'docked', False)
+        )
+
+    def _controlled_exit_arrived(self) -> bool:
+        if not (self.robot.fresh and self.robot.position_trusted):
+            return False
+        target = self._controlled_exit_target
+        if target is None:
+            return False
+        position = getattr(self.robot, 'position', None)
+        x = getattr(position, 'x', None)
+        y = getattr(position, 'y', None)
+        if x is None or y is None:
+            return False
+        from .garage_config import CONTROLLED_EXIT_TOLERANCE_MM
+        return math.hypot(x - target[0], y - target[1]) <= CONTROLLED_EXIT_TOLERANCE_MM
+
+    async def _close_after_controlled_exit(self, operation: int) -> None:
+        """Shut the door at the waypoint, before the clean command is sent.
+
+        Deliberately not ``async_request_close`` (it demands
+        ``session.can_close`` = a settled dock, which is false here) and not
+        ``_close_after_departure`` (its ``_exit_can_close`` demands a cleaning
+        state, while the robot is at the waypoint). The conditions below are the
+        same facts those paths rely on -- robot really outside, feedback usable,
+        no concurrency -- only the trigger moment differs.
+        """
+        self.refresh()
+        self._check(operation)
+        if self.robot.outside_danger_zone is not True:
+            raise GarageControlError('controlled_exit_failed')
+        if not self.state.cover_available:
+            raise GarageControlError('feedback_unavailable')
+        reasons = {self.state.open.reason, self.state.close.reason}
+        if reasons & _BLOCKING_ENDPOINT_REASONS:
+            raise GarageControlError('feedback_unavailable')
+        if not self.close_allowed():
+            raise GarageControlError('close_not_allowed')
+        self._preflight('close')
+        if self.state.closed_confirmed is not True:
+            self.phase = 'closing'
+            self.evidence.invalidate('closing')
+            await self.move_door('close', operation)
+            self._check(operation)
+            self.evidence.note_command('close', self.clock(), operation)
+            await self._wait('close', operation)
+        self.phase = 'idle'
+        await self.persist()
 
     async def async_request_open(self) -> None:
         """The single protected open entry for explicit household passage requests.
@@ -861,6 +1015,11 @@ class GarageController:
     async def _update_after_exit(self) -> bool:
         if self.binding.get('task_door_mode') != 'after_exit':
             return False
+        if self.phase == 'controlled_exit':
+            # The robot is driving out of the cabinet towards the waypoint.
+            # Closing now would shut the door on it. The same run closes the door
+            # itself once the waypoint is reached.
+            return True
         if self._user_hold:
             self.phase = 'manual_hold'
             return True

@@ -42,14 +42,10 @@ from .entity import (
     RoborockCoordinatedEntityV1,
 )
 from .clean_command_watch import async_watch_clean_command_started
-from .garage_guard import (
-    async_guard_garage_open,
-    command_value,
-    should_guard_clean_command,
-)
+from .garage_commands import command_value, should_guard_clean_command
 from .garage_control import GarageControlError
 from .garage_task import GarageTaskError
-from .garage_runtime import configured as is_garage_configured, check_legacy_ownership, command_name
+from .garage_runtime import configured as is_garage_configured, command_name
 from .resume_logic import (
     select_resume_command,
     select_resume_command_for_clean_command,
@@ -245,8 +241,6 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
                 return await runtime.async_send(
                     command, lambda: super(RoborockVacuum, self).send(command, params),
                 )
-            if should_guard_clean_command(command) or command_name(command) in ('app_resume', 'app_resume_build_map', 'app_charge'):
-                check_legacy_ownership(self.hass, self.coordinator.config_entry.options, self.coordinator.duid)
         except (GarageControlError, GarageTaskError) as err:
             raise ServiceValidationError(
                 translation_domain=DOMAIN, translation_key='garage_control_error',
@@ -477,18 +471,16 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
         self,
         command: RoborockCommand | str,
     ) -> None:
-        """Open the garage door before HA-initiated clean commands."""
+        """Remember the resume command a clean command implies.
+
+        The door is no longer touched here. Every cover movement now goes through
+        the native controller, which knows the task state and the robot's
+        position; the old flat guard could only move the door and could not tell
+        a fresh clean from a wash-and-resume.
+        """
         if should_guard_clean_command(command):
             if resume_command := select_resume_command_for_clean_command(command):
                 self.coordinator.last_resume_command = resume_command
-            if is_garage_configured(self.coordinator):
-                return
-            check_legacy_ownership(self.hass, self.coordinator.config_entry.options, self.coordinator.duid)
-            await async_guard_garage_open(
-                self.hass,
-                self.coordinator.config_entry.options,
-                self.coordinator.garage_door_echo_window,
-            )
 
     async def get_maps(self) -> ServiceResponse:
         """Get map information such as map id and room ids."""

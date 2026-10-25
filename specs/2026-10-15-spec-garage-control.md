@@ -296,6 +296,11 @@ idle/outside_closed/waiting_close_permission、无活动任务、无 pending、�
 `timed` 来源下 passage_allowed 仍为 unknown，下一次清扫仍须完整开门一次。
 同步新增 `roborock_plus.request_garage_open` 作为受控开门入口（不查关闭许可、
 不查 session.can_close），并给 garage_issue 事件补 `previous_phase`。
+2026-10-25 修正（v0.8.1，详见 [本批 spec](2026-10-25-spec-garage-exit-close.md) S12.1/S12.3）：
+离库判定区分「这次没采到」与「位置不可信」——前者不改变 `_departure_armed` /
+`_exit_due`，后者仍立即撤销；同时「机器人已确认在危险区外时外部关门」由
+`manual_override` 改为记录并发布 `external_close_after_exit`（区内或位置未知仍锁存）。
+`MAP_POSITION_MAX_AGE_INTERVALS` 与 `_exit_can_close()` 均未放宽。
 开关门、启动/返航等待、未知/估算全闭或来源失效仍保留原中止/人工保持语义，既有保持不自动解除。
 旧关门后解锁自动化保持原触发和 stop_cover，不新增服务或配置参数。
 本屋推窗器关门后必须收到停止命令释放离合，随后才能手动和电动开门；上述判断只影响

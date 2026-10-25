@@ -108,19 +108,55 @@ class GarageController:
         self.robot = self.robot_observation()
         self.session.observe(self.robot)
         if self.binding.get('task_door_mode') == 'after_exit':
-            token = getattr(self.robot, 'position_sample_id', None)
-            outside = getattr(self.robot, 'outside_danger_zone', None)
-            if not (self.robot.fresh and self.robot.position_trusted) or outside is None:
-                self._departure_armed = False
-                self._exit_due = False
-            elif token is not None and token != self._position_sample:
-                self._position_sample = token
-                if outside is False:
-                    self._departure_armed = True
-                    self._exit_due = False
-                elif self._departure_armed:
-                    self._exit_due = True
-                    self._departure_armed = False
+            self._observe_departure()
+
+    def _observe_departure(self) -> None:
+        """Arm on 'inside', fire on a later 'outside', and leave 'no sample' alone.
+
+        ``outside_danger_zone`` is ``None`` whenever this poll failed to read a
+        position -- measured 2026-10-25 at roughly once every 30s for about 1.2s,
+        while the local MQTT connection was answering map requests twice a second.
+        Treating that as "untrusted, drop everything" threw away the armed flag
+        before the next good sample could report the crossing, so
+        ``_close_after_departure()`` never ran and the door stayed open until it
+        was closed by hand.
+
+        "I did not read a position this time" and "this position cannot be
+        trusted" are different facts and must not share a branch:
+
+        * untrusted (``position_trusted`` false / stale) -- drop the arming. We do
+          not know where the robot is, so we must not later decide the doorway is
+          clear.
+        * no sample (``outside is None``) -- say nothing. The previous decision
+          stands; the next usable sample decides.
+        """
+        token = getattr(self.robot, 'position_sample_id', None)
+        outside = getattr(self.robot, 'outside_danger_zone', None)
+        if not (self.robot.fresh and self.robot.position_trusted):
+            self._departure_armed = False
+            self._exit_due = False
+            return
+        if outside is None:
+            # Nothing was sampled. Neither advance nor rewind: an unread position
+            # is not evidence that the robot went back inside, and inventing
+            # "inside" would let a lost packet close the door on a robot that is
+            # still in the cabinet.
+            return
+        if token is None or token == self._position_sample:
+            return
+        self._position_sample = token
+        if outside is False:
+            # Explicitly inside: this is the only thing that arms a departure.
+            self._departure_armed = True
+            self._exit_due = False
+        elif self._departure_armed:
+            self._exit_due = True
+            self._departure_armed = False
+        elif outside is True:
+            # A sample we never armed for (first reading after a restart, or a
+            # jump straight to "outside"). There was no observed departure, so
+            # there is nothing to close for.
+            self._exit_due = False
 
     def fault(self, reason: str, *, manual: bool = False) -> None:
         """Invalidate waiting operations; recovery of a sensor is not a reset."""

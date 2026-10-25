@@ -506,8 +506,40 @@ class GarageRuntime:
         if self.session.active and self.controller.phase in ('task_open','returning','docked_intermission'):
             self.controller.refresh()
             if self.controller.passage_allowed is not True:
-                self.controller.fault('manual_override',manual=True)
+                self._classify_external_close()
         self.schedule()
+
+    def _classify_external_close(self) -> None:
+        """Decide whether losing the open endpoint is a conflict or a courtesy.
+
+        ``manual_override`` exists so nothing steals the door from a person. But a
+        household member shutting the door after the robot has left the danger
+        zone is doing exactly what ``after_exit`` was about to do itself. Latching
+        a hold there only rejects the next schedule -- measured 2026-10-25, the
+        hold made the following clean fail with ``manual_override``.
+
+        Three outcomes, decided by where the robot actually is:
+
+        * confirmed outside -> record it and say so through the issue event, but
+          do not hold. The door is already shut; nothing needs to be driven.
+        * confirmed inside  -> hold. The robot may be shut in and unable to get
+          out, which is the case this guard exists for.
+        * unknown position  -> hold. Not knowing where the robot is, assuming the
+          door can stay shut is the one direction that must not fail open.
+        """
+        robot = self.controller.robot
+        outside = getattr(robot, 'outside_danger_zone', None)
+        located = bool(robot.fresh and robot.position_trusted)
+        if located and outside is True:
+            _LOGGER.info(
+                'Garage control: door closed externally after the robot left the '
+                'danger zone; recording without a hold (session=%s)',
+                self.session.session_id,
+            )
+            self.notify('external_close_after_exit')
+            return
+        self.controller.fault('manual_override',manual=True)
+
 
     def _registry_event(self, event: Any) -> None:
         """Follow registry identities without replaying door/robot operations.

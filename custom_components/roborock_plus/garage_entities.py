@@ -13,10 +13,8 @@ from .entity import RoborockEntity
 
 
 GARAGE_PHASES = (
-    "disabled", "recovering", "idle", "opening", "awaiting_start", "task_open",
-    "outside_closed", "returning", "pausing_return", "return_opening", "resuming_return",
-    "docked_intermission", "closing",
-    "waiting_close_permission", "blocked", "manual_hold",
+    "idle", "opening", "outside", "closing", "closed_outside",
+    "pausing_return", "resuming_return", "controlled_exit", "blocked",
 )
 BINARY_KEYS = (
     "garage_open_confirmed", "garage_closed_confirmed",
@@ -75,10 +73,9 @@ class GarageDiagnosticEntity(RoborockEntity):
         state = getattr(controller, "state", None)
         binding = getattr(runtime, "binding", None) or _configured_binding(self.coordinator) or {}
         attributes = {
-            "session_id": getattr(getattr(runtime, "session", None), "session_id", None),
             "operation_id": getattr(controller, "operation_id", None),
             "phase": self._phase,
-            "reason": self._setup_error or getattr(controller, "reason", None),
+            "reason": self._setup_error or getattr(controller, "last_error", None),
             "cover_entity_id": binding.get("cover_entity_id"),
             "task_door_mode": binding.get("task_door_mode", "hold_open"),
         }
@@ -108,7 +105,10 @@ class GarageBinarySensor(GarageDiagnosticEntity, BinarySensorEntity):
                 return True
             if controller is None:
                 return None
-            return bool(controller.reason or controller.phase in ("blocked", "manual_hold"))
+            # "Problem" now means the door evidence cannot be acted on, or a door
+            # command is mid-flight. It is not a latch: the next usable sample
+            # clears it without anyone doing anything.
+            return bool(controller.last_error or controller.phase == "blocked")
         if controller is None:
             return None
         if self._attr_translation_key == "garage_passage_allowed":

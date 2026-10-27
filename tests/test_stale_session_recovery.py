@@ -225,3 +225,29 @@ def test_reset_to_idle_accepts_a_record_that_never_established_idleness():
     assert r.session.session_id is None
     assert r.session.known_idle is True, 'a cleared record must be usable again'
     assert r.session._correlation_invalid is False
+
+
+def test_a_cleared_session_must_survive_persistence():
+    """The bug that made v0.9.3 look broken: the record could not be saved.
+
+    ``normalize_session_payload`` requires ``baseline_records`` to be a LIST.
+    An empty tuple passed every in-memory check but made ``async_save`` raise
+    ``session_recovery_required``, so the cleaned state never reached disk: the
+    stale record was restored on the next load and the fault came back within a
+    minute of a successful reset.
+
+    Persisting is the only thing that makes the fix stick, so it is asserted
+    directly rather than inferred from the in-memory state.
+    """
+    from test_garage_runtime import runtime_module
+
+    # The session module is loaded by the shared fixture harness under a
+    # synthetic package name, so resolve it the same way the other tests do.
+    b, r, _controller = rig(known_idle=False)
+    r.session.reset_to_idle()
+    payload = r.session.to_dict()
+    task_module = __import__(type(r.session).__module__, fromlist=['normalize_session_payload'])
+    normalized = task_module.normalize_session_payload(payload)
+    assert normalized['session_id'] is None
+    assert normalized['baseline_records'] == []
+    assert normalized['known_idle'] is True

@@ -651,6 +651,7 @@
               "closed_outside": "机器人已在外，门已关",
               "pausing_return": "返航中暂停，准备开门",
               "resuming_return": "门已开，继续返航",
+              "pausing_exit": "出区后暂停，准备关门",
               "controlled_exit": "受控出库中",
               "blocked": "门反馈不可用"
             }

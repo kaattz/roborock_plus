@@ -201,15 +201,21 @@ def test_a_docked_robot_never_counts_as_outside_even_if_the_flag_says_so():
 
 
 def test_the_family_permission_blocks_closing():
+    """A household that asked to close manually must be obeyed.
+
+    The refusal is reported as a blocked phase rather than raised, because this
+    runs inside the tick: an exception there would abort the whole update instead
+    of simply leaving the door as it is.
+    """
     rig = Rig(opened=True)
     rig.permit_close = False
     controller = rig.build()
     rig.outside = True
     rig.docked = False
-    with pytest.raises(GarageControlError) as err:
-        asyncio.run(controller.update_after_departure())
-    assert err.value.reason == 'close_not_allowed'
-    assert rig.calls == []
+    assert asyncio.run(controller.update_after_departure()) is True
+    assert rig.calls == [], 'the door must not be commanded'
+    assert controller.phase == 'blocked'
+    assert controller.last_error == 'close_not_allowed'
 
 
 # --- returning: pause, open, resume ------------------------------------------

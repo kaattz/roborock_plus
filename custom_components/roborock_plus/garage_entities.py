@@ -14,7 +14,7 @@ from .entity import RoborockEntity
 
 GARAGE_PHASES = (
     "idle", "opening", "outside", "closing", "closed_outside",
-    "pausing_return", "resuming_return", "controlled_exit", "blocked",
+    "pausing_return", "resuming_return", "pausing_exit", "controlled_exit", "blocked",
 )
 BINARY_KEYS = (
     "garage_open_confirmed", "garage_closed_confirmed",

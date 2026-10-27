@@ -56,6 +56,9 @@ def async_setup_services(hass: HomeAssistant) -> None:
         schema=cv.make_entity_service_schema({
             vol.Required("stage"): dict,
             vol.Optional("previous_receipt"): dict,
+            vol.Optional("timeout_minutes"): vol.All(
+                vol.Coerce(float), vol.Range(min=1, max=720)
+            ),
         }),
         func="async_start_garage_cleaning_stage",
         supports_response=SupportsResponse.ONLY,

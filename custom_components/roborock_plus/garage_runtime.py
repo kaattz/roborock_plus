@@ -452,17 +452,25 @@ class GarageRuntime:
     # -- stages (kept for the multi-stage scripts) ---------------------------
 
     async def async_start_stage(self, stage: dict, send: Callable, *, previous_receipt: dict | None = None) -> dict:
-        """Run one explicit stage and report its outcome.
+        """Run one stage and wait here until it finishes.
 
-        The old receipts carried interruption authority, which needed a task
-        session to mean anything. Without one they would be theatre, so this
-        reports the stage result and lets the script decide.
+        The old protocol returned a receipt immediately and the script then polled
+        the phase sensor for ``running`` -> ``succeeded``. That only worked because
+        a task session tracked progress between the two calls; without one there is
+        no ``running`` to observe, so the wait would hang until its own timeout.
+
+        Blocking instead is simpler and cannot get stuck: the caller waits for the
+        answer, and the answer is the real outcome.
         """
         command = stage.get('command')
         if command not in _CONTROLLED_EXIT_COMMANDS:
             raise GarageControlError('invalid_stage')
         try:
             await self.async_send(command, send)
+            await self._await_stage_completion(
+                float(stage.get('timeout_minutes',
+                                self.binding.get('stage_timeout_minutes', 180))) * 60
+            )
             self.stage_result, self.stage_reason = 'succeeded', None
         except Exception as err:  # noqa: BLE001 - reported to the script
             self.stage_result = 'failed'
@@ -473,6 +481,29 @@ class GarageRuntime:
         return {'runtime_id': 'position-driven', 'session_id': None,
                 'interruption_revision': 0,
                 'result': self.stage_result, 'reason': self.stage_reason}
+
+    async def _await_stage_completion(self, timeout_seconds: float) -> None:
+        """Block until the task this stage started is over.
+
+        "Over" means the robot reports no active task *and* is back on its dock.
+        Both are needed: a robot between passes sits docked mid-task with
+        ``task_active`` still true, and a robot past the zone with the task over is
+        still on its way home.
+
+        A timeout is deliberately not success. A stage that never reports
+        completion is one nobody can vouch for, and the script must hear that
+        rather than move on to the next room.
+        """
+        deadline = self.clock() + max(1.0, timeout_seconds)
+        while True:
+            if self._closed:
+                raise GarageControlError('control_unloaded')
+            self.controller.refresh()
+            if not self.controller.task_running() and self.controller.robot_docked():
+                return
+            if self.clock() >= deadline:
+                raise GarageControlError('stage_timeout')
+            await asyncio.sleep(1.0)
 
     def stage_attributes(self) -> dict[str, Any]:
         return {'stage_result': self.stage_result, 'stage_reason': self.stage_reason}

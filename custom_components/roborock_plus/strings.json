@@ -967,23 +967,15 @@
           "phase": {
             "name": "Garage phase",
             "state": {
-              "disabled": "Disabled",
-              "recovering": "Reconciling saved state",
               "idle": "Idle",
               "opening": "Opening door",
-              "awaiting_start": "Waiting for robot movement",
-              "task_open": "Task active, door held open",
-              "outside_closed": "Outside, door closed",
-              "returning": "Returning to dock",
-              "docked_intermission": "Docked during unfinished task",
+              "outside": "Door open, robot may pass",
               "closing": "Closing door",
-              "waiting_close_permission": "Waiting for household closing permission",
-              "blocked": "Blocked by fault",
-              "manual_hold": "Manual control hold",
-              "pausing_return": "Pausing return; waiting for confirmation",
-              "return_opening": "Return paused; opening door",
-              "resuming_return": "Door open; resuming the same return",
-              "controlled_exit": "Driving out of the cabinet"
+              "closed_outside": "Robot outside, door closed",
+              "pausing_return": "Pausing the return to open the door",
+              "resuming_return": "Door open, resuming the return",
+              "controlled_exit": "Driving out of the cabinet",
+              "blocked": "Door feedback unusable"
             }
           },
           "reason": {

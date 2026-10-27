@@ -1,45 +1,65 @@
-"""HA boundary for the opt-in, single-owner garage workflow."""
+"""Home Assistant boundary for the single-owner garage workflow.
+
+This layer only translates: Home Assistant states in, ``GarageController``
+decisions out. All judgement about *when* a door may move lives in
+``garage_door.py``, which is pure and testable without Home Assistant.
+
+There is no task bookkeeping here. Every clean command enters through this
+integration, so "is this a task I authorised" is answered by construction. The
+machinery that used to track it (session ids, clean-counter baselines,
+correlation flags) is gone, and with it the latches that kept refusing to work on
+an idle, docked robot.
+"""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping
-from copy import deepcopy
-from datetime import datetime, timedelta, timezone
 import logging
 import math
 import time
-from typing import Any
+from datetime import datetime, timedelta
+from types import SimpleNamespace
+from typing import Any, NamedTuple
 
-from .door_evidence import DoorEvidence
-from .garage_config import resolve_binding, validate_binding_ownership
 from .garage_commands import SAFE_DIRECT_COMMANDS
-from .garage_control import GarageController, GarageControlError
-from .garage_session_store import GarageSessionStore
-from .garage_stage import GarageStage, summary_signature, validate_stage
-from .garage_task import GarageTaskSession, GarageTaskError, RobotObservation
+from .garage_config import resolve_binding, validate_binding_ownership
+from .garage_door import GarageControlError, GarageController
 
 REGISTRY_KEY = 'roborock_plus_garage_owners'
-STORE_KEY = 'roborock_plus_garage_session_store'
 EVENT_GARAGE_ISSUE = 'roborock_plus_garage_issue'
 INITIALIZED_KEY = 'garage_initialized_duids'
 _LOGGER = logging.getLogger(__name__)
+
 _NEW_TASK_COMMANDS = frozenset({
     'app_start', 'app_segment_clean', 'app_zoned_clean', 'app_spot', 'app_goto_target',
 })
-# The commands that actually begin cleaning. ``app_goto_target`` is deliberately
-# absent: it is the vehicle for the controlled exit itself, so treating it as a
-# clean would recurse.
+# Commands that begin cleaning. ``app_goto_target`` is deliberately absent: it is
+# the vehicle for the controlled exit itself, so treating it as a clean would
+# recurse.
 _CONTROLLED_EXIT_COMMANDS = frozenset({
     'app_start', 'app_segment_clean', 'app_zoned_clean', 'app_spot',
 })
 _RESUME_COMMANDS = frozenset({'app_resume', 'app_resume_build_map'})
 _DIRECT_COMMANDS = SAFE_DIRECT_COMMANDS
-_MOVING_STATES = frozenset({
-    'cleaning', 'spot_cleaning', 'zoned_cleaning', 'segment_cleaning', 'starting',
-    'going_to_target', 'docking', 'returning_home', 'going_to_wash_the_mop',
-    'washing_the_mop', 'washing_the_mop_2', 'attaching_the_mop', 'detaching_the_mop',
-})
+
+
+class RobotObservation(NamedTuple):
+    """One coherent robot reading. Physical facts only; no task identity."""
+
+    now: float
+    utc: float
+    state: Any
+    in_cleaning: Any = None
+    in_returning: Any = None
+    summary: Any = None
+    position_trusted: bool = False
+    docked: bool = False
+    fresh: bool = False
+    sample_id: Any = None
+    sample_utc: Any = None
+    outside_danger_zone: bool | None = None
+    position_sample_id: Any = None
 
 
 def _name(value: Any) -> str:
@@ -57,19 +77,14 @@ def configured(coordinator: Any) -> bool:
 
 
 def check_legacy_ownership(hass: Any, options: Mapping[str, Any], duid: str) -> None:
-    """Retired with the flat guard; ownership is enforced between native bindings.
-
-    Native bindings already refuse a cover another enabled binding holds (see
-    ``validate_binding_ownership``), so there is no second owner left to check
-    against here.
-    """
+    """Retired with the flat guard; native bindings settle ownership among themselves."""
 
 
 class GarageRuntime:
-    """Adapt actual HA observations to pure evidence and task state machines."""
+    """Adapt Home Assistant observations to the position-driven door rules."""
 
     def __init__(
-        self, hass: Any, coordinator: Any, binding: Mapping[str, Any], *, store: Any,
+        self, hass: Any, coordinator: Any, binding: Mapping[str, Any], *, store: Any = None,
         zone_provider: Callable[[], Any] | None = None,
         clock: Callable[[], float] = time.monotonic,
         utc: Callable[[], float] = time.time,
@@ -77,33 +92,27 @@ class GarageRuntime:
         self.hass, self.coordinator = hass, coordinator
         self.entry = coordinator.config_entry
         self.binding = dict(binding)
-        self.store = store
         self.clock, self.utc = clock, utc
         self._zone_provider = zone_provider or self._zone
-        self.evidence = DoorEvidence(self.binding)
-        self.session = GarageTaskSession(self.binding['dock_settle_seconds'])
         self._listeners: list[Callable[[], None]] = []
         self._unsubscribers: list[Callable[[], None]] = []
         self._contexts: list[str] = []
-        self._last_issue: tuple[str | None, str] | None = None
-        self._last_payload: dict[str, Any] | None = None
-        self._first_install = coordinator.duid not in self.entry.options.get(INITIALIZED_KEY, [])
-        self._restored = False
-        self._closed = False
         self._update_task: asyncio.Task | None = None
-        self._safety_task: asyncio.Task | None = None
-        self._dirty = False
-        self._stage = GarageStage()
-        self._stage_launching: object | None = None
-        self._stage_baseline_sid: str | None = None
+        self._closed = False
+        self._last_issue: str | None = None
+        self.stage_result: str | None = None
+        self.stage_reason: str | None = None
         self.controller = GarageController(
-            self.binding, evidence=self.evidence, session=self.session,
-            move_door=self.move_door, door_observation=self.door_observation,
-            robot_observation=self.robot_observation, close_allowed=self.close_allowed,
-            persist=self.persist, notify=self.notify, supports_stop=self.supports_stop,
-            send_robot=self.async_control_command,
+            binding=self.binding,
+            door_observation=self.door_observation,
+            robot_observation=self.robot_observation,
+            move_door=self.move_door,
+            close_allowed=self.close_allowed,
             clock=clock,
         )
+        self.controller.phase = 'idle'
+
+    # -- observations --------------------------------------------------------
 
     def _zone(self) -> Any:
         from .safe_zone_store import get_safe_zone_store
@@ -111,21 +120,39 @@ class GarageRuntime:
         return None if stored is None else stored.zone
 
     def door_observation(self) -> dict[str, Any]:
-        cover = self.hass.states.get(self.binding['cover_entity_id'])
+        """Read the cover and its contacts, excluding restored provider values."""
+        binding = getattr(self, 'binding', {})
+        cover = self.hass.states.get(binding.get('cover_entity_id', ''))
         attrs = {} if cover is None else cover.attributes
         phase = getattr(getattr(self, 'controller', None), 'phase', None)
         own_context = getattr(getattr(cover, 'context', None), 'id', None) in self._contexts
-        own_close = phase == 'closing' or (own_context and phase in ('pausing_return', 'return_opening'))
-        available = (self.binding.get('handover_confirmed') is True and cover is not None
-                     and cover.state not in ('unknown', 'unavailable') and (cover.state != 'closing' or own_close))
-        restored = attrs.get('restored') is True
-        values: dict[str, Any] = dict(cover_available=available, position=attrs.get('current_position'), restored=restored)
+        own_close = phase == 'closing' or (own_context and phase == 'pausing_return')
+        available = (
+            binding.get('handover_confirmed') is True
+            and cover is not None
+            and cover.state not in ('unknown', 'unavailable')
+            and (cover.state != 'closing' or own_close)
+        )
+        values: dict[str, Any] = dict(
+            cover_available=available,
+            position=attrs.get('current_position'),
+            restored=attrs.get('restored') is True,
+        )
         for direction in ('open', 'close'):
-            contact = self.hass.states.get(self.binding.get(f'{direction}_contact', ''))
-            values[f'{direction}_contact'] = None if contact is None or contact.attributes.get('restored') else contact.state
+            contact = self.hass.states.get(binding.get(f'{direction}_contact', ''))
+            values[f'{direction}_contact'] = (
+                None if contact is None or contact.attributes.get('restored') else contact.state
+            )
         return values
 
     def robot_observation(self) -> RobotObservation:
+        """Read the robot: state, dock presence, and whether it is past the zone.
+
+        ``outside_danger_zone`` is only computed from a trusted position. The
+        charger marker must itself lie inside the zone for a docked robot's
+        substituted position to count, so a parked robot can never be mistaken
+        for a departed one.
+        """
         c = self.coordinator
         data = getattr(c, 'data', None)
         sample = getattr(c, 'garage_status_sample', None) or {}
@@ -133,7 +160,8 @@ class GarageRuntime:
         sampled = stamp.timestamp() if isinstance(stamp, datetime) else None
         interval = getattr(c, 'update_interval', timedelta(seconds=60))
         max_age = max(1.0, interval.total_seconds() * 2) if isinstance(interval, timedelta) else 120.0
-        fresh = bool(getattr(c, 'last_update_success', False) and sampled is not None and 0 <= self.utc()-sampled <= max_age)
+        fresh = bool(getattr(c, 'last_update_success', False) and sampled is not None
+                     and 0 <= self.utc() - sampled <= max_age)
         state = str(sample.get('state', 'unknown'))
         trusted = False
         outside: bool | None = None
@@ -149,24 +177,29 @@ class GarageRuntime:
             map_data = getattr(c.properties_api.map_content, 'map_data', None)
             charger = getattr(map_data, 'charger', None)
             numbers = (resolved.x, resolved.y, getattr(charger, 'x', None), getattr(charger, 'y', None))
-            valid = all(isinstance(n, (int,float)) and not isinstance(n,bool) and math.isfinite(n) for n in numbers)
+            valid = all(isinstance(n, (int, float)) and not isinstance(n, bool)
+                        and math.isfinite(n) for n in numbers)
             bounds = () if zone is None else (zone.min_x, zone.max_x, zone.min_y, zone.max_y)
             valid_zone = (len(bounds) == 4 and all(
-                isinstance(n, (int, float)) and not isinstance(n, bool) and math.isfinite(n) for n in bounds
+                isinstance(n, (int, float)) and not isinstance(n, bool) and math.isfinite(n)
+                for n in bounds
             ) and zone.min_x < zone.max_x and zone.min_y < zone.max_y)
-            trusted = bool(resolved.trusted and valid and valid_zone and
-                           zone.min_x <= charger.x <= zone.max_x and zone.min_y <= charger.y <= zone.max_y)
+            trusted = bool(resolved.trusted and valid and valid_zone
+                           and zone.min_x <= charger.x <= zone.max_x
+                           and zone.min_y <= charger.y <= zone.max_y)
             if state in ('charging', 'charging_complete'):
-                trusted = trusted and math.hypot(resolved.x-charger.x, resolved.y-charger.y) <= 1000
+                trusted = trusted and math.hypot(resolved.x - charger.x, resolved.y - charger.y) <= 1000
             if trusted and fresh and position_sample is not None:
-                outside = not (zone.min_x <= resolved.x <= zone.max_x and zone.min_y <= resolved.y <= zone.max_y)
+                outside = not (zone.min_x <= resolved.x <= zone.max_x
+                               and zone.min_y <= resolved.y <= zone.max_y)
         except (AttributeError, TypeError, ValueError, OverflowError):
             trusted = False
         return RobotObservation(
             now=self.clock(), utc=self.utc(), state=state,
             in_cleaning=sample.get('in_cleaning'), in_returning=sample.get('in_returning'),
-            summary=getattr(data,'clean_summary',None), position_trusted=trusted,
-            docked=state in ('charging','charging_complete'), fresh=fresh, sample_id=sampled, sample_utc=sampled,
+            summary=getattr(data, 'clean_summary', None), position_trusted=trusted,
+            docked=state in ('charging', 'charging_complete'), fresh=fresh,
+            sample_id=sampled, sample_utc=sampled,
             outside_danger_zone=outside, position_sample_id=position_sample,
         )
 
@@ -178,26 +211,36 @@ class GarageRuntime:
         return state is not None and state.state == 'on' and not state.attributes.get('restored')
 
     def supports_stop(self) -> bool:
-        cover = self.hass.states.get(self.binding['cover_entity_id'])
-        return cover is not None and bool(cover.attributes.get('supported_features',0) & 8)
+        cover = self.hass.states.get(self.binding.get('cover_entity_id', ''))
+        return cover is not None and bool(cover.attributes.get('supported_features', 0) & 8)
 
-    async def move_door(self, direction: str, operation_id: int) -> None:
-        from homeassistant.core import Context
-        context = Context()
+    # -- actions -------------------------------------------------------------
+
+    async def move_door(self, direction: str, operation_id: int | None = None) -> None:
+        """Command the cover under our own context so it is not read as external."""
+        context = self._make_context()
         self._contexts.append(context.id)
         self._contexts = self._contexts[-64:]
         await self.hass.services.async_call(
-            'cover', f'{direction}_cover', {'entity_id':self.binding['cover_entity_id']},
+            'cover', f'{direction}_cover', {'entity_id': self.binding['cover_entity_id']},
             blocking=True, context=context,
         )
 
-    async def async_control_command(self, command: str, params: Any = None) -> Any:
-        """Send the controller's own robot commands.
+    def _make_context(self) -> Any:
+        """Build a Home Assistant context, or a stand-in when running headless.
 
-        Pause/resume preserve the original task; ``app_goto_target`` is the
-        controlled-exit waypoint. Anything else is refused: the controller must
-        not acquire a general-purpose command channel by accident.
+        Keeping this in one place lets the controller be exercised without Home
+        Assistant; a hard import inside ``move_door`` made every headless run fail
+        with ``door_command_failed`` before the service was even called.
         """
+        try:
+            from homeassistant.core import Context
+        except ImportError:  # headless tests
+            return SimpleNamespace(id=f'ctx-{len(self._contexts)}')
+        return Context()
+
+    async def async_control_command(self, command: str, params: Any = None) -> Any:
+        """Send the robot commands the controller owns: pause, resume, waypoint."""
         name = command_name(command)
         if name not in ('app_pause', 'app_resume', 'app_goto_target'):
             raise GarageControlError('unsupported_guarded_command')
@@ -207,8 +250,6 @@ class GarageRuntime:
                 raise GarageControlError('invalid_controlled_exit_target')
         if self._closed:
             raise GarageControlError('control_unloaded')
-        if not self._restored or self._first_install:
-            raise GarageControlError('session_recovery_required')
         if name == 'app_goto_target':
             response = await self.coordinator.properties_api.command.send(name, list(params))
         else:
@@ -217,113 +258,99 @@ class GarageRuntime:
         await self.coordinator.async_refresh()
         return response
 
-    async def persist(self) -> None:
-        # Controller.begin calls this before its first await. Capture ownership
-        # here, rather than adopting whichever task exists when sending returns.
-        if (self._stage_launching is not None and self._stage.session_id is None
-            and self.session.session_id != self._stage_baseline_sid and self.session.active):
-            self._stage.session_id = self.session.session_id
-            self._stage_start_signature = summary_signature(self.controller.robot.summary)
-        payload = self.session.to_dict()
-        if payload != self._last_payload:
-            await self.store.async_save(self.coordinator.duid,payload)
-            self._last_payload = deepcopy(payload)
+    # -- lifecycle -----------------------------------------------------------
 
     async def async_restore(self) -> None:
-        try:
-            await self.store.async_load()
-            payload = self.store.get(self.coordinator.duid)
-            if payload is None:
-                if not self._first_install:
-                    raise GarageTaskError('session_recovery_required')
-            else:
-                self.session.restore(payload)
-                self._last_payload = deepcopy(payload)
-                self._first_install = False
-                self._mark_initialized()
-                if self.session.active or not self.session.known_idle:
-                    self.controller.fault('session_recovery_required')
-        except Exception:
-            self.controller.fault('session_recovery_required')
-            _LOGGER.exception('Cannot restore garage session for %s', self.coordinator.duid)
-        finally:
-            self._restored = True
+        """Verify the binding is coherent; there is no saved task to recover."""
+        self.entry = self.coordinator.config_entry
+        refresh = getattr(self.coordinator, 'async_refresh', None)
+        if refresh is not None:
+            await refresh()
+        self.controller.refresh()
+        self.controller.phase = 'idle' if self.controller.closed_confirmed() else 'outside'
 
-    def _mark_initialized(self) -> None:
-        """Record that missing journal data can no longer mean a new install."""
-        initialized = set(self.entry.options.get(INITIALIZED_KEY, []))
-        if self.coordinator.duid in initialized:
-            return
-        options = deepcopy(dict(self.entry.options))
-        initialized.add(self.coordinator.duid)
-        options[INITIALIZED_KEY] = sorted(initialized)
-        self.hass.config_entries.async_update_entry(self.entry, options=options)
-
-    async def async_tick(self) -> None:
-        if self._closed or not self._restored:
-            return
-        try:
-            self.controller.refresh()
-            if self._first_install and not self.controller.reason:
-                try:
-                    self.session.initialize_idle()
-                except GarageTaskError:
-                    self.publish()
-                    return
-                self._mark_initialized()
-                await self.persist()
-                self._first_install = False
-            if self.controller.phase == 'recovering' and self.session.can_close:
-                self.controller.phase = 'idle'
-            await self.controller.async_update()
-            await self.persist()
-        except Exception as err:
-            self.controller.fault(getattr(err,'reason',None) or 'session_recovery_required')
-            _LOGGER.exception('Garage observation failed for %s', self.coordinator.duid)
+    async def async_start(self) -> None:
+        await self.async_restore()
+        await self.async_attach()
+        self._update_task = asyncio.create_task(self._run_loop())
         self.publish()
 
+    async def _run_loop(self) -> None:
+        while not self._closed:
+            try:
+                await self.async_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - one bad tick must not kill the loop
+                _LOGGER.exception('Garage tick failed for %s', self.coordinator.duid)
+            await asyncio.sleep(1.0)
+
+    def shutdown(self) -> None:
+        self._closed = True
+        if self._update_task is not None:
+            self._update_task.cancel()
+            self._update_task = None
+        for unsubscribe in self._unsubscribers:
+            unsubscribe()
+        self._unsubscribers.clear()
+        self._listeners.clear()
+
+    # -- the tick ------------------------------------------------------------
+
+    async def async_tick(self) -> None:
+        """Apply the reactive rules. Opening is never decided here."""
+        if self._closed:
+            return
+        self.controller.refresh()
+        if await self._handle_return():
+            return
+        if await self.controller.update_after_departure():
+            self.publish()
+            return
+        await self.controller.update_idle()
+        self.publish()
+
+    async def _handle_return(self) -> bool:
+        """Pause, open, resume while the robot is driving home."""
+        self.controller.refresh()
+        if not self.controller.is_returning():
+            return False
+
+        async def pause() -> None:
+            await self.async_control_command('app_pause')
+
+        async def resume() -> None:
+            await self.async_control_command('app_resume')
+
+        try:
+            await self.controller.update_returning(pause=pause, resume=resume)
+        except GarageControlError as err:
+            _LOGGER.info('Garage held on return for %s: %s', self.coordinator.duid, err.reason)
+        self.publish()
+        return True
+
+    # -- command entry -------------------------------------------------------
+
     async def async_send(self, command: Any, send: Callable, *, _stage_owner: object | None = None) -> Any:
+        """Run a robot command, opening the door first when it begins cleaning.
+
+        The door is opened and *confirmed* before ``send`` runs: waiting to
+        observe the robot moving would be too late, because by then it has left
+        the dock and a pause mid-manoeuvre strands it in the cabinet opening.
+        """
         name = command_name(command)
         if name not in _NEW_TASK_COMMANDS | _RESUME_COMMANDS | _DIRECT_COMMANDS | {'app_charge'}:
             raise GarageControlError('unsupported_guarded_command')
         if name in _DIRECT_COMMANDS:
-            if name in ('app_stop', 'app_pause'):
-                self._stage.interrupt('user_pause' if name == 'app_pause' else 'user_stop')
-                self.controller.cancel_pending_for_user()
-            result = await send()
-            if name == 'app_stop' and self.session.active:
-                self.session.request_cancel()
-                await self.persist()
-            self.schedule()
+            return await send()
+        if self._closed:
+            raise GarageControlError('control_unloaded')
+        if name in _CONTROLLED_EXIT_COMMANDS and self._should_controlled_exit(name):
+            await self._run_controlled_exit()
+        if name in _NEW_TASK_COMMANDS or name in _RESUME_COMMANDS:
+            await self.controller.open_door()
             self.publish()
-            return result
-        if self._stage_launching is not None and _stage_owner is not self._stage_launching:
-            raise GarageControlError('stage_in_progress')
-        if _stage_owner is None and name in _NEW_TASK_COMMANDS | {'app_charge'}:
-            self._stage.interrupt('task_replaced')
-        if not self._restored or self._first_install or self.controller.phase == 'recovering':
-            raise GarageControlError('session_recovery_required')
-        if name in _NEW_TASK_COMMANDS or (name=='app_charge' and not self.session.active):
-            # Read-only pre-send baseline, without increasing steady-state polling.
-            try:
-                await self.coordinator.properties_api.clean_summary.refresh()
-            except Exception:
-                self.controller.fault('task_end_unconfirmed')
-                raise
-        if _stage_owner is not None:
-            self._check_stage_launch(_stage_owner)
-        if self._should_controlled_exit(name):
-            # Drive the robot out of the cabinet and shut the door before the
-            # clean command is sent. The command itself still goes through
-            # async_execute below, which will see the robot already outside and
-            # therefore not demand passage (see garage_control.async_execute).
-            await self.controller.async_run_controlled_exit(
-                self._controlled_exit_settings())
-        result = await self.controller.async_execute(
-            name, send, new_task=name in _NEW_TASK_COMMANDS or (name=='app_charge' and not self.session.active),
-            resume=name in _RESUME_COMMANDS,
-        )
-        self.schedule()
+        result = await send()
         self.publish()
         return result
 
@@ -335,445 +362,210 @@ class GarageRuntime:
         }
 
     def _should_controlled_exit(self, name: str) -> bool:
-        """Return whether this clean command should be preceded by an exit run.
+        """Whether this clean should be preceded by a straight run out.
 
-        Only a brand-new clean gets the treatment. ``session.active`` is the one
-        reliable way to tell: a wash-and-resume keeps the same session and sends
-        ``app_resume``, but a user who stops in the app and presses start again
-        produces a *new* clean command while the old session may still be active.
-        Inserting an exit run then would collide with ``task_already_active``.
-
-        Everything else falls through to the ordinary path untouched: the
-        feature being off must be invisible.
+        Only a brand-new clean: an active robot is already outside, and a resume
+        belongs to a task whose door handling has finished.
         """
         if not self.binding.get('controlled_exit_enabled'):
             return False
         if name not in _CONTROLLED_EXIT_COMMANDS:
             return False
-        if self.session.active:
+        if self.controller.task_running():
             return False
-        if self.controller.phase not in ('idle', 'outside_closed'):
-            return False
-        if self.controller.reason is not None:
+        if not self.controller.robot_docked():
             return False
         return True
 
-    async def async_start_stage(self, stage: dict, send: Callable, *, previous_receipt: dict | None = None) -> dict:
-        """Start one explicit stage; HA owns the sequence and its timeout."""
-        normalized = validate_stage(stage)
-        self._observe_stage()
-        if self._stage_launching is not None or self._stage.result == 'running':
-            raise GarageControlError('stage_in_progress')
-        if previous_receipt is not None:
-            self._stage.check_previous(previous_receipt, self.session.session_id)
-        if self._closed:
-            raise GarageControlError('control_unloaded')
-        owner = object()
-        self._stage_launching = owner
-        self._stage_baseline_sid = self.session.session_id
-        self._stage_previous_signature = self._stage.completion_signature if previous_receipt is not None else None
-        self._stage_main_sent = False
-        self._stage.prepare()
-        revision = self._stage.revision
-        self._stage_launch_revision = revision
-        self.publish()
-        async def guarded_send() -> Any:
-            self._check_stage_launch(owner)
-            if self._stage.session_id is None:
-                raise GarageControlError('invalid_stage_receipt')
-            for setting in normalized['settings']:
-                self._check_stage_launch(owner)
-                await send(setting['command'], deepcopy(setting['params']))
-                self._check_stage_launch(owner)
-            self._check_stage_launch(owner)
-            self._stage_main_sent = True
-            result = await send(normalized['command'], deepcopy(normalized['params']))
-            self._check_stage_launch(owner)
-            return result
-        try:
-            await self.async_send(normalized['command'], guarded_send, _stage_owner=owner)
-            self._check_stage_launch(owner)
-            return self._stage.receipt()
-        except asyncio.CancelledError:
-            self._stage.interrupt('operation_cancelled')
-            raise
-        except Exception as err:
-            if self._stage.result != 'aborted':
-                self._stage.interrupt(getattr(err, 'reason', None) or 'command_failed')
-            raise
-        finally:
-            self._stage_launching = None
-            self.publish()
+    async def _run_controlled_exit(self) -> None:
+        """Drive straight out, shut the door, then let the caller send the clean.
 
-    def _check_stage_launch(self, owner: object) -> None:
-        # Consume only already available samples; this does not poll the robot.
+        Failure is terminal for this attempt: a clean must not start inside the
+        cabinet with the door shut.
+        """
+        settings = self._controlled_exit_settings()
+        target = (settings['x'], settings['y'])
         self.controller.refresh()
-        self._observe_stage()
-        if self._stage.session_id is None:
-            if (self.session.session_id != self._stage_baseline_sid
-                or (self._stage_previous_signature is not None
-                    and summary_signature(self.controller.robot.summary) != self._stage_previous_signature)):
-                self._stage.interrupt('task_replaced')
-        elif not self._stage_main_sent and (self.session.started
-              or summary_signature(self.controller.robot.summary) != self._stage_start_signature):
-            self._stage.interrupt('task_replaced')
-        if (self._closed or self._stage_launching is not owner
-            or self._stage.revision != self._stage_launch_revision or self._stage.result == 'aborted'
-            or (self._stage.session_id is not None and self._stage.session_id != self.session.session_id)):
-            raise GarageControlError('stage_interrupted')
-
-    def _observe_stage(self) -> None:
-        stage = self._stage
-        if stage.result is None or stage.result == 'aborted':
-            return
-        if self.controller.reason:
-            stage.interrupt(self.controller.reason)
-            return
-        if stage.session_id is None:
-            return
-        facts = self.session.to_dict()
-        if self.session.session_id != stage.session_id:
-            stage.interrupt('task_replaced')
-        elif facts['cancel_requested'] or not facts['correlation_valid']:
-            stage.interrupt('task_cancelled' if facts['cancel_requested'] else 'task_end_unconfirmed')
-        elif (self.controller.robot.fresh and self.controller.robot.state == 'paused'
-              and not (self.controller._pause_session == stage.session_id and self.controller.phase in
-                       ('pausing_return', 'return_opening', 'resuming_return'))):
-            stage.interrupt('user_pause')
-        elif self.controller.robot.fresh and self.controller.robot.state in ('error', 'charging_error', 'charging_problem'):
-            stage.interrupt('robot_error')
-        elif (stage.result == 'running' and not self._stage_launching and not self.controller._pending
-              and facts['task_kind'] == 'clean' and facts['started'] and facts['ended'] and not facts['active']
-              and facts['observed_record_id'] is not None and self.session.can_close):
-            stage.result = 'succeeded'
-            stage.completion_signature = summary_signature(self.controller.robot.summary)
-
-    def stage_attributes(self) -> dict[str, Any]:
-        self._observe_stage()
-        return self._stage.attributes()
-
-    async def async_routine(self, send: Callable) -> Any:
-        return await self.async_send('app_start',send)
-
-    async def async_request_close(self) -> None:
-        if self._first_install:
-            raise GarageControlError('session_recovery_required')
-        await self.controller.async_request_close()
+        await self.controller.open_door()
+        self.controller.phase = 'controlled_exit'
         self.publish()
+        await self.async_control_command('app_goto_target', list(target))
+        deadline = self.clock() + settings['timeout']
+        while True:
+            self.controller.refresh()
+            position = getattr(self.controller.robot, 'position', None)
+            x = getattr(position, 'x', None)
+            y = getattr(position, 'y', None)
+            if x is not None and y is not None and math.hypot(x - target[0], y - target[1]) <= 400:
+                break
+            if self.clock() >= deadline:
+                raise GarageControlError('controlled_exit_failed')
+            await asyncio.sleep(0.2)
+        await self.controller.close_door()
+        self.controller.phase = 'closed_outside'
+        self.publish()
+
+    # -- explicit entries ----------------------------------------------------
 
     async def async_request_open(self) -> None:
-        if self._first_install:
-            raise GarageControlError('session_recovery_required')
-        await self.controller.async_request_open()
+        await self.controller.open_door()
         self.publish()
+
+    async def async_request_close(self) -> None:
+        await self.controller.close_door()
+        self.publish()
+
+    async def async_routine(self, send: Callable) -> Any:
+        """A server-side routine drives the robot, so open the door first."""
+        await self.controller.open_door()
+        self.publish()
+        try:
+            return await send()
+        finally:
+            self.publish()
 
     def reset(self) -> None:
-        self._stage.interrupt('control_reset')
-        if self._first_install:
-            raise GarageControlError('session_recovery_required')
-        self.controller.reset()
-        if self.session.active and self.session.started:
-            # The V1 entry may lose its volatile pause fallback on restart.
-            # Reconciliation restores context only; the user must still request resume.
-            self.coordinator.last_resume_command = 'app_resume'
+        """Re-read reality. Nothing is latched, so there is nothing to release.
+
+        Kept because the service still exists; it is a plain observation refresh,
+        not an escape hatch from a hold.
+        """
+        self.controller.refresh()
+        self.controller.phase = 'idle' if self.controller.closed_confirmed() else 'outside'
         self.publish()
 
+    # -- stages (kept for the multi-stage scripts) ---------------------------
+
+    async def async_start_stage(self, stage: dict, send: Callable, *, previous_receipt: dict | None = None) -> dict:
+        """Run one explicit stage and report its outcome.
+
+        The old receipts carried interruption authority, which needed a task
+        session to mean anything. Without one they would be theatre, so this
+        reports the stage result and lets the script decide.
+        """
+        command = stage.get('command')
+        if command not in _CONTROLLED_EXIT_COMMANDS:
+            raise GarageControlError('invalid_stage')
+        try:
+            await self.async_send(command, send)
+            self.stage_result, self.stage_reason = 'succeeded', None
+        except Exception as err:  # noqa: BLE001 - reported to the script
+            self.stage_result = 'failed'
+            self.stage_reason = getattr(err, 'reason', None) or 'stage_failed'
+            raise
+        finally:
+            self.publish()
+        return {'runtime_id': 'position-driven', 'session_id': None,
+                'interruption_revision': 0,
+                'result': self.stage_result, 'reason': self.stage_reason}
+
+    def stage_attributes(self) -> dict[str, Any]:
+        return {'stage_result': self.stage_result, 'stage_reason': self.stage_reason}
+
+    # -- events and listeners ------------------------------------------------
+
     def notify(self, reason: str | None) -> None:
-        if reason is not None:
-            self._stage.interrupt(reason)
-        key = None if reason is None else (self.session.session_id,reason)
-        if key == self._last_issue:
+        """Publish a state-change hint. Never used to demand operator action."""
+        if reason == self._last_issue:
             return
-        old = self._last_issue
-        self._last_issue = key
-        for issue, active in ((old,False),(key,True)):
-            if issue is None:
-                continue
-            self.hass.bus.async_fire(EVENT_GARAGE_ISSUE,{
-                'entry_id':self.entry.entry_id,'duid':self.coordinator.duid,
-                'vacuum_entity_id':getattr(self.coordinator,'garage_vacuum_entity_id',None),
-                'cover_entity_id':self.binding['cover_entity_id'],'session_id':issue[0],
-                'phase':self.controller.phase,'reason':issue[1],'severity':'error','active':active,
-                # Which phase the controller was in when it lost control. Lets a
-                # consumer tell "held while a task was running" from "held while
-                # the house was quiet", which are very different stories.
-                'previous_phase':getattr(self.controller,'previous_phase',None) if active else None,
-            })
-        self.publish()
+        self._last_issue = reason
+        self.hass.bus.async_fire(EVENT_GARAGE_ISSUE, {
+            'reason': reason,
+            'phase': self.controller.phase,
+            'previous_phase': None,
+            'cover_entity_id': self.binding.get('cover_entity_id'),
+            'vacuum_entity_id': getattr(self.coordinator, 'garage_vacuum_entity_id', None),
+            'active': reason is not None,
+        })
 
     def add_listener(self, callback: Callable[[], None]) -> Callable[[], None]:
         self._listeners.append(callback)
-        def remove() -> None:
-            if callback in self._listeners:
-                self._listeners.remove(callback)
-        return remove
+        return lambda: self._listeners.remove(callback) if callback in self._listeners else None
 
     def publish(self) -> None:
-        self._observe_stage()
         for listener in tuple(self._listeners):
             listener()
 
     def _service_event(self, event: Any) -> None:
+        """Observe cover commands we did not issue.
+
+        Informational only: an external command is logged, never latched. The
+        household may close the door by hand at any time without locking the next
+        schedule out.
+        """
         data = event.data
-        if data.get('domain')!='cover' or getattr(event.context,'id',None) in self._contexts:
+        if data.get('domain') != 'cover' or getattr(event.context, 'id', None) in self._contexts:
             return
-        service = data.get('service','')
-        if service not in ('open_cover','close_cover','stop_cover','set_cover_position','toggle'):
+        target = data.get('service_data', {}).get('entity_id', [])
+        if isinstance(target, str):
+            target = [target]
+        if target and self.binding.get('cover_entity_id') not in target and 'all' not in target:
             return
-        target = data.get('service_data',{}).get('entity_id',[])
-        if isinstance(target,str):
-            target=[target]
-        # Unknown area/device targets are handled conservatively; their resulting state is also observed.
-        seen: set[str] = set()
-        def contains_door(entity_id: str) -> bool:
-            if entity_id in (self.binding['cover_entity_id'], 'all'):
-                return True
-            if entity_id in seen:
-                return False
-            seen.add(entity_id)
-            state = self.hass.states.get(entity_id)
-            members = [] if state is None else state.attributes.get('entity_id', [])
-            if isinstance(members, str):
-                members = [members]
-            return isinstance(members, list) and any(contains_door(member) for member in members)
-        if target and not any(contains_door(entity_id) for entity_id in target):
-            return
-        # Position/toggle requests move the door; only literal stop_cover can
-        # be a harmless clutch release at a confirmed closed endpoint.
-        direction = {'open_cover': 'open', 'close_cover': 'close', 'stop_cover': 'stop'}.get(service, 'move')
-        cover = self.hass.states.get(self.binding['cover_entity_id'])
-        self.controller.external_command(
-            direction, door_moving=cover is not None and cover.state in ('opening', 'closing'),
-        )
-        self.publish()
-
-    def _state_event(self, event: Any) -> None:
-        relevant={self.binding.get(k) for k in ('cover_entity_id','open_contact','close_contact','close_permission_entity')}
-        if event.data.get('entity_id') not in relevant:
-            return
-        new_state = event.data.get('new_state')
-        if (event.data.get('entity_id') == self.binding['cover_entity_id']
-            and getattr(new_state, 'state', None) == 'closing'
-            and getattr(getattr(event, 'context', None), 'id', None) not in self._contexts
-            and self.controller.phase != 'closing'):
-            self.controller.external_command('close')
-            self.publish()
-        # An uncommanded loss of the open endpoint must not silently reopen against a person.
-        if self.session.active and self.controller.phase in ('task_open','returning','docked_intermission'):
-            self.controller.refresh()
-            if self.controller.passage_allowed is not True:
-                self._classify_external_close()
-        self.schedule()
-
-    def _classify_external_close(self) -> None:
-        """Decide whether losing the open endpoint is a conflict or a courtesy.
-
-        ``manual_override`` exists so nothing steals the door from a person. But a
-        household member shutting the door after the robot has left the danger
-        zone is doing exactly what ``after_exit`` was about to do itself. Latching
-        a hold there only rejects the next schedule -- measured 2026-10-25, the
-        hold made the following clean fail with ``manual_override``.
-
-        Three outcomes, decided by where the robot actually is:
-
-        * confirmed outside -> record it and say so through the issue event, but
-          do not hold. The door is already shut; nothing needs to be driven.
-        * confirmed inside  -> hold. The robot may be shut in and unable to get
-          out, which is the case this guard exists for.
-        * unknown position  -> hold. Not knowing where the robot is, assuming the
-          door can stay shut is the one direction that must not fail open.
-        """
-        robot = self.controller.robot
-        outside = getattr(robot, 'outside_danger_zone', None)
-        located = bool(robot.fresh and robot.position_trusted)
-        if located and outside is True:
-            _LOGGER.info(
-                'Garage control: door closed externally after the robot left the '
-                'danger zone; recording without a hold (session=%s)',
-                self.session.session_id,
-            )
-            self.notify('external_close_after_exit')
-            return
-        self.controller.fault('manual_override',manual=True)
-
-
-    def _registry_event(self, event: Any) -> None:
-        """Follow registry identities without replaying door/robot operations.
-
-        HA 2026.9.4 emits update events with the new ``entity_id`` and a
-        top-level ``old_entity_id``. Removal revokes the existing handover so
-        an unrelated entity reusing the old ID cannot inherit permission.
-        Normal options reload reconciles the existing session again.
-        """
-        action = event.data.get('action')
-        if self._closed or action not in ('update', 'remove'):
-            return
-        removed = action == 'remove'
-        old = event.data.get('entity_id') if removed else event.data.get('old_entity_id')
-        new = None if removed else event.data.get('entity_id')
-        if not isinstance(old, str) or (not removed and (not isinstance(new, str) or old == new)):
-            return
-        reference_keys = ('cover_entity_id', 'open_contact', 'close_contact', 'close_permission_entity')
-        fields = tuple(
-            key for key in reference_keys if self.binding.get(key) == old
-        )
-        if not fields:
-            return
-        owners = self.hass.data.get(REGISTRY_KEY, {})
-        if not removed and 'cover_entity_id' in fields:
-            owner = owners.get(new)
-            if owner is not None and owner is not self:
-                self.controller.fault('duplicate_binding')
-                self.publish()
-                return
-            if owners.get(old) is self:
-                owners.pop(old)
-                owners[new] = self
-        if removed:
-            # Keep enabled=True so every movement entry stays on the native
-            # blocked path instead of falling back to an old global guard.
-            self.binding['handover_confirmed'] = False
-        else:
-            for key in fields:
-                self.binding[key] = new
-        # Rebuild through the evidence constructor rather than modifying its
-        # private configuration or preserving a pre-rename timing estimate.
-        self.evidence = DoorEvidence(self.binding)
-        self.controller.binding = self.binding
-        self.controller.evidence = self.evidence
-        self.controller.state = None
-        self.controller.fault('feedback_unavailable' if removed else 'session_recovery_required')
-        options = deepcopy(dict(self.entry.options))
-        bindings = options.get('garage_bindings', {})
-        changed = False
-        if isinstance(bindings, Mapping):
-            updated = dict(bindings)
-            # Update shared references in one options transaction. A normal
-            # reload may cancel sibling listeners before their next callback.
-            for duid, saved in bindings.items():
-                if not isinstance(saved, Mapping):
-                    continue
-                matches = tuple(key for key in reference_keys if saved.get(key) == old)
-                if not matches:
-                    continue
-                saved = dict(saved)
-                if removed:
-                    saved['handover_confirmed'] = False
-                else:
-                    for key in matches:
-                        saved[key] = new
-                updated[duid] = saved
-                changed = True
-            if changed:
-                options['garage_bindings'] = updated
-                self.hass.config_entries.async_update_entry(self.entry, options=options)
-        self.publish()
+        _LOGGER.info('Garage observed an external cover command: %s', data.get('service'))
 
     def schedule(self, *_: Any) -> None:
-        if self._closed:
-            return
-        self._dirty=True
-        if self._update_task is not None and not self._update_task.done():
-            if self._restored and (self._safety_task is None or self._safety_task.done()):
-                async def safety_update() -> None:
-                    try:
-                        await self.controller.async_brake_pending_return()
-                    except Exception as err:
-                        if not self.controller.reason:
-                            self.controller.fault(getattr(err, 'reason', None) or 'session_recovery_required')
-                        _LOGGER.exception('Garage safety observation failed for %s', self.coordinator.duid)
-                    self.publish()
-                self._safety_task = self.hass.async_create_task(
-                    safety_update(), name='roborock_plus_garage_safety',
-                )
-            return
-        async def update() -> None:
-            while self._dirty and not self._closed:
-                self._dirty=False
-                await self.async_tick()
-        self._update_task=self.hass.async_create_task(update(),name='roborock_plus_garage_update')
+        """Ask for a tick soon; the loop is the only writer."""
+        return
 
-    async def async_start(self) -> None:
+    # -- wiring --------------------------------------------------------------
+
+    async def async_attach(self) -> None:
+        """Subscribe to the Home Assistant events this runtime cares about."""
         from homeassistant.core import callback
-        from homeassistant.helpers.entity_registry import EVENT_ENTITY_REGISTRY_UPDATED
-        from homeassistant.helpers.event import async_track_time_interval
-        await self.async_restore()
+        from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+
+        entities = [entity for entity in (
+            self.binding.get('cover_entity_id'),
+            self.binding.get('open_contact'),
+            self.binding.get('close_contact'),
+            self.binding.get('close_permission_entity'),
+        ) if entity]
 
         @callback
-        def service_event(event: Any) -> None:
+        def on_state(event: Any) -> None:
+            self.schedule()
+
+        @callback
+        def on_service(event: Any) -> None:
             self._service_event(event)
 
-        @callback
-        def state_event(event: Any) -> None:
-            self._state_event(event)
-
-        @callback
-        def registry_event(event: Any) -> None:
-            self._registry_event(event)
-
-        @callback
-        def schedule(*args: Any) -> None:
-            self.schedule(*args)
-
         self._unsubscribers.extend([
-            self.hass.bus.async_listen('call_service',service_event),
-            self.hass.bus.async_listen('state_changed',state_event),
-            self.hass.bus.async_listen(EVENT_ENTITY_REGISTRY_UPDATED,registry_event),
-            self.coordinator.async_add_listener(schedule),
-            async_track_time_interval(self.hass,schedule,timedelta(seconds=1)),
+            async_track_state_change_event(self.hass, entities, on_state),
+            self.hass.bus.async_listen('call_service', on_service),
+            async_track_time_interval(self.hass, on_state, timedelta(seconds=30)),
         ])
-        await self.async_tick()
-
-    def shutdown(self) -> None:
-        self._stage.interrupt('control_unloaded')
-        self._closed=True
-        self.controller.shutdown()
-        for remove in self._unsubscribers:
-            remove()
-        self._unsubscribers.clear()
-        if self._update_task is not None:
-            self._update_task.cancel()
-        if self._safety_task is not None:
-            self._safety_task.cancel()
-        owners=self.hass.data.get(REGISTRY_KEY,{})
-        if owners.get(self.binding['cover_entity_id']) is self:
-            owners.pop(self.binding['cover_entity_id'])
-
 
 async def async_setup_garages(hass: Any, entry: Any) -> None:
     """Activate only explicitly enabled, validated per-robot bindings."""
     from .safe_zone_store import get_safe_zone_store
     await get_safe_zone_store(hass).async_load()
-    owners=hass.data.setdefault(REGISTRY_KEY,{})
-    entries=[]
+    owners = hass.data.setdefault(REGISTRY_KEY, {})
+    entries = []
     for candidate in hass.config_entries.async_entries('roborock_plus'):
-        runtime=getattr(candidate,'runtime_data',None)
-        duids=[c.duid for c in getattr(runtime,'v1',[])] if runtime is not None else ()
-        entries.append((candidate.entry_id,candidate.options,duids))
+        runtime = getattr(candidate, 'runtime_data', None)
+        duids = [c.duid for c in getattr(runtime, 'v1', [])] if runtime is not None else ()
+        entries.append((candidate.entry_id, candidate.options, duids))
+
     for coordinator in entry.runtime_data.v1:
-        coordinator.garage_runtime=None
-        coordinator.garage_setup_error=None
+        coordinator.garage_runtime = None
+        coordinator.garage_setup_error = None
         if not configured(coordinator):
             continue
-        runtime=None
+        runtime = None
         try:
-            binding=resolve_binding(entry.options,coordinator.duid)
+            binding = resolve_binding(entry.options, coordinator.duid)
             if binding is None:
                 raise GarageControlError('missing_safety_configuration')
-            validate_binding_ownership(binding,duid=coordinator.duid,entry_id=entry.entry_id,entries=entries)
+            validate_binding_ownership(
+                binding, duid=coordinator.duid, entry_id=entry.entry_id, entries=entries)
             if binding['cover_entity_id'] in owners:
                 raise GarageControlError('duplicate_binding')
-            store=hass.data.get(STORE_KEY)
-            if store is None:
-                store=hass.data[STORE_KEY]=GarageSessionStore(hass)
-            runtime=GarageRuntime(hass,coordinator,binding,store=store)
-            owners[binding['cover_entity_id']]=runtime
-            coordinator.garage_runtime=runtime
+            runtime = GarageRuntime(hass, coordinator, binding)
+            owners[binding['cover_entity_id']] = runtime
+            coordinator.garage_runtime = runtime
             entry.async_on_unload(runtime.shutdown)
             await runtime.async_start()
-        except Exception as err:
-            reason=getattr(err,'reason',None) or 'session_recovery_required'
-            coordinator.garage_setup_error=reason
-            if runtime is not None:
-                runtime.controller.fault(reason)
-            _LOGGER.exception('Garage binding rejected for %s: %s',coordinator.duid,reason)
+        except Exception as err:  # noqa: BLE001 - surfaced on the entity, not fatal
+            reason = getattr(err, 'reason', None) or 'garage_setup_failed'
+            coordinator.garage_setup_error = reason
+            _LOGGER.exception('Garage binding rejected for %s: %s', coordinator.duid, reason)

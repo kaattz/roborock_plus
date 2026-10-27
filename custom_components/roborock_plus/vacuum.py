@@ -43,8 +43,7 @@ from .entity import (
 )
 from .clean_command_watch import async_watch_clean_command_started
 from .garage_commands import command_value, should_guard_clean_command
-from .garage_control import GarageControlError
-from .garage_task import GarageTaskError
+from .garage_door import GarageControlError
 from .garage_runtime import configured as is_garage_configured, command_name
 from .resume_logic import (
     select_resume_command,
@@ -241,7 +240,7 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
                 return await runtime.async_send(
                     command, lambda: super(RoborockVacuum, self).send(command, params),
                 )
-        except (GarageControlError, GarageTaskError) as err:
+        except GarageControlError as err:
             raise ServiceValidationError(
                 translation_domain=DOMAIN, translation_key='garage_control_error',
                 translation_placeholders={'reason': err.reason},
@@ -261,7 +260,7 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
                 lambda command, params: super(RoborockVacuum, self).send(command, params),
                 previous_receipt=previous_receipt,
             )
-        except (GarageControlError, GarageTaskError) as err:
+        except GarageControlError as err:
             raise ServiceValidationError(
                 translation_domain=DOMAIN, translation_key='garage_control_error',
                 translation_placeholders={'reason': err.reason},
@@ -281,7 +280,7 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
             if runtime is None:
                 raise GarageControlError(getattr(self.coordinator, 'garage_setup_error', None) or 'garage_not_configured')
             await runtime.async_request_close()
-        except (GarageControlError, GarageTaskError) as err:
+        except GarageControlError as err:
             raise ServiceValidationError(
                 translation_domain=DOMAIN, translation_key='garage_control_error',
                 translation_placeholders={'reason': err.reason},
@@ -294,7 +293,7 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
             if runtime is None:
                 raise GarageControlError(getattr(self.coordinator, 'garage_setup_error', None) or 'garage_not_configured')
             await runtime.async_request_open()
-        except (GarageControlError, GarageTaskError) as err:
+        except GarageControlError as err:
             raise ServiceValidationError(
                 translation_domain=DOMAIN, translation_key='garage_control_error',
                 translation_placeholders={'reason': err.reason},
@@ -307,7 +306,7 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
             if runtime is None:
                 raise GarageControlError(getattr(self.coordinator, 'garage_setup_error', None) or 'garage_not_configured')
             runtime.reset()
-        except (GarageControlError, GarageTaskError) as err:
+        except GarageControlError as err:
             raise ServiceValidationError(
                 translation_domain=DOMAIN, translation_key='garage_control_error',
                 translation_placeholders={'reason': err.reason},

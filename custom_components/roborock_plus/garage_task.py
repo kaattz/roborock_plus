@@ -211,10 +211,17 @@ class GarageTaskSession:
         contradict. Without this the unusable record survives every restart and
         re-raises the same fault that the operator's reset cannot clear.
 
-        Refuses whenever a task could still be in play. Losing a real task record
-        would mean losing the ability to say "end this task before closing".
+        Refuses whenever the task is still active. That is the one fact this
+        object can check by itself, and losing a live task record would mean
+        losing the ability to say "end this task before closing the door".
+
+        ``known_idle`` is deliberately NOT required here. A record whose
+        correlation broke often also failed to establish idleness, so demanding
+        it made this method unreachable for exactly the records it exists to
+        clear. Whether the robot is really parked is decided by the caller from
+        the live observation, which is the authority anyway.
         """
-        if self.active or not self.known_idle:
+        if self.active:
             raise GarageTaskError("session_recovery_required")
         self.session_id = None
         self.started = False
@@ -230,6 +237,9 @@ class GarageTaskSession:
         self.task_kind = "clean"
         self._first_transit_utc = None
         self.reason = None
+        # The caller only reaches here with a live observation of a parked robot,
+        # which is the same evidence initialize_idle would accept.
+        self.known_idle = True
         self._reset_observation()
 
     def begin(self, summary: Any, utc: float, command: str = "app_start") -> None:

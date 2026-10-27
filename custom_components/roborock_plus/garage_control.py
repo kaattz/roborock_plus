@@ -287,19 +287,29 @@ class GarageController:
         """Return whether a broken task record still matters right now.
 
         ``correlation_valid is False`` means the session's task record cannot be
-        matched to live robot activity. While a task is running that is a real
-        hazard: the controller cannot answer "am I opening the door for the task
-        I think I am?". With no task and the robot parked there is nothing to
-        mis-attribute -- the flag is history.
+        matched to live robot activity. That is a real hazard while something may
+        still be running: the controller cannot answer "am I opening the door for
+        the task I think I am?".
 
-        Treating both the same made a finished, stale session latch the
-        controller forever, because the same fact that raised the fault also
-        refused the reset meant to clear it (measured 2026-10-26 15:28 and
-        2026-10-27 11:56: session left by the 2026-10-25 interruption).
+        Three situations have to be told apart:
+
+        * the session is active, or the robot is not parked -- something may be
+          in play; refuse and keep the record.
+        * the session never started (``started`` false) -- a record was revoked
+          before the robot ever moved, typically because an external task took
+          over. That is exactly the case that needs a human to reconcile: we
+          cannot know what the robot actually did.
+        * the session did start and has since ended, with the robot parked --
+          nothing is in play, the record is history. Keeping it only means every
+          later tick re-reads a contradiction no operator can resolve
+          (measured 2026-10-26 15:28 and 2026-10-27 11:56, from the 2026-10-25
+          interruption).
         """
         if self.session.active:
             return True
-        return not (self.robot.fresh and self.robot.docked)
+        if not (self.robot.fresh and self.robot.docked):
+            return True
+        return not self.session.started
 
     def _discard_unusable_session(self) -> None:
         """Drop a finished session whose record cannot be trusted.

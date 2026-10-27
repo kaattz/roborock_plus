@@ -91,6 +91,22 @@ def test_reset_discards_the_unusable_session():
     assert r.session._correlation_invalid is False
 
 
+def test_reset_clears_a_broken_record_that_never_marked_itself_idle():
+    """The exact live failure on 2026-10-27.
+
+    The stored record had ``known_idle=False`` as well as a broken correlation.
+    Requiring idleness in ``reset_to_idle`` therefore refused, and the guard just
+    below it refused for the same reason -- so reset raised the very error the
+    notification told the user to clear. Reproduced here so it cannot come back.
+    """
+    b, r, controller = rig(known_idle=False)
+    controller.reset()
+    assert controller.reason is None
+    assert r.session.session_id is None
+    assert r.session.known_idle is True
+    assert controller.phase == 'idle'
+
+
 def test_a_tick_does_not_fault_an_idle_docked_robot():
     """The tick must not re-raise the fault it just cleared."""
     b, r, controller = rig()
@@ -149,6 +165,24 @@ def test_a_robot_away_from_its_dock_is_treated_as_in_play():
     assert controller.reason == 'session_recovery_required'
 
 
+def test_a_session_that_never_started_still_needs_a_human():
+    """A revoked record before the robot ever moved is not history.
+
+    That shape means something took the task over while the controller was not
+    looking -- typically an external task. We cannot know what the robot actually
+    did, so the record must be kept and a human must reconcile it. This is the
+    case ``test_external_task_revokes_verified_idle_across_quiet_dock_samples``
+    pins, and it must stay refused even though the robot is docked.
+    """
+    b, r, controller = rig(started=False)
+    assert controller._session_still_in_play() is True
+    asyncio.run(controller.async_update())
+    assert controller.reason == 'session_recovery_required'
+    with pytest.raises(Exception) as err:
+        controller.reset()
+    assert 'session_recovery_required' in str(getattr(err.value, 'reason', err.value))
+
+
 def test_reset_refuses_when_the_robot_is_not_docked():
     b, r, controller = rig(active=False, docked=False)
     with pytest.raises(Exception) as err:
@@ -180,7 +214,14 @@ def test_reset_to_idle_refuses_an_active_task():
         r.session.reset_to_idle()
 
 
-def test_reset_to_idle_refuses_when_idle_was_never_established():
+def test_reset_to_idle_accepts_a_record_that_never_established_idleness():
+    """The exact live shape: a broken record also failed to mark itself idle.
+
+    Demanding ``known_idle`` here made the method unreachable for precisely the
+    records it exists to clear, so the fault could never be removed.
+    """
     b, r, _controller = rig(known_idle=False)
-    with pytest.raises(Exception):
-        r.session.reset_to_idle()
+    r.session.reset_to_idle()
+    assert r.session.session_id is None
+    assert r.session.known_idle is True, 'a cleared record must be usable again'
+    assert r.session._correlation_invalid is False

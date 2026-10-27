@@ -228,7 +228,12 @@ class GarageTaskSession:
         self.ended = False
         self._sent_utc = None
         self._first_clean_utc = None
-        self._baseline_records = ()
+        # Must be a list, not a tuple: normalize_session_payload requires
+        # isinstance(value, list). An empty tuple here made the cleared session
+        # impossible to persist, so the unusable record survived on disk and came
+        # back on the next restore -- which made the fault look unfixable even
+        # though the in-memory state was clean.
+        self._baseline_records = []
         self._baseline_clean_count = None
         self._baseline_record = None
         self._observed_record_id = None

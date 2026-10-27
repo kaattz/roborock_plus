@@ -25,6 +25,7 @@ from typing import Any, NamedTuple
 from .garage_commands import SAFE_DIRECT_COMMANDS
 from .garage_config import resolve_binding, validate_binding_ownership
 from .garage_door import GarageControlError, GarageController
+from .v1_task_state import is_v1_task_active
 
 REGISTRY_KEY = 'roborock_plus_garage_owners'
 EVENT_GARAGE_ISSUE = 'roborock_plus_garage_issue'
@@ -60,6 +61,7 @@ class RobotObservation(NamedTuple):
     sample_utc: Any = None
     outside_danger_zone: bool | None = None
     position_sample_id: Any = None
+    task_active: bool | None = None
 
 
 def _name(value: Any) -> str:
@@ -201,6 +203,11 @@ class GarageRuntime:
             docked=state in ('charging', 'charging_complete'), fresh=fresh,
             sample_id=sampled, sample_utc=sampled,
             outside_danger_zone=outside, position_sample_id=position_sample,
+            task_active=is_v1_task_active(
+                state=state,
+                in_cleaning=sample.get('in_cleaning'),
+                in_returning=sample.get('in_returning'),
+            ),
         )
 
     def close_allowed(self) -> bool:
@@ -304,11 +311,19 @@ class GarageRuntime:
         self.controller.refresh()
         if await self._handle_return():
             return
-        if await self.controller.update_after_departure():
+        if await self.controller.update_after_departure(
+            pause=self._pause_robot, resume=self._resume_robot,
+        ):
             self.publish()
             return
         await self.controller.update_idle()
         self.publish()
+
+    async def _pause_robot(self) -> None:
+        await self.async_control_command('app_pause')
+
+    async def _resume_robot(self) -> None:
+        await self.async_control_command('app_resume')
 
     async def _handle_return(self) -> bool:
         """Pause, open, resume while the robot is driving home."""

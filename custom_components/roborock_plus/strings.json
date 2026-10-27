@@ -974,6 +974,7 @@
               "closed_outside": "Robot outside, door closed",
               "pausing_return": "Pausing the return to open the door",
               "resuming_return": "Door open, resuming the return",
+              "pausing_exit": "Pausing before closing the door",
               "controlled_exit": "Driving out of the cabinet",
               "blocked": "Door feedback unusable"
             }

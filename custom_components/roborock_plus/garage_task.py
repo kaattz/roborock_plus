@@ -203,6 +203,35 @@ class GarageTaskSession:
         self.known_idle = True
         self.reason = None
 
+    def reset_to_idle(self) -> None:
+        """Replace a finished session with a clean idle one.
+
+        Used when a stored record cannot be trusted but nothing is in play: the
+        robot is parked and no task is running, so there is no live fact to
+        contradict. Without this the unusable record survives every restart and
+        re-raises the same fault that the operator's reset cannot clear.
+
+        Refuses whenever a task could still be in play. Losing a real task record
+        would mean losing the ability to say "end this task before closing".
+        """
+        if self.active or not self.known_idle:
+            raise GarageTaskError("session_recovery_required")
+        self.session_id = None
+        self.started = False
+        self.ended = False
+        self._sent_utc = None
+        self._first_clean_utc = None
+        self._baseline_records = ()
+        self._baseline_clean_count = None
+        self._baseline_record = None
+        self._observed_record_id = None
+        self._cancel_requested = False
+        self._correlation_invalid = False
+        self.task_kind = "clean"
+        self._first_transit_utc = None
+        self.reason = None
+        self._reset_observation()
+
     def begin(self, summary: Any, utc: float, command: str = "app_start") -> None:
         """Save a fresh pre-send baseline. The caller sends the command later."""
         if self.active:

@@ -283,6 +283,41 @@ class GarageController:
         if operation is not None and operation != self.operation_id:
             raise GarageControlError('operation_cancelled')
 
+    def _session_still_in_play(self) -> bool:
+        """Return whether a broken task record still matters right now.
+
+        ``correlation_valid is False`` means the session's task record cannot be
+        matched to live robot activity. While a task is running that is a real
+        hazard: the controller cannot answer "am I opening the door for the task
+        I think I am?". With no task and the robot parked there is nothing to
+        mis-attribute -- the flag is history.
+
+        Treating both the same made a finished, stale session latch the
+        controller forever, because the same fact that raised the fault also
+        refused the reset meant to clear it (measured 2026-10-26 15:28 and
+        2026-10-27 11:56: session left by the 2026-10-25 interruption).
+        """
+        if self.session.active:
+            return True
+        return not (self.robot.fresh and self.robot.docked)
+
+    def _discard_unusable_session(self) -> None:
+        """Drop a finished session whose record cannot be trusted.
+
+        Only called when nothing is in play: the session is not active and the
+        robot is confirmed parked. Keeping such a record only means every later
+        tick re-reads a contradiction that no operator can resolve, so the record
+        is replaced with a clean idle one and persisted.
+
+        This is not a way to erase an inconvenient task: the guard above refuses
+        whenever the session is active or the robot is away from its dock.
+        """
+        self.session.reset_to_idle()
+        _LOGGER.info(
+            'Garage control discarded an unusable idle session '
+            '(previous session=%s, reason=%s)',
+            self.session.session_id, self.session.reason)
+
     def reset(self) -> None:
         """Reconcile on explicit request, preserving any outstanding task."""
         if self._pending or self._operations:
@@ -291,8 +326,14 @@ class GarageController:
         if not self.robot.fresh or not self.door_observation().get('cover_available'):
             raise GarageControlError('feedback_unavailable')
         self._preflight('open')
-        if self.session.to_dict().get('correlation_valid') is False:
+        if (self.session.to_dict().get('correlation_valid') is False
+                and self._session_still_in_play()):
+            # A broken record beside a running task must be resolved before any
+            # door command; an idle, docked robot may simply have its history
+            # discarded below.
             raise GarageControlError('session_recovery_required')
+        if self.session.to_dict().get('correlation_valid') is False:
+            self._discard_unusable_session()
         if not self.session.known_idle:
             terminal_goto = getattr(self.session, 'task_kind', None) == 'goto' and self.session.ended
             if not ((self.session.active and self.session.started) or terminal_goto):
@@ -1057,8 +1098,18 @@ class GarageController:
         if self.reason:
             return
         if self.session.to_dict().get('correlation_valid') is False:
-            self.fault(self.session.reason or 'session_recovery_required')
-            return
+            if self._session_still_in_play():
+                self.fault(self.session.reason or 'session_recovery_required')
+                return
+            # Idle and parked: the record is history, not a live contradiction.
+            # Leaving it in place re-raises this fault on every tick and makes
+            # the operator's reset the only cure -- which used to be refused for
+            # the same reason, so the block could never be cleared.
+            self._discard_unusable_session()
+            try:
+                await self.persist()
+            except Exception:
+                _LOGGER.exception('Cannot persist the cleared garage session')
         if self.phase == 'awaiting_start':
             resumed = (self._expect_resume and self.robot.fresh and self.robot.state in _RESUMED_STATES
                        and bool(getattr(self.robot,'in_cleaning',None) or getattr(self.robot,'in_returning',None))

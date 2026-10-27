@@ -1,6 +1,6 @@
 start_garage_cleaning_stage:
   name: Start protected cleaning stage
-  description: Starts one explicit cleaning stage through the garage interlock and returns its task receipt. HA scripts must wait for this receipt's succeeded result before starting the next stage. User interruption, reset and reload invalidate old receipts.
+  description: Runs one cleaning stage through the garage interlock and waits until it is finished, then returns the outcome. A stage counts as finished when the task is no longer active and the robot is back on its dock. The call blocks; a timeout is reported as a failure, not a success.
   target:
     entity:
       integration: roborock_plus
@@ -12,9 +12,17 @@ start_garage_cleaning_stage:
       required: true
       selector:
         object: {}
+    timeout_minutes:
+      name: Stage timeout
+      description: How long to wait for this stage to finish. Defaults to the binding's configured value. On expiry the service reports a failure and the caller must not continue.
+      selector:
+        number:
+          min: 1
+          max: 720
+          unit_of_measurement: minutes
     previous_receipt:
-      name: Previous successful stage receipt
-      description: Omit for the first stage. Later stages must pass the unchanged runtime_id, session_id and interruption_revision returned by the previous successful stage.
+      name: Previous stage receipt (retired)
+      description: No longer used. Stage results are returned directly, so there is nothing to chain between stages. Accepted only so existing scripts do not break.
       selector:
         object: {}
 request_garage_close:

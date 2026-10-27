@@ -1,5 +1,13 @@
 # 更新记录
 
+## v0.10.3 — 2026-10-28
+
+**修正服务文档，并说明一个 HACS 的坑。**
+
+`services.yaml` 里 `start_garage_cleaning_stage` 的描述还在说「返回 task receipt，脚本要等 succeeded」——那是旧协议。实际行为已经是阻塞等待。文档错会让人按旧方式写脚本，所以改掉，并补上 `timeout_minutes` 字段说明。
+
+**HACS 不会安装 `blueprints/` 目录。** `hacs.json` 里 `content_in_root: false` 且只声明 `domains: [roborock_plus]`，所以升级集成**不会**更新蓝图。蓝图需要单独推送——这次已用 `ha_manage_blueprints` 覆盖到实例上并确认生效。以后改蓝图也要单独推。
+
 ## v0.10.2 — 2026-10-27
 
 **修复 6 个分阶段清扫脚本。** v0.10.0 删掉任务会话后，它们跑不起来了：蓝图要等 `stage_result == 'running'` 再接受 `succeeded`，而两阶段握手只有在会话活着时才有意义。

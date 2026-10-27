@@ -23,7 +23,9 @@ def test_garage_services_register_on_vacuum_without_force_schema():
         "service": SimpleNamespace(async_register_platform_entity_service=lambda *args, **kwargs: calls.append((args, kwargs))),
         "cv": SimpleNamespace(make_entity_service_schema=lambda value: value),
         "vol": SimpleNamespace(Required=lambda value: value, Optional=lambda value: value,
-                               In=lambda value: value, Coerce=lambda value: value),
+                               In=lambda value: value, Coerce=lambda value: value,
+                               All=lambda *validators: validators,
+                               Range=lambda **bounds: bounds),
     }
     exec(compile(ast.fix_missing_locations(tree), str(path), "exec"), scope)
     scope["async_setup_services"](object())

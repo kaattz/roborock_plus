@@ -162,17 +162,28 @@ class GarageController:
         return self.robot_state() in RETURNING_STATES
 
     def task_running(self) -> bool:
-        """Whether anything needs the doorway right now.
+        """Whether a clean/dock task is still in progress.
 
-        Derived from the robot's own state rather than a stored task record: the
-        question is physical, and the robot already answers it.
+        Uses the robot's own ``task_active`` reading rather than the bare state
+        name, because a mid-task visit to the dock reports ``charging`` -- which
+        looks exactly like "finished" if you only read the state. ``task_active``
+        consults ``in_cleaning``/``in_returning`` first, so a robot charging in the
+        middle of a job still counts as busy (see ``v1_task_state``).
+
+        This matters physically: a robot that went back to recharge will drive out
+        again by itself. Shutting the door on it because "it is docked" would put a
+        closed door in its path minutes later.
+
+        Unknown is treated as still running: refusing to close is recoverable,
+        closing on a live task is not.
         """
-        state = self.robot_state()
-        if state in PARKED_STATES:
-            return False
-        if state in ('', 'unknown', 'unavailable'):
-            return False
-        return True
+        active = getattr(self.robot, 'task_active', None)
+        if active is None:
+            state = self.robot_state()
+            if state in ('', 'unknown', 'unavailable'):
+                return True
+            return state not in PARKED_STATES
+        return bool(active)
 
     # -- door actions --------------------------------------------------------
 
@@ -249,8 +260,19 @@ class GarageController:
 
     # -- the reactive rules --------------------------------------------------
 
-    async def update_after_departure(self) -> bool:
+    async def update_after_departure(
+        self,
+        *,
+        pause: Callable[[], Awaitable[Any]] | None = None,
+        resume: Callable[[], Awaitable[Any]] | None = None,
+    ) -> bool:
         """Close once the robot is confirmed outside and the door is open.
+
+        The robot is paused first. Measured 2026-10-27: it often cleans right next
+        to the dock before coming back to charge, so "outside the danger zone" and
+        "far from the door" are not the same thing. A door swinging shut behind a
+        robot that is still a few centimetres away can hit it, and a pause costs
+        nothing here -- the robot simply waits, then carries on.
 
         Returns whether anything was decided, so the caller can stop processing.
         Only ever closes, never opens: a slow sample can therefore not leave a
@@ -265,9 +287,55 @@ class GarageController:
         if self.door_blocked_reason() is not None:
             self.phase = 'blocked'
             return True
-        await self.close_door()
-        self.phase = 'closed_outside'
+        if pause is not None and resume is not None:
+            closed = await self._pause_open_close_resume(pause, resume)
+        else:
+            try:
+                await self.close_door()
+                closed = True
+            except GarageControlError as err:
+                self.last_error = err.reason
+                self.phase = 'blocked'
+                closed = False
+        # The phase reflects what actually happened: reporting "closed_outside"
+        # after a refused close would tell the next tick a lie and hide the fact
+        # that the door is still open.
+        self.phase = 'closed_outside' if closed else 'blocked'
         return True
+
+    async def _pause_open_close_resume(
+        self,
+        pause: Callable[[], Awaitable[Any]],
+        resume: Callable[[], Awaitable[Any]],
+    ) -> bool:
+        """Hold the robot still for the moment the door is moving.
+
+        The pause must be observed before the door is told to move: a door
+        commanded while the robot is still driving is exactly the collision this
+        is meant to prevent. If the pause cannot be confirmed the door is left
+        open -- an open door is merely untidy, a door closing on a moving robot is
+        damage.
+
+        Returns whether the door ended up closed.
+        """
+        self.phase = 'pausing_exit'
+        await pause()
+        self.refresh()
+        if self.robot_state() != 'paused':
+            self.phase = 'blocked'
+            self.last_error = 'pause_not_observed'
+            return False
+        try:
+            await self.close_door()
+            return True
+        except GarageControlError as err:
+            self.last_error = err.reason
+            self.phase = 'blocked'
+            return False
+        finally:
+            # Released even when closing failed: a robot left standing still
+            # forever is a worse outcome than an open door.
+            await resume()
 
     async def update_returning(
         self,

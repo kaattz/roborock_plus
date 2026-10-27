@@ -85,6 +85,12 @@ class FakeCoordinator:
 
     async def _send(self, name, params=None):
         self.robot_commands.append((name, params))
+        # A real robot reports paused when it accepts app_pause; without this the
+        # controller would correctly refuse to move the door.
+        if name == 'app_pause':
+            self._state = 'paused'
+            if self.garage_status_sample is not None:
+                self.garage_status_sample['state'] = 'paused'
         return {'ok': True}
 
     async def async_refresh(self):

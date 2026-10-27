@@ -173,6 +173,22 @@ def test_native_controller_opens_then_closes_around_a_robot_trip():
                 hass.services.async_register("cover", service, cover_service)
 
             coordinator = _coordinator(moment)
+
+            # A real robot reports itself paused when it accepts app_pause, and
+            # moving again after app_resume. Without that the controller correctly
+            # refuses to move the door, because it cannot confirm the pause.
+            async def robot_command(name, params=None):
+                state = {'app_pause': 'paused', 'app_resume': 'cleaning'}.get(name)
+                if state is not None and coordinator.garage_status_sample is not None:
+                    coordinator.garage_status_sample = {
+                        **coordinator.garage_status_sample, 'state': state,
+                    }
+                return {'ok': True}
+
+            coordinator.properties_api = NS(
+                map_content=NS(map_data=NS(charger=NS(x=0.0, y=0.0))),
+                command=NS(send=robot_command),
+            )
             runtime = runtime_module.GarageRuntime(
                 hass, coordinator, _binding(),
                 zone_provider=lambda: NS(min_x=-10000, max_x=10000,

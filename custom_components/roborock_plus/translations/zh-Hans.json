@@ -644,23 +644,15 @@
           "phase": {
             "name": "车库阶段",
             "state": {
-              "disabled": "未启用",
-              "recovering": "正在核对恢复状态",
               "idle": "空闲",
               "opening": "正在开门",
-              "awaiting_start": "等待机器人开始动作",
-              "task_open": "任务进行中，保持开门",
-              "outside_closed": "机器人在外，门已关闭",
-              "returning": "正在返回基站",
-              "docked_intermission": "任务未结束，中途停靠",
+              "outside": "门已开，可通行",
               "closing": "正在关门",
-              "waiting_close_permission": "等待家庭关门许可",
-              "blocked": "故障阻塞",
-              "manual_hold": "人工接管保持",
-              "pausing_return": "正在暂停返航并等待确认",
-              "return_opening": "返航已暂停，正在开门",
-              "resuming_return": "门已全开，恢复同一返航",
-              "controlled_exit": "受控出库中"
+              "closed_outside": "机器人已在外，门已关",
+              "pausing_return": "返航中暂停，准备开门",
+              "resuming_return": "门已开，继续返航",
+              "controlled_exit": "受控出库中",
+              "blocked": "门反馈不可用"
             }
           },
           "reason": {

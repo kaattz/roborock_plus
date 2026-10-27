@@ -1,8 +1,8 @@
 blueprint:
   name: 多阶段受保护清扫
   description: >-
-    每段独立经过 Roborock Plus 车库互锁；只有同一段清扫的成功记录与稳定停靠得到确认才进入下一段。
-    人工暂停、取消、故障、复核、重新加载或超时均停止后续；恢复机器人不会恢复旧脚本。
+    每段独立经过 Roborock Plus 车库互锁；服务会等到这一段真正结束才返回，
+    只有确认成功才进入下一段。失败、超时或中断均停止后续。
     请从实际例程取得全部参数，不按阶段名称猜房间、模式或次数。
     每段 settings 必须明确设置风机、水量、拖地路线；app_start 还必须明确重复次数。
     本脚本不操作车库门、不自动重试，Home Assistant 重启后不续跑。
@@ -21,7 +21,7 @@ blueprint:
               domain: vacuum
     stage_sensor:
       name: 这台扫地机的车库控制阶段传感器
-      description: 选择该设备的 garage_phase 传感器；脚本用它核对阶段回执，不根据实体名称猜测。
+      description: 选择该设备的 garage_phase 传感器；仅用于运行前确认集成已加载。
       selector:
         entity:
           filter:
@@ -55,8 +55,6 @@ variables:
   stages: !input stages
   stage_timeout_minutes: !input stage_timeout_minutes
   stage_response: null
-  receipt: null
-  previous_receipt: null
 
 sequence:
   # Validate the complete list before the first protected service call.
@@ -92,9 +90,17 @@ sequence:
             {% if stage is not mapping %}
               {% set check.valid = false %}
             {% else %}
+              {# params may be null (app_start takes none), but anything else must be
+                 a non-empty list: an empty list or a mapping was silently accepted
+                 before and produced a clean command with no targets. #}
               {% if stage.keys() | reject('in', ['command', 'params', 'settings']) | list | count > 0
                     or stage.get('command') not in ['app_start', 'app_segment_clean', 'app_zoned_clean']
-                    or not (json_value(stage.get('params')) | bool(false)) %}
+                    or not (json_value(stage.get('params')) | bool(false))
+                    or (stage.get('params') is not none
+                        and (stage.get('params') is mapping
+                             or stage.get('params') is string
+                             or stage.get('params') is not sequence
+                             or stage.get('params') | count == 0)) %}
                 {% set check.valid = false %}
               {% endif %}
               {% set settings = stage.get('settings') %}
@@ -151,63 +157,26 @@ sequence:
   - repeat:
       for_each: "{{ stages }}"
       sequence:
-        - choose:
-            - conditions: "{{ repeat.index == 1 }}"
-              sequence:
-                - action: roborock_plus.start_garage_cleaning_stage
-                  target:
-                    entity_id: "{{ vacuum_entity }}"
-                  data:
-                    stage: "{{ repeat.item }}"
-                  response_variable: stage_response
-          default:
-            - action: roborock_plus.start_garage_cleaning_stage
-              target:
-                entity_id: "{{ vacuum_entity }}"
-              data:
-                stage: "{{ repeat.item }}"
-                previous_receipt: "{{ previous_receipt }}"
-              response_variable: stage_response
+        # The service blocks until this stage is really finished, so its return
+        # value is the outcome. There is no receipt to poll and no phase to wait
+        # for; a stage that cannot be confirmed raises and stops the script here.
+        - action: roborock_plus.start_garage_cleaning_stage
+          target:
+            entity_id: "{{ vacuum_entity }}"
+          data:
+            stage: "{{ repeat.item }}"
+            timeout_minutes: "{{ stage_timeout_minutes }}"
+          response_variable: stage_response
         - variables:
-            receipt: >-
+            result: >-
               {{ stage_response.get(vacuum_entity, stage_response) if stage_response is mapping else none }}
         - if:
             - condition: template
               value_template: >-
-                {% if receipt is not mapping %}
-                  {{ true }}
-                {% else %}
-                  {{ receipt.keys() | sort != ['interruption_revision', 'runtime_id', 'session_id']
-                     or receipt.runtime_id is not string or receipt.runtime_id | length == 0
-                     or receipt.session_id is not string or receipt.session_id | length == 0
-                     or receipt.interruption_revision is not integer or receipt.interruption_revision < 0 }}
-                {% endif %}
-          then:
-            - stop: 阶段服务未返回有效回执；后续阶段已停止。
-              error: true
-        - wait_template: >-
-            {{ states(stage_sensor) in ['unknown', 'unavailable']
-               or state_attr(stage_sensor, 'stage_runtime_id') != receipt.runtime_id
-               or state_attr(stage_sensor, 'stage_session_id') != receipt.session_id
-               or state_attr(stage_sensor, 'stage_interruption_revision') is not integer
-               or state_attr(stage_sensor, 'stage_interruption_revision') != receipt.interruption_revision
-               or state_attr(stage_sensor, 'stage_result') != 'running' }}
-          timeout:
-            minutes: "{{ stage_timeout_minutes }}"
-          continue_on_timeout: false
-        - if:
-            - condition: template
-              value_template: >-
-                {{ states(stage_sensor) in ['unknown', 'unavailable']
-                   or state_attr(stage_sensor, 'stage_runtime_id') != receipt.runtime_id
-                   or state_attr(stage_sensor, 'stage_session_id') != receipt.session_id
-                   or state_attr(stage_sensor, 'stage_interruption_revision') is not integer
-                   or state_attr(stage_sensor, 'stage_interruption_revision') != receipt.interruption_revision
-                   or state_attr(stage_sensor, 'stage_result') != 'succeeded' }}
+                {{ result is not mapping or result.get('result') != 'succeeded' }}
           then:
             - stop: >-
-                第 {{ repeat.index }} 段未成功或已被中断；后续阶段停止。
-                {{ state_attr(stage_sensor, 'stage_reason') or '回执已改变或状态未知' }}
+                第 {{ repeat.index }} 段未成功；后续阶段停止。
+                {{ (result.get('reason') if result is mapping else none) or '没有收到结果' }}
               error: true
-        - variables:
-            previous_receipt: "{{ receipt }}"
+

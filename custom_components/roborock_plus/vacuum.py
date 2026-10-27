@@ -249,14 +249,23 @@ class RoborockVacuum(RoborockCoordinatedEntityV1, StateVacuumEntity):
 
     async def async_start_garage_cleaning_stage(
         self, stage: dict[str, Any], previous_receipt: dict[str, Any] | None = None,
+        timeout_minutes: float | None = None,
     ) -> ServiceResponse:
-        """Start one protected stage and return its exact task receipt to HA scripts."""
+        """Run one protected stage and wait for its real outcome.
+
+        The call blocks until the stage finishes, so the response *is* the result.
+        ``timeout_minutes`` bounds the wait; without it the binding's configured
+        default applies.
+        """
         runtime = getattr(self.coordinator, 'garage_runtime', None)
         try:
             if runtime is None:
                 raise GarageControlError(getattr(self.coordinator, 'garage_setup_error', None) or 'garage_not_configured')
+            effective = dict(stage)
+            if timeout_minutes is not None:
+                effective['timeout_minutes'] = timeout_minutes
             return await runtime.async_start_stage(
-                stage,
+                effective,
                 lambda command, params: super(RoborockVacuum, self).send(command, params),
                 previous_receipt=previous_receipt,
             )

@@ -33,8 +33,7 @@ from .entity import (
     RoborockEntity,
     RoborockEntityV1,
 )
-from .garage_control import GarageControlError
-from .garage_task import GarageTaskError
+from .garage_door import GarageControlError
 from .garage_runtime import configured as is_garage_configured
 
 _LOGGER = logging.getLogger(__name__)
@@ -240,7 +239,7 @@ class RoborockRoutineButtonEntity(RoborockEntity, ButtonEntity):
                     getattr(self._coordinator, 'garage_setup_error', None)
                     or 'session_recovery_required')
             await runtime.async_routine(lambda: self._coordinator.execute_routines(self._routine_id))
-        except (GarageControlError, GarageTaskError) as err:
+        except GarageControlError as err:
             raise ServiceValidationError(
                 translation_domain='roborock_plus', translation_key='garage_control_error',
                 translation_placeholders={'reason':err.reason},

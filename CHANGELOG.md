@@ -1,5 +1,27 @@
 # 更新记录
 
+## v0.11.4 — 2026-10-28
+
+**phase 与门状态对齐。**
+
+v0.11.3 之后门反馈已经可读（`open_quality` / `close_quality` 都是 `confirmed`），但 `phase` 还停在 `outside`，而门是 `closed`。
+
+原因：`phase` 在 `async_restore` 时设一次，那时门磁还没上报，所以判成「不在关闭位」。之后 `refresh()` 更新的是门的事实，不动 `phase`。
+
+现在 `_sync_phase_with_door()` 在没有清扫序列时，按门的实际情况同步 phase：
+
+- 门确认关闭 → `idle`
+- 门确认打开 → `outside`
+- 门读不到 → `blocked`
+
+**有清扫序列时不碰 phase** —— 序列对自己的进度最有发言权。
+
+### 验证
+
+```
+主机全量              871 passed
+```
+
 ## v0.11.3 — 2026-10-28
 
 **诊断实体需要事件驱动重算，而不是靠读取时刷新。**

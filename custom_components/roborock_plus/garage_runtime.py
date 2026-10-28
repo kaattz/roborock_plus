@@ -278,7 +278,25 @@ class GarageRuntime:
         if refresh is not None:
             await refresh()
         self.controller.refresh()
-        self.controller.phase = 'idle' if self.controller.closed_confirmed() else 'outside'
+        self._sync_phase_with_door()
+
+    def _sync_phase_with_door(self) -> None:
+        """Keep the reported phase honest when no sequence is running.
+
+        The phase describes what the integration is doing. With no clean in flight the
+        only thing it can honestly say is what the door looks like: closed, open, or
+        unreadable. Without this, a phase chosen at start-up (when the contacts had not
+        reported yet) would persist for hours and contradict the door it describes.
+        """
+        if self.controller.task_in_progress:
+            # A sequence owns the phase; it is authoritative about its own progress.
+            return
+        if self.controller.closed_confirmed():
+            self.controller.phase = 'idle'
+        elif self.controller.open_confirmed():
+            self.controller.phase = 'outside'
+        elif self.controller.door_blocked_reason() is not None:
+            self.controller.phase = 'blocked'
 
     async def async_start(self) -> None:
         """Bring the binding up. Starts no loop and commands nothing.
@@ -637,6 +655,7 @@ class GarageRuntime:
         def on_door_change(event: Any) -> None:
             # Recompute from the current states and let the entities write themselves.
             self.controller.refresh()
+            self._sync_phase_with_door()
             self.publish()
 
         watched = [entity for entity in (

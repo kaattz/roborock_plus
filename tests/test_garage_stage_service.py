@@ -152,28 +152,53 @@ def test_a_stage_waits_while_the_robot_is_still_working():
 def test_a_robot_parked_mid_task_does_not_end_the_stage():
     """Docked but still active is a recharge visit, not the end of the stage.
 
-    This is the exact situation the household described: the robot goes back to
-    charge in the middle of a job. The stage must keep waiting, not report success
-    and let the script start the next room while the robot is still working.
+    This is the exact situation the household described: the robot goes back to charge
+    in the middle of a job. The wait must not return, or the script starts the next room
+    while the robot is still working.
+
+    The wait function is exercised directly: ``async_start_stage`` also runs the clean
+    sequence, whose own refreshes would mask what this test is about.
     """
     rig = Rig(opened=True)
     runtime = rig.build()
     rig.docked, rig.state = True, 'charging'      # parked, mid-task
     rig.task_active = True
 
-    def finish_after_four(seen):
-        if seen >= 4:
+    seen = {'n': 0}
+    original = runtime.controller.refresh
+
+    def counting():
+        original()
+        seen['n'] += 1
+        if seen['n'] >= 4:
             rig.task_active = False
 
-    rig.on_refresh = finish_after_four
+    runtime.controller.refresh = counting
 
-    result = run(runtime.async_start_stage(
-        {'command': 'app_segment_clean', 'params': [{'segments': [3]}],
-         'timeout_minutes': 10},
-        _ok,
-    ))
-    assert result['result'] == 'succeeded'
-    assert rig.refreshes >= 4, 'a docked robot with an active task is not finished'
+    run(runtime._await_stage_completion(600))
+    assert seen['n'] >= 4, 'the wait must continue while the task is live'
+
+
+def test_a_robot_driving_home_does_not_end_the_stage():
+    """A finished task away from the dock is not the end: the robot is still coming back."""
+    rig = Rig(opened=True)
+    runtime = rig.build()
+    rig.task_active = False
+    rig.docked, rig.state = False, 'returning_home'
+
+    seen = {'n': 0}
+    original = runtime.controller.refresh
+
+    def counting():
+        original()
+        seen['n'] += 1
+        if seen['n'] >= 3:
+            rig.docked, rig.state = True, 'charging'
+
+    runtime.controller.refresh = counting
+
+    run(runtime._await_stage_completion(600))
+    assert seen['n'] >= 3, 'the wait must continue until the robot is docked'
 
 
 def test_a_stage_that_never_finishes_times_out_and_fails():

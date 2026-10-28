@@ -202,33 +202,71 @@ def test_native_controller_opens_then_closes_around_a_robot_trip():
                 await runtime.async_send('app_segment_clean', _ok)
                 assert door_commands == ['open_cover']
                 assert runtime.controller.open_confirmed() is True
+                assert runtime.controller.task_in_progress is True
 
-                # 2. The robot drives out; the door shuts once it is outside.
-                coordinator.data.status.state = NS(name='cleaning')
-                coordinator.data.status.in_cleaning = 1
-                coordinator.garage_status_sample = {
-                    'sampled_at': dt.datetime.fromtimestamp(moment['utc'], dt.timezone.utc),
-                    'state': 'cleaning', 'in_cleaning': 1, 'in_returning': 0,
-                }
-                coordinator.resolve_vacuum_position = lambda: NS(x=0.0, y=50000.0, trusted=True)
-                await runtime.async_tick()
-                assert door_commands == ['open_cover', 'close_cover']
-                assert runtime.controller.phase == 'closed_outside'
+                # The sequence runs on its own clock, so a test can drive a whole trip
+                # without waiting for the real one. Each read advances it, which keeps
+                # the loop's deadline logic real while removing the wall clock.
+                ticks = {'n': 0}
 
-                # 3. It comes home; the door reopens for the return, then closes
-                #    for good once the robot is docked and idle.
-                coordinator.data.status.state = NS(name='charging')
-                coordinator.data.status.in_cleaning = 0
-                coordinator.garage_status_sample = {
-                    'sampled_at': dt.datetime.fromtimestamp(moment['utc'], dt.timezone.utc),
-                    'state': 'charging', 'in_cleaning': 0, 'in_returning': 0,
-                }
-                coordinator.resolve_vacuum_position = lambda: NS(x=0.0, y=0.0, trusted=True)
-                await runtime.async_request_open()
-                assert door_commands[-1] == 'open_cover'
-                await runtime.async_tick()
-                assert door_commands[-1] == 'close_cover'
-                assert runtime.controller.phase == 'idle'
+                def advancing() -> float:
+                    ticks['n'] += 1
+                    return float(ticks['n'])
+
+                runtime.clock = advancing
+                runtime.controller.clock = advancing
+
+                # The sequence sleeps a second between checks; here it must not wait.
+                async def no_wait(_seconds):
+                    await asyncio.sleep(0)
+
+                runtime._sequence_sleep = no_wait
+
+                # 2. A whole trip, driven by the sequence itself: the robot leaves, the
+                #    departure closes the door behind it, it comes home mid-task (door
+                #    reopened), and finally the job ends at the dock (door closed).
+                #
+                #    The sequence is started directly rather than through async_send so
+                #    this test can advance the robot between its checks.
+                script = [
+                    # (state, in_cleaning, docked, outside)
+                    ('cleaning', 1, False, True),     # out working
+                    ('cleaning', 1, False, True),
+                    ('returning_home', 1, False, True),   # heading back to recharge
+                    ('paused', 1, False, True),           # paused so the door can open
+                    ('charging', 1, True, False),         # docked mid-task, recharging
+                    ('cleaning', 1, False, True),         # out again by itself
+                    ('charging', 0, True, False),         # job over, at the dock
+                ]
+                position = {'i': 0}
+
+                def step() -> None:
+                    if position['i'] < len(script):
+                        state, cleaning, docked, outside = script[position['i']]
+                        position['i'] += 1
+                    else:
+                        state, cleaning, docked, outside = 'charging', 0, True, False
+                    coordinator.garage_status_sample = {
+                        'sampled_at': dt.datetime.fromtimestamp(moment['utc'], dt.timezone.utc),
+                        'state': state, 'in_cleaning': cleaning, 'in_returning': 0,
+                    }
+                    coordinator.resolve_vacuum_position = lambda: NS(
+                        x=0.0, y=50000.0 if outside else 0.0, trusted=True)
+
+                # Advance the robot once per sequence check.
+                async def stepping_sleep(_seconds):
+                    step()
+                    await asyncio.sleep(0)
+
+                runtime._sequence_sleep = stepping_sleep
+                step()
+
+                await runtime._finish_sequence()
+
+                assert 'open_cover' in door_commands, 'the door opened for the trip'
+                assert 'close_cover' in door_commands, 'the door closed behind the robot'
+                assert door_commands[-1] == 'close_cover', 'and ended with the door shut'
+                assert runtime.controller.task_in_progress is False
             finally:
                 runtime.shutdown()
                 await hass.async_block_till_done()

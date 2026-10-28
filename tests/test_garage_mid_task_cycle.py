@@ -82,23 +82,25 @@ class Rig:
 def test_a_docked_robot_with_an_active_task_is_still_busy(state):
     """This is the mid-task base visit: docked, but the job is not over.
 
-    Reading the state name alone would call this "finished" and shut the door on
-    a robot that is about to drive back out.
+    Reading the state name alone would call this "finished" and shut the door on a
+    robot that is about to drive back out.
     """
     rig = Rig(task_active=True, state=state, docked=True)
     controller = rig.build()
     assert controller.task_running() is True
-    asyncio.run(controller.update_idle())
+    assert asyncio.run(controller.sequence_finished()) is False
     assert rig.calls == [], 'the door must stay open while the job is unfinished'
 
 
 @pytest.mark.parametrize("state", ['charging', 'charging_complete', 'idle'])
 def test_a_docked_robot_with_no_active_task_is_finished(state):
-    rig = Rig(task_active=False, state=state, docked=True)
+    """The task is over, so the door this sequence opened is closed."""
+    rig = Rig(opened=False, task_active=False, state=state, docked=True)
     controller = rig.build()
     assert controller.task_running() is False
-    asyncio.run(controller.update_idle())
-    assert rig.calls == ['close']
+    asyncio.run(controller.open_door())
+    assert asyncio.run(controller.sequence_finished()) is True
+    assert rig.calls == ['open', 'close']
 
 
 def test_unknown_task_state_keeps_the_door_open():
@@ -106,7 +108,7 @@ def test_unknown_task_state_keeps_the_door_open():
     rig = Rig(task_active=None, state='unknown', docked=True)
     controller = rig.build()
     assert controller.task_running() is True
-    asyncio.run(controller.update_idle())
+    assert asyncio.run(controller.sequence_finished()) is False
     assert rig.calls == []
 
 
@@ -119,6 +121,8 @@ def test_a_mid_task_return_cycle_opens_once_and_closes_once_per_departure():
     rig = Rig(opened=True, task_active=True, state='returning_home',
               docked=False, outside=True)
     controller = rig.build()
+    # This cycle is a clean this integration is running.
+    controller.task_in_progress = True
 
     order = []
 
@@ -136,7 +140,7 @@ def test_a_mid_task_return_cycle_opens_once_and_closes_once_per_departure():
 
     # Docked mid-task: the door must remain open.
     rig.state, rig.docked, rig.task_active = 'charging', True, True
-    asyncio.run(controller.update_idle())
+    assert asyncio.run(controller.sequence_finished()) is False
     assert rig.calls == [], 'a recharge visit must not shut the door'
 
     # It drives out again and passes the zone: now the door closes, with a pause.
@@ -145,13 +149,13 @@ def test_a_mid_task_return_cycle_opens_once_and_closes_once_per_departure():
     assert order == ['pause', 'resume']
     assert rig.calls == ['close']
 
-    # Finally the job ends at the dock. The door is already shut from the
-    # departure above, so nothing more is commanded -- the point is that the
-    # mid-task visit above did NOT close it early.
+    # Finally the job ends at the dock. The departure above had already closed the
+    # door and settled the sequence, so nothing more is commanded -- the point is that
+    # the mid-task recharge visit did NOT close it early.
     rig.state, rig.docked, rig.outside, rig.task_active = 'charging', True, False, False
-    asyncio.run(controller.update_idle())
+    controller.refresh()
+    asyncio.run(controller.sequence_finished())
     assert rig.calls == ['close'], 'one close for the departure, none for the recharge visits'
-    assert controller.phase == 'idle'
 
 
 # --- pausing before the door moves ------------------------------------------

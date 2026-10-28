@@ -614,23 +614,41 @@ class GarageRuntime:
     # -- wiring --------------------------------------------------------------
 
     async def async_attach(self) -> None:
-        """Subscribe only to what can actually change a decision.
+        """Subscribe to what changes the door's facts, and nothing else.
 
-        There is deliberately no periodic timer and no state listener here. A clean
-        sequence runs inside ``async_send``, which owns both its door moves, so nothing
-        needs to *notice* the door changing. A timer that reacts to state is precisely
-        how a monitor turns into a hardware actor.
+        A clean sequence runs inside ``async_send`` and owns both its door moves, so
+        nothing needs to *notice* the door changing in order to act on it. What does need
+        to notice is the diagnostic: Home Assistant stores what an entity reported the
+        last time it wrote its state, so without a write on door changes the entity would
+        describe the door as it was at start-up forever.
 
-        What remains is the external-command log: if somebody operates the door by hand
-        or through another automation, it is recorded. It changes no state and commands
-        nothing.
+        This is a state listener, not a timer, and it only recomputes and re-publishes.
+        It never commands anything -- the difference matters: a listener that reacts to
+        the door being open is how a monitor turns into a hardware actor.
         """
         from homeassistant.core import callback
+        from homeassistant.helpers.event import async_track_state_change_event
 
         @callback
         def on_service(event: Any) -> None:
             self._service_event(event)
 
+        @callback
+        def on_door_change(event: Any) -> None:
+            # Recompute from the current states and let the entities write themselves.
+            self.controller.refresh()
+            self.publish()
+
+        watched = [entity for entity in (
+            self.binding.get('cover_entity_id'),
+            self.binding.get('open_contact'),
+            self.binding.get('close_contact'),
+            self.binding.get('close_permission_entity'),
+        ) if entity]
+
+        if watched:
+            self._unsubscribers.append(
+                async_track_state_change_event(self.hass, watched, on_door_change))
         self._unsubscribers.append(self.hass.bus.async_listen('call_service', on_service))
 
 async def async_setup_garages(hass: Any, entry: Any) -> None:

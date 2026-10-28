@@ -56,7 +56,9 @@ def test_native_suggestions_required_fields_and_screenshot_recovery():
                 page["data_schema"]({})
             suggested = page["data_schema"]({"open_travel_seconds": 35})
             assert suggested["travel_margin_seconds"] == 10
-            assert suggested["contact_settle_seconds"] == 1
+            # A magnetic contact confirms from one reading; a non-zero settle window
+            # could never elapse without polling, which this integration does not do.
+            assert suggested["contact_settle_seconds"] == 0
             assert suggested["operation_timeout_seconds"] == 90
             assert suggested["dock_settle_seconds"] == 5
             assert suggested["allow_estimated"] is False

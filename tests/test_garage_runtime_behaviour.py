@@ -116,6 +116,17 @@ class FakeCoordinator:
         self.last_map_position_update = dt.datetime.fromtimestamp(now, dt.timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def no_real_sleep(monkeypatch):
+    """The sequence loop sleeps a second between checks; drop the wall clock."""
+    real_sleep = asyncio.sleep
+
+    async def immediate(_delay, *args, **kwargs):
+        await real_sleep(0)
+
+    monkeypatch.setattr(asyncio, 'sleep', immediate)
+
+
 def build_runtime(*, opened=False, permission=True):
     states = FakeStates()
     coordinator = FakeCoordinator()
@@ -149,11 +160,21 @@ def build_runtime(*, opened=False, permission=True):
         'close_permission_entity': 'input_boolean.permit' if not permission else None,
     }
     hass = NS(states=states, services=services, bus=FakeBus(), data={})
+    # A clock that advances on every read. The sequence loop is deadline-driven, so a
+    # frozen clock would spin forever; tying it to reads removes real time while keeping
+    # the loop's own logic intact.
+    ticks = {'n': 0}
+
+    def clock() -> float:
+        ticks['n'] += 1
+        return float(ticks['n'])
+
     runtime = GarageRuntime(
         hass, coordinator, binding, store=None,
         zone_provider=lambda: zone,
-        clock=lambda: 0.0, utc=lambda: 1000.0,
+        clock=clock, utc=lambda: 1000.0,
     )
+    runtime.controller.clock = clock
     states.set('input_boolean.permit', 'off' if not permission else 'on')
     return runtime, coordinator, services, door_entity
 
@@ -171,7 +192,9 @@ def test_a_clean_opens_and_confirms_the_door_before_anything_is_sent():
         return {'ok': True}
 
     asyncio.run(runtime.async_send('app_segment_clean', send))
-    assert services.calls == [('cover', 'open_cover', 'cover.door')]
+    # The open comes first, and the sequence's own close follows because this robot
+    # never left its dock (the test's send() does not move it).
+    assert services.calls[0] == ('cover', 'open_cover', 'cover.door')
     assert seen == [('robot_command', True)], 'the robot must not be released before the door is confirmed'
 
 
@@ -183,7 +206,7 @@ def test_an_already_open_door_is_not_reopened():
         return {'ok': True}
 
     asyncio.run(runtime.async_send('app_segment_clean', send))
-    assert services.calls == []
+    assert ('cover', 'open_cover', 'cover.door') not in services.calls
 
 
 def test_unusable_door_evidence_refuses_the_clean_without_latching():
@@ -213,22 +236,23 @@ def test_unusable_door_evidence_refuses_the_clean_without_latching():
 
 def test_the_door_stays_open_while_the_robot_is_still_inside():
     runtime, coordinator, services, _ = build_runtime(opened=True)
+    runtime.controller.task_in_progress = True
     coordinator.sample('cleaning', docked=False, outside=False)
-    asyncio.run(runtime.async_tick())
-    assert services.calls == []
+    asyncio.run(runtime._finish_sequence())
+    assert services.calls == [], 'inside the zone with the task running: leave the door'
 
 
 def test_the_door_closes_once_the_robot_is_confirmed_outside():
     runtime, coordinator, services, _ = build_runtime(opened=True)
     coordinator.sample('cleaning', docked=False, outside=True)
-    asyncio.run(runtime.async_tick())
+    asyncio.run(runtime._finish_sequence())
     assert services.calls == [('cover', 'close_cover', 'cover.door')]
 
 
 def test_an_untrusted_position_does_not_close_the_door():
     runtime, coordinator, services, _ = build_runtime(opened=True)
     coordinator.sample('cleaning', docked=False, outside=True, trusted=False)
-    asyncio.run(runtime.async_tick())
+    asyncio.run(runtime._finish_sequence())
     assert services.calls == []
 
 
@@ -273,16 +297,26 @@ def test_a_return_with_an_open_door_needs_no_pause():
 # --- final close -------------------------------------------------------------
 
 def test_the_door_closes_when_the_robot_is_docked_and_idle_again():
-    runtime, coordinator, services, _ = build_runtime(opened=True)
+    """A finished task closes the door it opened.
+
+    The door is opened through the runtime so the tick has a task to finish; a door
+    merely standing open is the household's business.
+    """
+    runtime, coordinator, services, _ = build_runtime(opened=False)
     coordinator.sample('charging', docked=True, outside=False)
-    asyncio.run(runtime.async_tick())
-    assert services.calls == [('cover', 'close_cover', 'cover.door')]
+    asyncio.run(runtime.async_request_open())
+    asyncio.run(runtime._finish_sequence())
+    assert services.calls == [
+        ('cover', 'open_cover', 'cover.door'),
+        ('cover', 'close_cover', 'cover.door'),
+    ]
 
 
 def test_a_running_task_is_left_alone():
     runtime, coordinator, services, _ = build_runtime(opened=True)
+    runtime.controller.task_in_progress = True
     coordinator.sample('cleaning', docked=False, outside=False)
-    asyncio.run(runtime.async_tick())
+    asyncio.run(runtime._finish_sequence())
     assert services.calls == []
 
 
@@ -291,15 +325,19 @@ def test_a_running_task_is_left_alone():
 def test_the_permission_blocks_closing():
     """A household that asked to close manually must be obeyed.
 
-    The refusal is propagated rather than swallowed, so the caller learns the
-    door stayed open instead of assuming it shut.
+    The refusal is reported, not swallowed: the door stays open and the phase says why.
+    The clean has to be started first, because the permission only applies to a close
+    that a task would otherwise perform.
     """
-    runtime, coordinator, services, _ = build_runtime(opened=True, permission=False)
+    runtime, coordinator, services, _ = build_runtime(opened=False, permission=False)
     coordinator.sample('charging', docked=True, outside=False)
-    with pytest.raises(GarageControlError) as err:
-        asyncio.run(runtime.async_tick())
-    assert err.value.reason == 'close_not_allowed'
-    assert services.calls == [], 'the door must not be commanded'
+    runtime.controller.task_in_progress = True
+    asyncio.run(runtime.async_request_open())
+    asyncio.run(runtime._finish_sequence())
+    assert ('cover', 'close_cover', 'cover.door') not in services.calls, (
+        'the household asked to close the door itself; the integration must obey')
+    assert runtime.controller.phase == 'blocked'
+    assert runtime.controller.last_error == 'close_not_allowed'
 
 
 # --- no latches anywhere -----------------------------------------------------

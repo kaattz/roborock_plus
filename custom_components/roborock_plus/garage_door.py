@@ -89,6 +89,11 @@ class GarageController:
         self.evidence = DoorEvidence(self.binding)
         self.phase = 'idle'
         self.last_error: str | None = None
+        #: Whether a clean task started by this integration is in progress. The door
+        #: is shared with the household, so the integration has permission to move it
+        #: only while it is running a task: outside that scope the door is not the
+        #: integration's to touch at all.
+        self.task_in_progress = False
         self.robot = robot_observation()
         self.state: DoorState = self._observe_door()
 
@@ -193,6 +198,10 @@ class GarageController:
         Called *before* a clean command. The confirmation requirement is what
         makes "proactive" safe: the robot is not released until the door is known
         to be open.
+
+        Everything here happens inside a task this integration is starting, so it is
+        the moment the door becomes ours to move. The flag is set even when the door
+        is already open: the household opening it first does not take the task away.
         """
         self.refresh()
         reason = self.door_blocked_reason()
@@ -201,6 +210,7 @@ class GarageController:
             self.last_error = reason
             raise GarageControlError(reason)
         if self.open_confirmed():
+            self.task_in_progress = True
             self.phase = 'outside'
             self.last_error = None
             return
@@ -209,6 +219,7 @@ class GarageController:
             self.evidence.invalidate('opening')
             await self.move_door('open')
             await self._wait_for('open')
+            self.task_in_progress = True
             self.phase = 'outside'
             self.last_error = None
         except GarageControlError:
@@ -300,6 +311,8 @@ class GarageController:
         # The phase reflects what actually happened: reporting "closed_outside"
         # after a refused close would tell the next tick a lie and hide the fact
         # that the door is still open.
+        if closed:
+            self.task_in_progress = False
         self.phase = 'closed_outside' if closed else 'blocked'
         return True
 
@@ -367,18 +380,72 @@ class GarageController:
         await resume()
         self.phase = 'outside'
 
-    async def update_idle(self) -> None:
-        """Close when nothing is running and the robot sits on its dock."""
+    async def sequence_finished(self) -> bool:
+        """Advance one running clean. Returns whether the sequence is over.
+
+        The rules, in order. Only the states that matter are listed; anything else does
+        nothing at all.
+
+        1. A task is running and the robot is on its dock while the door is *not* open:
+           open it. The door is the robot's only way out, and it leaves again on its own
+           after charging, washing or emptying. A closed door in its path is a collision.
+           This also covers a household member closing the door mid-task: the clean is
+           still running, so the door is reopened.
+        2. A task is running but the robot is elsewhere: do nothing. It is working, and
+           closing behind it belongs to ``update_after_departure``.
+        3. No task, robot docked, door open: the clean is over; close the door.
+        4. No task, robot docked, door closed: already finished.
+        5. No task, robot away from the dock: not over yet; it is still driving home.
+        """
+        # Read reality before deciding. Every other entry point refreshes first; without
+        # it this answered from whatever the last caller happened to leave in the
+        # snapshot, which is how a robot reported as cleaning was once mistaken for one
+        # that had finished.
         self.refresh()
+
+        if not self.task_in_progress:
+            # No clean of ours is running, so this table does not apply at all: the door
+            # belongs to the household, whatever position it is in.
+            return False
+
         if self.task_running():
-            return
+            if self.robot_docked() and not self.open_confirmed():
+                # Rule 1: the robot is home mid-task and must be able to get out again.
+                if self.door_blocked_reason() is not None:
+                    self.phase = 'blocked'
+                    return False
+                try:
+                    await self.open_door()
+                except GarageControlError as err:
+                    self.last_error = err.reason
+                    self.phase = 'blocked'
+                return False
+            # Rule 2: working elsewhere; the departure rule owns the door.
+            return False
+
         if not self.robot_docked():
-            return
+            # Rule 5: still on its way home.
+            return False
+
         if self.closed_confirmed():
+            # Rule 4: finished, and the door is already shut.
+            self.task_in_progress = False
             self.phase = 'idle'
-            return
+            return True
         if self.door_blocked_reason() is not None:
+            # Cannot read the door. Do not act on a guess; the sequence ends anyway so
+            # a stuck sensor cannot keep a caller blocked for hours.
             self.phase = 'blocked'
-            return
-        await self.close_door()
+            self.task_in_progress = False
+            return True
+        # Rule 3: the clean is over and the door it used is still open.
+        try:
+            await self.close_door()
+        except GarageControlError as err:
+            self.last_error = err.reason
+            self.phase = 'blocked'
+            self.task_in_progress = False
+            return True
+        self.task_in_progress = False
         self.phase = 'idle'
+        return True

@@ -277,11 +277,13 @@ def test_an_already_open_door_needs_no_pause_on_return():
 # --- final close -------------------------------------------------------------
 
 def test_the_door_is_shut_once_the_robot_is_docked_and_idle():
-    rig = Rig(opened=True)
+    """A sequence that started closes its door when it finishes."""
+    rig = Rig(opened=False)
     controller = rig.build()
+    asyncio.run(controller.open_door())
     rig.state, rig.docked = 'charging', True
-    asyncio.run(controller.update_idle())
-    assert rig.calls == ['close']
+    assert asyncio.run(controller.sequence_finished()) is True
+    assert rig.calls == ['open', 'close']
     assert controller.phase == 'idle'
 
 
@@ -289,7 +291,7 @@ def test_a_running_task_keeps_the_door_alone():
     rig = Rig(opened=True)
     controller = rig.build()
     rig.state, rig.docked = 'cleaning', False
-    asyncio.run(controller.update_idle())
+    assert asyncio.run(controller.sequence_finished()) is False
     assert rig.calls == []
 
 
@@ -297,18 +299,17 @@ def test_a_running_task_keeps_the_door_alone():
     'cleaning', 'segment_cleaning', 'zoned_cleaning', 'spot_cleaning',
     'returning_home', 'going_to_wash_the_mop', 'paused', 'starting',
 ])
-def test_no_running_or_moving_state_ever_gets_the_door_shut(state):
+def test_no_running_or_moving_state_ends_the_sequence(state):
     """The final close is only for a task that is over.
 
-    ``update_idle`` runs on every tick, so any state it fails to recognise as
-    "still busy" would shut the door mid-task. Enumerated rather than sampled:
-    one forgotten state is a robot trapped outside.
+    Enumerated rather than sampled: one forgotten state is a robot trapped outside with
+    the door shut behind it.
     """
     rig = Rig(opened=True)
     controller = rig.build()
     rig.state = state
     rig.docked = state in ('paused',)   # paused can be docked mid-task
-    asyncio.run(controller.update_idle())
+    assert asyncio.run(controller.sequence_finished()) is False
     assert rig.calls == [], f'{state} is still part of a task; the door must stay open'
 
 

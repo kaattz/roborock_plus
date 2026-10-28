@@ -25,7 +25,9 @@ def test_new_mixed_source_form_suggests_only_auxiliary_parameters():
     handler, page = timing_page()
     values = defaults(page)
     assert values["travel_margin_seconds"] == 10
-    assert values["contact_settle_seconds"] == 1
+    # A magnetic contact confirms from one reading, so its settle window defaults to 0;
+    # a non-zero window can only elapse if something re-reads the door, and nothing does.
+    assert values["contact_settle_seconds"] == 0
     assert values["dock_settle_seconds"] == 5
     assert values["operation_timeout_seconds"] == 90
     assert values["open_travel_seconds"] is None

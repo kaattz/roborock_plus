@@ -47,10 +47,16 @@ def observe(evidence, now, **values):
     return evidence.observe(now, cover_available=True, **values)
 
 
-def test_contacts_have_independent_polarity_and_settle(evidence_type):
+def test_contacts_have_independent_polarity_and_confirm_immediately(evidence_type):
+    """A magnetic contact is a latched switch: one reading is the fact.
+
+    There is no settle delay for contacts because nothing here polls the door, so a
+    time window could never elapse. Requiring one made every endpoint "unsettled"
+    forever, which is what made a closed door unreadable.
+    """
     evidence = evidence_type(binding())
     first = observe(evidence, 0, open_contact="on", close_contact="on")
-    assert first.open.reached is None
+    assert first.open.reached is True
     assert first.close.reached is False
     state = observe(evidence, 2, open_contact="on", close_contact="on")
     assert state.open_confirmed is True
@@ -102,20 +108,24 @@ def test_unselected_old_contacts_do_not_change_position_source(evidence_type):
     assert state.passage_allowed is True
 
 
-def test_conflict_resets_stability_and_timer(evidence_type):
-    evidence = evidence_type(binding())
-    observe(evidence, 0, open_contact="on", close_contact="on")
-    observe(evidence, 2, open_contact="on", close_contact="off")
-    assert observe(evidence, 3, open_contact="on", close_contact="on").open_confirmed is None
-    assert observe(evidence, 5, open_contact="on", close_contact="on").open_confirmed is True
+def test_a_contact_conflict_is_unknown_not_a_guess(evidence_type):
+    """Both endpoints reporting "reached" at once cannot be believed.
+
+    Without a settle delay the conflict detection is the only safeguard left, so it has
+    to hold on the very first reading rather than after a delay.
+    """
+    evidence = evidence_type(binding(open_contact_state="on", close_contact_state="on"))
+    state = observe(evidence, 0, open_contact="on", close_contact="on")
+    assert state.open.reason == "endpoint_conflict"
+    assert state.closed_confirmed is None
 
 
 def test_releasing_endpoint_revokes_without_waiting(evidence_type):
+    """Losing the endpoint is immediate: the magnet is no longer there."""
     evidence = evidence_type(binding())
-    observe(evidence, 0, open_contact="on", close_contact="on")
-    assert observe(evidence, 2, open_contact="on", close_contact="on").open_confirmed
+    assert observe(evidence, 0, open_contact="on", close_contact="on").open_confirmed is True
     assert observe(evidence, 2.1, open_contact="off", close_contact="on").open_confirmed is False
-    assert observe(evidence, 4, open_contact="on", close_contact="on").open_confirmed is None
+    assert observe(evidence, 4, open_contact="on", close_contact="on").open_confirmed is True
 
 
 def test_measured_position_can_confirm_without_command_or_full_travel(evidence_type):
@@ -233,11 +243,17 @@ def test_close_command_blocks_passage_despite_delayed_contact_release(evidence_t
 
 
 def test_command_change_cannot_carry_stability_across_operations(evidence_type):
+    """A new command resets the estimate; contact readings then speak for themselves.
+
+    Previously this asserted the settle delay was lost across operations. With contacts
+    confirming on the first coherent reading there is no delay to lose -- what must still
+    hold is that the first reading after a command is accepted only from the contact.
+    """
     evidence = evidence_type(binding())
     observe(evidence, 0, open_contact="on", close_contact="on")
     evidence.note_command("open", 1.9, 2)
-    assert observe(evidence, 2, open_contact="on", close_contact="on").open_confirmed is None
-    assert observe(evidence, 4, open_contact="on", close_contact="on").open_confirmed
+    assert observe(evidence, 2, open_contact="on", close_contact="on").open_confirmed is True
+    assert observe(evidence, 4, open_contact="on", close_contact="on").open_confirmed is True
 
 
 @pytest.mark.parametrize("reason", ["stopped", "manual_override", "command_failed"])
@@ -294,8 +310,8 @@ def test_bad_clock_is_unknown(evidence_type, invalid_now):
         {"open_contact": None},
         {"open_contact_state": "open"},
         {"open_contact_state": None},
-        {"contact_settle_seconds": True},
-        {"contact_settle_seconds": -1},
+        {"open_contact": "cover.not_a_contact"},
+        {"open_contact": "binarysensor.typo"},
         {"open_source": "position", "position_kind": None},
         {"open_source": "position", "open_position": float("nan")},
         {"open_source": "position", "open_position": 5},

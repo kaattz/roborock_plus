@@ -68,7 +68,14 @@ def suggested_timing_values(binding: Mapping[str, Any]) -> dict[str, int]:
     """Suggest UI policy values; never invent hardware travel or repair a binding."""
     required = required_timing_fields(binding)
     suggestions = {key: value for key, value in {
-        "travel_margin_seconds": 10, "contact_settle_seconds": 1,
+        # A magnetic door contact is a latched binary switch: one coherent reading is the
+        # fact. A settle window only filters chatter, and chatter can only be observed by
+        # polling -- this integration has no polling loop, so a non-zero window never
+        # elapses and every endpoint stays "unsettled" forever. That made a closed door
+        # unreadable and the whole binding inert. Zero is the correct default for a
+        # contact; a position value genuinely varies while the door travels, so it keeps
+        # its window.
+        "travel_margin_seconds": 10, "contact_settle_seconds": 0,
         "position_settle_seconds": 2, "dock_settle_seconds": 5,
     }.items() if key in required}
     values = {**suggestions, **binding}

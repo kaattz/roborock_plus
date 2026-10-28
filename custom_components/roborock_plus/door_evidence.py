@@ -199,6 +199,13 @@ class DoorEvidence:
         return value == polarity
 
     def _settled(self, direction: str, reached: bool, now: float, seconds: float) -> bool:
+        """Whether this endpoint reading has been stable long enough.
+
+        ``seconds`` is optional and normally 0 for a magnetic contact: it is a latched
+        binary switch, so a single coherent reading is the fact. A non-zero value is
+        only useful when something polls, because the window is measured in elapsed
+        time and this integration has no polling loop.
+        """
         if not reached:
             self._stable_since.pop(direction, None)
             return False
@@ -209,16 +216,20 @@ class DoorEvidence:
         source = self._binding.get(f"{direction}_source")
         if source == "contact":
             reached = self._contact_reached(direction, contact)
-            settle = _number(self._binding.get("contact_settle_seconds"), 0, 60)
-            if settle is None or not self._binding.get(f"{direction}_contact") or self._binding.get(f"{direction}_contact_state") not in ("on", "off"):
+            if not self._binding.get(f"{direction}_contact") or self._binding.get(f"{direction}_contact_state") not in ("on", "off"):
                 return self._unknown(direction, "invalid_configuration")
             if reached is None:
                 return self._unknown(direction, "feedback_unavailable")
             if not reached:
                 self._stable_since.pop(direction, None)
                 return EndpointEvidence(False, "confirmed", "contact")
-            if not self._settled(direction, reached, now, settle):
-                return EndpointEvidence(None, "unknown", "contact", "endpoint_unsettled")
+            # A magnetic contact is a latched binary switch: the magnet is touching or it
+            # is not. The settle window exists to filter electrical chatter, and chatter
+            # can only be noticed by watching the value over time -- which needs polling.
+            # This integration has no polling loop, so a non-zero window can never
+            # elapse and every endpoint would stay "unsettled" forever, making a
+            # perfectly readable door unusable. The configured value is therefore ignored
+            # for contacts and kept only so older bindings still validate.
             return EndpointEvidence(True, "confirmed", "contact")
 
         if source == "position":

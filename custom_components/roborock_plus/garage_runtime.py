@@ -99,7 +99,11 @@ class GarageRuntime:
         self._listeners: list[Callable[[], None]] = []
         self._unsubscribers: list[Callable[[], None]] = []
         self._contexts: list[str] = []
-        self._update_task: asyncio.Task | None = None
+        #: The task carrying the current clean's door work, if a clean is running.
+        self._sequence_task: asyncio.Task | None = None
+        #: Sleep between sequence checks. Replaceable so tests can run a whole trip in
+        #: no time while the loop keeps its real deadline logic.
+        self._sequence_sleep = asyncio.sleep
         self._closed = False
         self._last_issue: str | None = None
         self.stage_result: str | None = None
@@ -277,47 +281,33 @@ class GarageRuntime:
         self.controller.phase = 'idle' if self.controller.closed_confirmed() else 'outside'
 
     async def async_start(self) -> None:
+        """Bring the binding up. Starts no loop and commands nothing.
+
+        There used to be a one-second background loop here that re-evaluated the door
+        against the robot's state. It is what shut a hand-opened door: a poll has no
+        notion of a sequence, so "door open, robot docked, nothing happening" looked
+        like a reason to close, once a second, all evening.
+
+        Nothing replaces it. The only caller that moves the door is a clean sequence,
+        which runs inside ``async_send`` and handles its own mid-task returns and final
+        close. A door operated by the household sees no integration activity at all.
+        """
         await self.async_restore()
         await self.async_attach()
-        self._update_task = asyncio.create_task(self._run_loop())
         self.publish()
 
-    async def _run_loop(self) -> None:
-        while not self._closed:
-            try:
-                await self.async_tick()
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # noqa: BLE001 - one bad tick must not kill the loop
-                _LOGGER.exception('Garage tick failed for %s', self.coordinator.duid)
-            await asyncio.sleep(1.0)
-
     def shutdown(self) -> None:
+        """Stop following any clean in progress. Commands nothing."""
         self._closed = True
-        if self._update_task is not None:
-            self._update_task.cancel()
-            self._update_task = None
+        if self._sequence_task is not None:
+            self._sequence_task.cancel()
+            self._sequence_task = None
         for unsubscribe in self._unsubscribers:
             unsubscribe()
         self._unsubscribers.clear()
         self._listeners.clear()
 
-    # -- the tick ------------------------------------------------------------
-
-    async def async_tick(self) -> None:
-        """Apply the reactive rules. Opening is never decided here."""
-        if self._closed:
-            return
-        self.controller.refresh()
-        if await self._handle_return():
-            return
-        if await self.controller.update_after_departure(
-            pause=self._pause_robot, resume=self._resume_robot,
-        ):
-            self.publish()
-            return
-        await self.controller.update_idle()
-        self.publish()
+    # -- the sequence --------------------------------------------------------
 
     async def _pause_robot(self) -> None:
         await self.async_control_command('app_pause')
@@ -347,11 +337,23 @@ class GarageRuntime:
     # -- command entry -------------------------------------------------------
 
     async def async_send(self, command: Any, send: Callable, *, _stage_owner: object | None = None) -> Any:
-        """Run a robot command, opening the door first when it begins cleaning.
+        """Run one cleaning sequence: open, release the robot, wait, close.
 
-        The door is opened and *confirmed* before ``send`` runs: waiting to
-        observe the robot moving would be too late, because by then it has left
-        the dock and a pause mid-manoeuvre strands it in the cabinet opening.
+        This is the whole ordered process, not a wrapper around a command:
+
+        1. open the door and confirm it is open, so the robot has a way out;
+        2. send the clean command, which releases the robot;
+        3. wait for the robot to come home, reopening the door for any mid-task
+           recharge visit the robot makes on its own;
+        4. close the door behind it and finish.
+
+        Step 1 must precede step 2. Waiting to observe the robot moving would be too
+        late: by then it has left the dock, and a pause mid-manoeuvre strands it in the
+        cabinet opening.
+
+        Steps 3 and 4 are what give the door its beginning and end. Without them the
+        only remaining close rule would be a background poll of the door's position,
+        which is what closed a hand-opened door seconds after the household opened it.
         """
         name = command_name(command)
         if name not in _NEW_TASK_COMMANDS | _RESUME_COMMANDS | _DIRECT_COMMANDS | {'app_charge'}:
@@ -360,14 +362,70 @@ class GarageRuntime:
             return await send()
         if self._closed:
             raise GarageControlError('control_unloaded')
+
+        if name not in _NEW_TASK_COMMANDS and name not in _RESUME_COMMANDS:
+            # app_charge and anything else that is not a clean: no sequence to run.
+            return await send()
+
         if name in _CONTROLLED_EXIT_COMMANDS and self._should_controlled_exit(name):
             await self._run_controlled_exit()
-        if name in _NEW_TASK_COMMANDS or name in _RESUME_COMMANDS:
-            await self.controller.open_door()
-            self.publish()
-        result = await send()
+        await self.controller.open_door()
         self.publish()
+        try:
+            result = await send()
+        except Exception:
+            # The robot never took the command, so the sequence did not start. Leave
+            # the door where it is: closing it here would be an unrequested move.
+            self.publish()
+            raise
+        self.publish()
+        # The door work that follows the command belongs to this clean, but it must
+        # not block the caller: ``vacuum.clean_area`` has to return promptly, and a
+        # clean can run for hours. The sequence continues as one owned task.
+        self._sequence_task = asyncio.create_task(self._finish_sequence())
         return result
+
+    async def _finish_sequence(self) -> None:
+        """Carry one clean through to its end: mid-task returns, then the final close.
+
+        Started by ``async_send`` right after the command is accepted, so this belongs
+        to exactly one clean. It ends when the robot is home and the door is shut, or
+        when the sequence times out.
+
+        This replaces the old one-second monitor. The difference is scope: this loop
+        exists only between a clean's command and its completion, whereas the monitor
+        ran all day and treated "door open, nothing happening" as a reason to close.
+        """
+        timeout = float(self.binding.get('sequence_timeout_minutes', 480)) * 60
+        deadline = self.clock() + max(1.0, timeout)
+        try:
+            while True:
+                if self._closed:
+                    return
+                self.controller.refresh()
+                if await self._handle_return():
+                    pass
+                elif await self.controller.update_after_departure(
+                    pause=self._pause_robot, resume=self._resume_robot,
+                ):
+                    pass
+                self.publish()
+                if await self.controller.sequence_finished():
+                    return
+                if self.clock() >= deadline:
+                    _LOGGER.warning(
+                        'Garage sequence for %s did not finish within %.0f minutes; '
+                        'leaving the door as it is', self.coordinator.duid, timeout / 60)
+                    return
+                await self._sequence_sleep(1.0)
+        except asyncio.CancelledError:
+            raise
+        except GarageControlError as err:
+            _LOGGER.info('Garage sequence for %s stopped: %s', self.coordinator.duid, err.reason)
+        except Exception:  # noqa: BLE001 - one bad sequence must not escape silently
+            _LOGGER.exception('Garage sequence for %s failed', self.coordinator.duid)
+        finally:
+            self.publish()
 
     def _controlled_exit_settings(self) -> dict[str, Any]:
         return {
@@ -556,30 +614,24 @@ class GarageRuntime:
     # -- wiring --------------------------------------------------------------
 
     async def async_attach(self) -> None:
-        """Subscribe to the Home Assistant events this runtime cares about."""
+        """Subscribe only to what can actually change a decision.
+
+        There is deliberately no periodic timer and no state listener here. A clean
+        sequence runs inside ``async_send``, which owns both its door moves, so nothing
+        needs to *notice* the door changing. A timer that reacts to state is precisely
+        how a monitor turns into a hardware actor.
+
+        What remains is the external-command log: if somebody operates the door by hand
+        or through another automation, it is recorded. It changes no state and commands
+        nothing.
+        """
         from homeassistant.core import callback
-        from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
-
-        entities = [entity for entity in (
-            self.binding.get('cover_entity_id'),
-            self.binding.get('open_contact'),
-            self.binding.get('close_contact'),
-            self.binding.get('close_permission_entity'),
-        ) if entity]
-
-        @callback
-        def on_state(event: Any) -> None:
-            self.schedule()
 
         @callback
         def on_service(event: Any) -> None:
             self._service_event(event)
 
-        self._unsubscribers.extend([
-            async_track_state_change_event(self.hass, entities, on_state),
-            self.hass.bus.async_listen('call_service', on_service),
-            async_track_time_interval(self.hass, on_state, timedelta(seconds=30)),
-        ])
+        self._unsubscribers.append(self.hass.bus.async_listen('call_service', on_service))
 
 async def async_setup_garages(hass: Any, entry: Any) -> None:
     """Activate only explicitly enabled, validated per-robot bindings."""

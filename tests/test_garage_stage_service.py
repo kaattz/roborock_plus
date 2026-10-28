@@ -193,7 +193,11 @@ def test_a_stage_that_never_finishes_times_out_and_fails():
 
 
 def test_the_door_opens_before_the_stage_command_is_sent():
-    """A stage is a clean, so it gets the same proactive door handling."""
+    """A stage is a clean, so it gets the same proactive door handling.
+
+    The sequence continues past the command, so the order also contains the close that
+    follows when this robot is already home.
+    """
     rig = Rig(opened=False)
     runtime = rig.build()
     rig.task_active, rig.docked, rig.state = False, True, 'charging'
@@ -209,7 +213,7 @@ def test_the_door_opens_before_the_stage_command_is_sent():
         {'command': 'app_segment_clean', 'params': [{'segments': [3]}]},
         _ok,
     ))
-    assert order == ['open']
+    assert order and order[0] == 'open', 'the door must open before the robot moves'
     assert result['result'] == 'succeeded'
 
 

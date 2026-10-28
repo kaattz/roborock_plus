@@ -67,9 +67,18 @@ class GarageDiagnosticEntity(RoborockEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Show source and quality separately from physical confirmation."""
+        """Show source and quality separately from physical confirmation.
+
+        The controller is asked to refresh first. Nothing polls it any more -- a clean
+        sequence drives the door and owns its own reads -- so without this the entity
+        would keep reporting whatever was true at start-up forever. A diagnostic showing
+        a stale snapshot is worse than none: this one reported
+        ``feedback_unavailable`` for a door that was perfectly readable.
+        """
         runtime = self._runtime
         controller = self._controller
+        if controller is not None:
+            controller.refresh()
         state = getattr(controller, "state", None)
         binding = getattr(runtime, "binding", None) or _configured_binding(self.coordinator) or {}
         attributes = {
@@ -100,17 +109,20 @@ class GarageBinarySensor(GarageDiagnosticEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool | None:
         controller = self._controller
-        if self._attr_translation_key == "garage_problem":
-            if self._setup_error:
-                return True
-            if controller is None:
-                return None
-            # "Problem" now means the door evidence cannot be acted on, or a door
-            # command is mid-flight. It is not a latch: the next usable sample
-            # clears it without anyone doing anything.
-            return bool(controller.last_error or controller.phase == "blocked")
+        if self._setup_error:
+            # The binding could not be validated, so nothing about the door is known.
+            # Reporting a stale or guessed endpoint here would be worse than unknown.
+            return True if self._attr_translation_key == "garage_problem" else None
         if controller is None:
             return None
+        # Read the door now: nothing polls the controller, so a cached value would be
+        # whatever was true at start-up. Unlike a costly operation this is a couple of
+        # state lookups, which is what a diagnostic entity is for.
+        controller.refresh()
+        if self._attr_translation_key == "garage_problem":
+            # "Problem" means the door evidence cannot be acted on, or a door command is
+            # mid-flight. It is not a latch: the next usable sample clears it.
+            return bool(controller.last_error or controller.phase == "blocked")
         if self._attr_translation_key == "garage_passage_allowed":
             return controller.passage_allowed
         state = controller.state

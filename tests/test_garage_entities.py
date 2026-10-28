@@ -84,7 +84,8 @@ def runtime(*, quality="confirmed", reached=True, passage=True,
     )
     return SimpleNamespace(
         controller=SimpleNamespace(state=state, passage_allowed=passage, phase=phase,
-                                   last_error=last_error, operation_id=7),
+                                   last_error=last_error, operation_id=7,
+                                   refresh=lambda: None),
         binding={"cover_entity_id": "cover.door", "task_door_mode": "after_exit",
                  "open_source": "position", "close_source": "contact"},
         stage_attributes=lambda: {

@@ -403,6 +403,11 @@ class GarageRuntime:
         self._sequence_task = asyncio.create_task(self._finish_sequence())
         return result
 
+    #: How long a clean gets to prove it started before the sequence gives up on it.
+    #: Long enough for a command to reach the robot and for the robot to leave its dock;
+    #: short enough that a stale sequence cannot survive into the next hour.
+    START_CONFIRMATION_SECONDS = 180
+
     async def _finish_sequence(self) -> None:
         """Carry one clean through to its end: mid-task returns, then the final close.
 
@@ -410,13 +415,18 @@ class GarageRuntime:
         to exactly one clean. It ends when the robot is home and the door is shut, or
         when the sequence times out.
 
-        This replaces the old one-second monitor. The difference is scope: this loop
-        exists only between a clean's command and its completion, whereas the monitor
-        ran all day and treated "door open, nothing happening" as a reason to close.
+        It first waits for proof that the clean actually began. A command can be accepted
+        and still never move the robot -- a dropped cloud call, a robot that was busy, a
+        segment list the device rejected. Without that proof the sequence would find a
+        docked robot with no task, call it "finished", and close a door nobody asked it
+        to close. That is the one way this code could move a door uninvited, so it does
+        not proceed until the robot has been seen working.
         """
         timeout = float(self.binding.get('sequence_timeout_minutes', 480)) * 60
         deadline = self.clock() + max(1.0, timeout)
         try:
+            if not await self._await_clean_started():
+                return
             while True:
                 if self._closed:
                     return
@@ -444,6 +454,33 @@ class GarageRuntime:
             _LOGGER.exception('Garage sequence for %s failed', self.coordinator.duid)
         finally:
             self.publish()
+
+    async def _await_clean_started(self) -> bool:
+        """Wait until the robot is actually working, or give up on this clean.
+
+        Returns whether the clean is confirmed running. False means it never started, so
+        the caller must not treat anything that follows as part of a task -- in
+        particular it must not close the door on the strength of it.
+
+        "Working" means an active task while away from the dock. Both halves are needed: a
+        docked robot mid-task is recharging and will come back out, while a robot away
+        from its dock with no task is returning from something else and is not this clean.
+        """
+        deadline = self.clock() + self.START_CONFIRMATION_SECONDS
+        while True:
+            if self._closed:
+                return False
+            self.controller.refresh()
+            if self.controller.task_running() and not self.controller.robot_docked():
+                return True
+            if self.clock() >= deadline:
+                _LOGGER.warning(
+                    'Garage sequence for %s: the clean never started within %d s; '
+                    'leaving the door as it is', self.coordinator.duid,
+                    self.START_CONFIRMATION_SECONDS)
+                self.controller.task_in_progress = False
+                return False
+            await self._sequence_sleep(1.0)
 
     def _controlled_exit_settings(self) -> dict[str, Any]:
         return {
@@ -503,6 +540,34 @@ class GarageRuntime:
         self.publish()
 
     async def async_request_close(self) -> None:
+        """Close on explicit request, refusing only when the robot is known to be inside.
+
+        The door is the household's, not this integration's, so a request to close it is
+        honoured. The one exception is a robot this integration can see sitting in the
+        doorway: closing then would be a collision, and the caller did not ask for that.
+
+        Unknown position is not a refusal. Refusing on missing data would turn a sensor
+        problem into a door nobody can close, which is the class of fault this integration
+        was rewritten to remove.
+        """
+        self.controller.refresh()
+        inside = (
+            getattr(self.controller.robot, 'fresh', False)
+            and getattr(self.controller.robot, 'position_trusted', False) is True
+            and getattr(self.controller.robot, 'outside_danger_zone', None) is False
+            and not self.controller.robot_docked()
+        )
+        if inside:
+            _LOGGER.warning(
+                'Garage close refused for %s: the robot is inside the danger zone '
+                '(state=%s, docked=%s)', self.coordinator.duid,
+                self.controller.robot_state(), self.controller.robot_docked())
+            raise GarageControlError('robot_in_the_way')
+        _LOGGER.info(
+            'Garage close requested for %s (robot state=%s, docked=%s, outside=%s)',
+            self.coordinator.duid, self.controller.robot_state(),
+            self.controller.robot_docked(),
+            getattr(self.controller.robot, 'outside_danger_zone', None))
         await self.controller.close_door()
         self.publish()
 

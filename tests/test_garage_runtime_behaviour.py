@@ -297,19 +297,36 @@ def test_a_return_with_an_open_door_needs_no_pause():
 # --- final close -------------------------------------------------------------
 
 def test_the_door_closes_when_the_robot_is_docked_and_idle_again():
-    """A finished task closes the door it opened.
+    """A clean that ran to completion closes the door it opened.
 
-    The door is opened through the runtime so the tick has a task to finish; a door
-    merely standing open is the household's business.
+    The robot has to be seen working first: a sequence refuses to close anything for a
+    clean that never started, which is the case that used to shut the door on a robot
+    that had not moved.
     """
     runtime, coordinator, services, _ = build_runtime(opened=False)
     coordinator.sample('charging', docked=True, outside=False)
     asyncio.run(runtime.async_request_open())
-    asyncio.run(runtime._finish_sequence())
-    assert services.calls == [
-        ('cover', 'open_cover', 'cover.door'),
-        ('cover', 'close_cover', 'cover.door'),
+    runtime.controller.task_in_progress = True
+
+    checks = {'n': 0}
+    original_refresh = runtime.controller.refresh
+    script = [
+        ('cleaning', False, True),    # out at work
+        ('charging', True, False),    # home, task over
     ]
+
+    def staged_refresh():
+        original_refresh()
+        checks['n'] += 1
+        if checks['n'] <= len(script):
+            state, docked, outside = script[checks['n'] - 1]
+            coordinator.sample(state, docked=docked, outside=outside)
+
+    runtime.controller.refresh = staged_refresh
+    asyncio.run(runtime._finish_sequence())
+
+    assert ('cover', 'open_cover', 'cover.door') in services.calls
+    assert ('cover', 'close_cover', 'cover.door') in services.calls
 
 
 def test_a_running_task_is_left_alone():
@@ -326,14 +343,31 @@ def test_the_permission_blocks_closing():
     """A household that asked to close manually must be obeyed.
 
     The refusal is reported, not swallowed: the door stays open and the phase says why.
-    The clean has to be started first, because the permission only applies to a close
-    that a task would otherwise perform.
+    The clean has to be seen running first, because the permission only applies to a
+    close that a task would otherwise perform.
     """
     runtime, coordinator, services, _ = build_runtime(opened=False, permission=False)
     coordinator.sample('charging', docked=True, outside=False)
     runtime.controller.task_in_progress = True
     asyncio.run(runtime.async_request_open())
+
+    checks = {'n': 0}
+    original_refresh = runtime.controller.refresh
+    script = [
+        ('cleaning', False, True),
+        ('charging', True, False),
+    ]
+
+    def staged_refresh():
+        original_refresh()
+        checks['n'] += 1
+        if checks['n'] <= len(script):
+            state, docked, outside = script[checks['n'] - 1]
+            coordinator.sample(state, docked=docked, outside=outside)
+
+    runtime.controller.refresh = staged_refresh
     asyncio.run(runtime._finish_sequence())
+
     assert ('cover', 'close_cover', 'cover.door') not in services.calls, (
         'the household asked to close the door itself; the integration must obey')
     assert runtime.controller.phase == 'blocked'

@@ -1,75 +1,25 @@
 blueprint:
   name: 扫地机分区定时清扫
-  description: |
-    用 HA 指定的房间清扫，触发方式由你选，支持按星期、扫地/拖地意图、
-    以及"区域内有人则跳过并重试"。
-
-    ## 这个蓝图解决什么
-
-    - **触发**：蓝图不预设，你自己配。每天定时、每周固定几天、
-      或者设备事件（例如洗碗机洗完）都行。
-    - **区域**：直接选 HA 区域（客厅/餐厅…），不依赖设备里的例程。
-    - **扫地还是拖地**：见下面「扫地/拖地怎么表达」。
-    - **有人跳过**：填了人体传感器就只在无人时扫；没填就是到点就扫。
-    - **失败重试**：触发时如果因为有人、扫地机正忙、门打不开等原因没扫成，
-      会在指定窗口内反复重试；窗口内始终不成才告警。
-
-    ## 三种典型配法
-
-    1. **公区，每天** — 触发器「时间」= 你希望的时刻。
-    2. **卧室，每周三天** — 触发器「时间」= 时刻，再展开触发器里的
-       「星期几 / Days of the Week」勾那三天。**星期在触发器里设**，
-       蓝图没有单独的星期参数。
-    3. **午饭后餐厨** — 触发器「状态」= 洗碗机的
-       `binary_sensor.<dishwasher>_program_finished`，`off` → `on`。
-       这个信号只有 60 秒，但实测 4/4 都抓到了。这种触发器不用管星期。
-
-    ## 扫地/拖地怎么表达
-
-    V1 协议没有「仅扫地/仅拖地/扫拖一体」这个开关，它是用**底层参数**组合出来的
-    （依据 python-roborock 的 `CleaningMode` 抽象，其中 `VACUUM` 对应水量 `off`）：
-
-    | 意图 | 拖地强度 | 风机 |
-    | --- | --- | --- |
-    | 仅扫地 | `off`（水量关＝干扫） | 不变 |
-    | 扫拖一体 | 你选的水量 | 不变 |
-    | 仅拖地 | 你选的水量 | `off_raise_main_brush`（抬主刷） |
-
-    ⚠️ **不要**把「拖地模式」（`standard`/`deep`/`deep_plus`）当成扫地/拖地——
-    那是「拖地走几遍的路线」，与扫地还是拖地无关。
-
-    ## 前置条件
-
-    必须先在 **设置 → 设备与服务 → 该扫地机 → 齿轮 → 区域映射** 里，
-    把 HA 区域对应到设备的房间号。否则 `vacuum.clean_area` 会直接报错。
-
-    ## 判断"清扫真的启动了"
-
-    看集成的「任务进行中」二元传感器，而不是看服务调用是否报错：
-    服务调用成功只代表命令被服务器接受，不代表机器人动了（这是实测过的坑）。
-    重试与否、成功与否都以这个传感器为准。
-
-    **这个传感器不用你选** —— 蓝图从选中的扫地机设备上自己找。同理「拖地强度」
-    和「拖地模式」两个 select 也是自己找的，所以整套只填一个实体。
-
-    推导判据（都取自设备实际能力，不靠名字）：
-
-    | 要找 | 判据 |
-    | --- | --- |
-    | 任务进行中 | 该设备上 `device_class: running` 且 id 含 `task_active` |
-    | 拖地强度 | 该设备上 options 同时含 `off` 与 `extreme` |
-    | 拖地模式 | 该设备上 options 含 `deep_plus` |
-
-    找不到时**告警并停止**，不猜、不跳过。
-
-    ## 柜门
-
-    开门由集成的 `garage_guard` 在下发命令前自动完成，本蓝图不管门。
-
+  description: "用 HA 指定的房间清扫，触发方式由你选，支持按星期、扫地/拖地意图、\n以及\"区域内有人则跳过并重试\"。\n\n## 这个蓝图解决什么\n\n-
+    **触发**：蓝图不预设，你自己配。每天定时、每周固定几天、\n  或者设备事件（例如洗碗机洗完）都行。\n- **区域**：直接选 HA 区域（客厅/餐厅…），不依赖设备里的例程。\n-
+    **扫地还是拖地**：见下面「扫地/拖地怎么表达」。\n- **有人跳过**：填了人体传感器就只在无人时扫；没填就是到点就扫。\n- **失败重试**：触发时如果因为有人、扫地机正忙、门打不开等原因没扫成，\n
+    \ 会在指定窗口内反复重试；窗口内始终不成才告警。\n\n## 三种典型配法\n\n1. **公区，每天** — 触发器「时间」= 你希望的时刻。\n2.
+    **卧室，每周三天** — 触发器「时间」= 时刻，再展开触发器里的\n   「星期几 / Days of the Week」勾那三天。**星期在触发器里设**，\n
+    \  蓝图没有单独的星期参数。\n3. **午饭后餐厨** — 触发器「状态」= 洗碗机的\n   `binary_sensor.<dishwasher>_program_finished`，`off`
+    → `on`。\n   这个信号只有 60 秒，但实测 4/4 都抓到了。这种触发器不用管星期。\n\n## 扫地/拖地怎么表达\n\nV1 协议没有「仅扫地/仅拖地/扫拖一体」这个开关，它是用**底层参数**组合出来的\n（依据
+    python-roborock 的 `CleaningMode` 抽象，其中 `VACUUM` 对应水量 `off`）：\n\n| 意图 | 拖地强度 |
+    风机 |\n| --- | --- | --- |\n| 仅扫地 | `off`（水量关＝干扫） | 不变 |\n| 扫拖一体 | 你选的水量 | 不变 |\n|
+    仅拖地 | 你选的水量 | `off_raise_main_brush`（抬主刷） |\n\n⚠️ **不要**把「拖地模式」（`standard`/`deep`/`deep_plus`）当成扫地/拖地——\n那是「拖地走几遍的路线」，与扫地还是拖地无关。\n\n##
+    前置条件\n\n必须先在 **设置 → 设备与服务 → 该扫地机 → 齿轮 → 区域映射** 里，\n把 HA 区域对应到设备的房间号。否则 `vacuum.clean_area`
+    会直接报错。\n\n## 判断\"清扫真的启动了\"\n\n看集成的「任务进行中」二元传感器，而不是看服务调用是否报错：\n服务调用成功只代表命令被服务器接受，不代表机器人动了（这是实测过的坑）。\n重试与否、成功与否都以这个传感器为准。\n\n**这个传感器不用你选**
+    —— 蓝图从选中的扫地机设备上自己找。同理「拖地强度」\n和「拖地模式」两个 select 也是自己找的，所以整套只填一个实体。\n\n推导判据（都取自设备实际能力，不靠名字）：\n\n|
+    要找 | 判据 |\n| --- | --- |\n| 任务进行中 | 该设备上 `device_class: running` 且 id 含 `task_active`
+    |\n| 拖地强度 | 该设备上 options 同时含 `off` 与 `extreme` |\n| 拖地模式 | 该设备上 options 含 `deep_plus`
+    |\n\n找不到时**告警并停止**，不猜、不跳过。\n\n## 柜门\n\n开门由集成的 `garage_guard` 在下发命令前自动完成，本蓝图不管门。\n"
   domain: automation
   author: kaattz
   homeassistant:
-    min_version: "2024.6.0"
+    min_version: 2024.6.0
   input:
     target:
       name: 扫地机
@@ -77,37 +27,33 @@ blueprint:
       input:
         vacuum_entity:
           name: 扫地机实体
-          description: >-
-            只选这一个。它的「任务进行中」传感器、拖地强度、拖地模式都由蓝图
-            从这台设备上自动找出，不用你挑 —— 那几个实体名字很像
+          description: 只选这一个。它的「任务进行中」传感器、拖地强度、拖地模式都由蓝图 从这台设备上自动找出，不用你挑 —— 那几个实体名字很像
             （`_v2` 和 `_v2_2`），手选容易看反。
           selector:
             entity:
               filter:
-                - integration: roborock_plus
-                  domain: vacuum
-
+              - integration: roborock_plus
+                domain:
+                - vacuum
+              multiple: false
+              reorder: false
     schedule:
       name: 触发
       icon: mdi:clock-outline
       input:
         my_trigger:
           name: 何时清扫
-          description: >-
-            **在这里自己配触发器**，蓝图不预设。三种典型：
+          description: '**在这里自己配触发器**，蓝图不预设。三种典型：
 
             · **每天定时** — 触发器选「时间」，填个时刻。
 
-            · **每周固定几天** — 触发器选「时间」，填时刻，然后展开
-            下面的「星期几 / Days of the Week」，勾你要的那几天。
+            · **每周固定几天** — 触发器选「时间」，填时刻，然后展开 下面的「星期几 / Days of the Week」，勾你要的那几天。
             **星期是在触发器里设的**，蓝图没有单独的星期参数。
 
-            · **洗碗机洗完就扫** — 触发器选「状态」，实体选洗碗机的
-            `program_finished`，从 `off` 变 `on`。这个信号只亮 60 秒，
-            但实测 4/4 都抓到了。这种触发器**不用管星期**。
+            · **洗碗机洗完就扫** — 触发器选「状态」，实体选洗碗机的 `program_finished`，从 `off` 变 `on`。这个信号只亮
+            60 秒， 但实测 4/4 都抓到了。这种触发器**不用管星期**。'
           selector:
-            trigger:
-
+            trigger: {}
     area:
       name: 清扫区域
       icon: mdi:floor-plan
@@ -118,7 +64,7 @@ blueprint:
           selector:
             area:
               multiple: true
-
+              reorder: false
     mode:
       name: 清扫方式
       icon: mdi:water-opacity
@@ -129,38 +75,42 @@ blueprint:
           selector:
             select:
               options:
-                - 仅扫地
-                - 扫拖一体
-                - 仅拖地
+              - 仅扫地
+              - 扫拖一体
+              - 仅拖地
+              multiple: false
+              custom_value: false
+              sort: false
         mop_intensity:
           name: 拖地强度
-          description: >-
-            扫拖一体／仅拖地时使用的水量。仅扫地时忽略（蓝图强制设为 off，
-            那正是"干扫"的实现方式）。
+          description: 扫拖一体／仅拖地时使用的水量。仅扫地时忽略（蓝图强制设为 off， 那正是"干扫"的实现方式）。
           default: medium
           selector:
             select:
               options:
-                - slight
-                - low
-                - medium
-                - moderate
-                - high
-                - extreme
+              - slight
+              - low
+              - medium
+              - moderate
+              - high
+              - extreme
+              multiple: false
+              custom_value: false
+              sort: false
         mop_route:
           name: 拖地模式
-          description: >-
-            拖地走几遍的路线，与扫地/拖地无关。蓝图会设到设备上那个
-            「拖地模式」select；设备没有这个实体时就跳过。
+          description: 拖地走几遍的路线，与扫地/拖地无关。蓝图会设到设备上那个 「拖地模式」select；设备没有这个实体时就跳过。
           default: standard
           selector:
             select:
               options:
-                - standard
-                - deep
-                - deep_plus
-                - fast
-
+              - standard
+              - deep
+              - deep_plus
+              - fast
+              multiple: false
+              custom_value: false
+              sort: false
     presence:
       name: 有人跳过
       icon: mdi:motion-sensor
@@ -168,22 +118,62 @@ blueprint:
       input:
         presence_sensors:
           name: 本区域人体传感器
-          description: >-
-            留空＝不检查，到点就扫。填了就只在全部无人时扫。
-            只看本任务房间的传感器——例如「午饭后餐厨」填厨房和餐厅，
-            人在卧室不应该阻掉这一轮。
+          description: 留空＝不检查，到点就扫。填了就只在全部无人时扫。 只看本任务房间的传感器——例如「午饭后餐厨」填厨房和餐厅， 人在卧室不应该阻掉这一轮。
           default: []
           selector:
             entity:
               multiple: true
               filter:
-                - domain: binary_sensor
-                  device_class: motion
-                - domain: binary_sensor
-                  device_class: occupancy
-                - domain: binary_sensor
-                  device_class: presence
-
+              - domain:
+                - binary_sensor
+                device_class:
+                - motion
+              - domain:
+                - binary_sensor
+                device_class:
+                - occupancy
+              - domain:
+                - binary_sensor
+                device_class:
+                - presence
+              reorder: false
+    doors:
+      name: 房门
+      icon: mdi:door-open
+      collapsed: true
+      input:
+        door_sensors:
+          name: 门磁
+          description: >-
+            留空＝不检查。填了就是「这些门必须都开着才能扫」——例如主卧、
+            次卧的房门。门关着时本轮跳过，开门后会自己继续（在重试窗口内）。
+            只看本任务要进的门，别把别的房间填进来。
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+              - domain:
+                - binary_sensor
+              device_class:
+                - door
+                - opening
+                - garage_door
+              reorder: false
+        door_open_state:
+          name: 门开着时门磁报什么
+          description: >-
+            门磁极性因人而异，这里说清楚「哪个状态算开着」。多数门磁开门报
+            on；车库这类装反的报 off。填的只是「开」的那一侧，闭合就是另一侧。
+          default: "on"
+          selector:
+            select:
+              options:
+              - "on"
+              - "off"
+              multiple: false
+              custom_value: false
+              sort: false
     retry:
       name: 失败重试
       icon: mdi:refresh
@@ -191,42 +181,66 @@ blueprint:
       input:
         retry_window_minutes:
           name: 重试窗口（分钟）
-          description: 在这个时间内反复尝试；0＝只试一次，不重试。
+          description: >-
+            条件不满足时，在这个时间窗内反复重试；0＝只试一次，不重试。
+            **人体和门磁共用这一个窗口** —— 人在房间里、房门没开、扫地机正忙，
+            都算「条件不满足」，都走同一套重试。条件一满足就自动开始，
+            不必等到窗口结束。窗口用尽仍不满足才告警。
+            想让门开着再扫，就把窗口设得比「门可能开着的时段」长一些。
           default: 30
           selector:
             number:
-              min: 0
-              max: 180
+              min: 0.0
+              max: 720.0
               mode: box
               unit_of_measurement: 分钟
+              step: 1.0
         retry_interval_minutes:
           name: 重试间隔（分钟）
+          description: 每次重试之间等多久。窗口 ÷ 间隔 = 尝试次数（向上取整，再 +1）。
           default: 5
           selector:
             number:
-              min: 1
-              max: 30
+              min: 1.0
+              max: 60.0
               mode: box
               unit_of_measurement: 分钟
-
+              step: 1.0
     notify:
       name: 告警
       icon: mdi:bell-alert
       collapsed: true
       input:
         notify_script:
-          name: 告警脚本
-          description: 需要接受 title / message / level 三个参数。
+          name: 信息发送
+          description: >-
+            开始、跳过、完成、失败都会调一次。脚本需要接受 title / message / level
+            三个参数；level 是 info 或 warning，可以据此决定响不响铃。
+            留空＝不发通知（不推荐：跳过的原因就看不到了）。
           default: script.alert_notify
           selector:
             entity:
-              domain: script
-
+              domain:
+              - script
+              multiple: false
+              reorder: false
+        notify_on_start:
+          name: 开始时通知
+          description: 每一轮真正下发清扫命令时发一条。重试时每成功一次发一条，不会因为重试而刷屏。
+          default: true
+          selector:
+            boolean: {}
+        notify_on_skip:
+          name: 跳过时通知
+          description: >-
+            因为有人、门没开、扫地机正忙而跳过时发一条。**建议开着**：否则点了
+            手动运行却什么都没发生，看不出为什么。
+          default: true
+          selector:
+            boolean: {}
+  source_url: https://raw.githubusercontent.com/kaattz/roborock_plus/main/blueprints/%E6%89%AB%E5%9C%B0%E6%9C%BA%E5%88%86%E5%8C%BA%E5%AE%9A%E6%97%B6%E6%B8%85%E6%89%AB.yaml
 mode: single
 max_exceeded: silent
-
-# 取值全部是纯 !input 代入或从设备推导，不依赖"跨块设置变量是否保留"。
-# 运行中不改写任何变量 —— 是否成功一律现查 task_active 传感器。
 variables:
   vacuum_entity: !input vacuum_entity
   presence_sensors: !input presence_sensors
@@ -237,194 +251,235 @@ variables:
   retry_window: !input retry_window_minutes
   retry_interval: !input retry_interval_minutes
   notify_script: !input notify_script
-
-  # --- 从选中的扫地机推导出三个实体，省掉三次手选 -----------------------
-  #
-  # 都挂在同一台设备上，所以用 device_entities(device_id(vacuum)) 一次拿到，
-  # 再按"设备实际能力"挑，而不是按名字匹配 —— 名字不可靠（用户这套里
-  # 拖地强度是 select.sao_di_ji_v2、拖地模式是 select.sao_di_ji_v2_2，
-  # 只差一个后缀，手选极易看反）。
-  #
-  # 三个判据都是能力特征：
-  #   task_active   device_class=running 且 id 含 task_active
-  #   拖地强度       options 同时含 off（干扫）和 extreme（最大水量）
-  #   拖地模式       options 含 deep_plus（该选项为它独有）
-  device_entities_list: "{{ device_entities(device_id(vacuum_entity)) | default([], true) }}"
-
-  task_active_entity: >-
-    {% set found = expand(device_entities_list)
-       | selectattr('entity_id', 'match', '^binary_sensor\.')
-       | selectattr('attributes.device_class', 'eq', 'running')
-       | selectattr('entity_id', 'search', 'task_active')
-       | map(attribute='entity_id') | list %}
-    {{ found[0] if found else '' }}
-
-  mop_intensity_entity: >-
-    {% set found = expand(device_entities_list)
-       | selectattr('entity_id', 'match', '^select\.')
-       | selectattr('attributes.options', 'defined')
-       | selectattr('attributes.options', 'contains', 'off')
-       | selectattr('attributes.options', 'contains', 'extreme')
-       | map(attribute='entity_id') | list %}
-    {{ found[0] if found else '' }}
-
-  mop_route_entity: >-
-    {% set found = expand(device_entities_list)
-       | selectattr('entity_id', 'match', '^select\.')
-       | selectattr('attributes.options', 'defined')
-       | selectattr('attributes.options', 'contains', 'deep_plus')
-       | map(attribute='entity_id') | list %}
-    {{ found[0] if found else '' }}
-
-  # 尝试次数 = 窗口/间隔 + 1，至少 1 次（窗口 0 时就是那一次）。
-  max_attempts: >-
-    {% set window = retry_window | int(0) %}
-    {% set interval = [retry_interval | int(5), 1] | max %}
-    {% set rounds = ((window / interval) | round(0, 'ceil') | int) + 1 %}
-    {{ [rounds, 1] | max }}
-  # 窗口 0 时 deadline 就是起始时刻；第一次尝试由下面的 repeat.index == 1 保证。
-  deadline: "{{ as_timestamp(now()) + (retry_window | int(0)) * 60 }}"
-
-# 触发器由每个实例自己配（trigger 选择器），蓝图不预设。
-#
-# 为什么不用「两个触发器 + enabled: !input」：HA 的
-# async_validate_trigger_config 会校验**每一个**触发器，包括 enabled 为 false 的
-# —— 只有 async_initialize_triggers 阶段才跳过禁用的。所以"时间"实例里留空的
-# entity_id 会在校验阶段就报错，把整个自动化标成 failed_triggers。
-# trigger 选择器是官方为此提供的做法，且不用留空任何输入。
-#
-# 星期也在触发器里设：HA 的 time 触发器自带 weekday 选项。曾经加过一个独立的
-# 「星期」输入，但它和触发器重复，语义还绕（"额外的过滤，留空＝不限制"），
-# 所以删掉了。
+  notify_on_start: !input notify_on_start
+  notify_on_skip: !input notify_on_skip
+  door_sensors: !input door_sensors
+  door_open_state: !input door_open_state
+  area_label: "{{ areas | map('area_name') | join('、') }}"
+  device_entities_list: '{{ device_entities(device_id(vacuum_entity)) | default([],
+    true) }}'
+  task_active_entity: "{% set found = expand(device_entities_list)\n   | selectattr('entity_id',
+    'match', '^binary_sensor\\.')\n   | selectattr('attributes.device_class', 'eq',
+    'running')\n   | selectattr('entity_id', 'search', 'task_active')\n   | map(attribute='entity_id')
+    | list %}\n{{ found[0] if found else '' }}"
+  mop_intensity_entity: "{% set found = expand(device_entities_list)\n   | selectattr('entity_id',
+    'match', '^select\\.')\n   | selectattr('attributes.options', 'defined')\n   |
+    selectattr('attributes.options', 'contains', 'off')\n   | selectattr('attributes.options',
+    'contains', 'extreme')\n   | map(attribute='entity_id') | list %}\n{{ found[0]
+    if found else '' }}"
+  mop_route_entity: "{% set found = expand(device_entities_list)\n   | selectattr('entity_id',
+    'match', '^select\\.')\n   | selectattr('attributes.options', 'defined')\n   |
+    selectattr('attributes.options', 'contains', 'deep_plus')\n   | map(attribute='entity_id')
+    | list %}\n{{ found[0] if found else '' }}"
+  max_attempts: '{% set window = retry_window | int(0) %} {% set interval = [retry_interval
+    | int(5), 1] | max %} {% set rounds = ((window / interval) | round(0, ''ceil'')
+    | int) + 1 %} {{ [rounds, 1] | max }}'
+  deadline: '{{ as_timestamp(now()) + (retry_window | int(0)) * 60 }}'
 triggers: !input my_trigger
-
 actions:
-  # 推导失败就告警并停止，不猜、不半途而废。
-  # 这两个实体是必需的：没有「任务进行中」就无法判断清扫是否真的启动，
-  # 没有「拖地强度」就无法表达"仅扫地"（那是靠水量 off 实现的）。
-  # 它们只在设备换了、或集成改了实体命名时才会找不到。
-  - if:
+- if:
+  - condition: template
+    value_template: '{{ task_active_entity == '''' or mop_intensity_entity == '''' }}'
+  then:
+  - action: '{{ notify_script }}'
+    data:
+      level: warning
+      title: 扫地机定时清扫：找不到设备实体
+      message: >-
+        从 {{ vacuum_entity }} 上无法推导出所需实体，清扫未执行。
+        任务进行中传感器：{{ task_active_entity or '未找到' }}；
+        拖地强度实体：{{ mop_intensity_entity or '未找到' }}。
+        设备上有这些 select：{{ device_entities_list | select('match', '^select\.') | list }}；
+        这些 binary_sensor：{{ device_entities_list | select('match', '^binary_sensor\.') | list }}。
+  - stop: 推导失败
+- repeat:
+    count: '{{ max_attempts }}'
+    sequence:
+    - variables:
+        should_act: >-
+          {{ not is_state(task_active_entity, 'on')
+             and (repeat.index == 1 or as_timestamp(now()) <= deadline) }}
+        occupied: >-
+          {% set sensors = presence_sensors | default([], true) %}
+          {{ sensors | count > 0
+             and expand(sensors) | selectattr('state', 'eq', 'on') | list | count > 0 }}
+        busy: '{{ states(vacuum_entity) not in [''docked'', ''charging''] }}'
+        doors_shut: >-
+          {% set sensors = door_sensors | default([], true) %}
+          {% set open_state = door_open_state | default('on') %}
+          {% set shut = expand(sensors) | rejectattr('state', 'eq', open_state)
+             | map(attribute='name') | list %}
+          {{ shut }}
+    - if:
       - condition: template
-        value_template: "{{ task_active_entity == '' or mop_intensity_entity == '' }}"
-    then:
-      - action: "{{ notify_script }}"
-        data:
-          level: warning
-          title: 扫地机定时清扫：找不到设备实体
-          message: >-
-            从 {{ vacuum_entity }} 上无法推导出所需实体，清扫未执行。
-            任务进行中传感器：{{ task_active_entity or '未找到' }}；
-            拖地强度实体：{{ mop_intensity_entity or '未找到' }}。
-            设备上有这些 select：{{ device_entities_list | select('match', '^select\.') | list }}；
-            这些 binary_sensor：{{ device_entities_list | select('match', '^binary_sensor\.') | list }}。
-      - stop: 推导失败
-
-  - repeat:
-      count: "{{ max_attempts }}"
-      sequence:
-        # 本轮要不要动作。repeat.index == 1 保证至少尝试一次：没有这个特例时，
-        # 窗口设 0 会让 deadline 立刻过期，连第一次都被跳过。
-        - variables:
-            should_act: >-
-              {{ not is_state(task_active_entity, 'on')
-                 and (repeat.index == 1 or as_timestamp(now()) <= deadline) }}
-            occupied: >-
-              {% set sensors = presence_sensors | default([], true) %}
-              {{ sensors | count > 0
-                 and expand(sensors) | selectattr('state', 'eq', 'on')
-                     | list | count > 0 }}
-            busy: "{{ states(vacuum_entity) not in ['docked', 'charging'] }}"
-
+        value_template: '{{ should_act }}'
+      then:
+      - if:
+        - condition: template
+          value_template: '{{ not occupied and not busy and doors_shut | count == 0 }}'
+        then:
+        - action: select.select_option
+          target:
+            entity_id: '{{ mop_intensity_entity }}'
+          data:
+            option: '{{ ''off'' if cleaning_mode == ''仅扫地'' else mop_intensity }}'
+          continue_on_error: true
         - if:
-            - condition: template
-              value_template: "{{ should_act }}"
+          - condition: template
+            value_template: "{{ mop_route_entity not in ['', none]
+               and cleaning_mode != '仅扫地' }}"
           then:
-            # 有人或扫地机正忙就什么都不做，等下一轮再看。
-            - if:
-                - condition: template
-                  value_template: "{{ not occupied and not busy }}"
-              then:
-                # 扫地/拖地意图 → 底层参数。
-                # "仅扫地"就是水量 off（干扫），这是 V1 协议里表达干扫的方式。
-                - action: select.select_option
-                  target:
-                    entity_id: "{{ mop_intensity_entity }}"
-                  data:
-                    option: "{{ 'off' if cleaning_mode == '仅扫地' else mop_intensity }}"
-                  continue_on_error: true
-
-                # 拖地模式是可选的：有些设备没有这个实体，推导为空就跳过。
-                - if:
-                    - condition: template
-                      value_template: >-
-                        {{ mop_route_entity not in ['', none]
-                           and cleaning_mode != '仅扫地' }}
-                  then:
-                    - action: select.select_option
-                      target:
-                        entity_id: "{{ mop_route_entity }}"
-                      data:
-                        option: "{{ mop_route }}"
-                      continue_on_error: true
-
-                - if:
-                    - condition: template
-                      value_template: "{{ cleaning_mode == '仅拖地' }}"
-                  then:
-                    - action: vacuum.set_fan_speed
-                      target:
-                        entity_id: "{{ vacuum_entity }}"
-                      data:
-                        fan_speed: off_raise_main_brush
-                      continue_on_error: true
-
-                # clean_area 会走集成的 garage_guard：门先开，再发命令。
-                # 区域用 !input 静态代入，不用模板 —— 模板会把列表渲染成字符串。
-                - action: vacuum.clean_area
-                  target:
-                    entity_id: "{{ vacuum_entity }}"
-                  data:
-                    cleaning_area_id: !input areas
-                  continue_on_error: true
-
-                # 确认真的启动了。服务调用成功 ≠ 机器人动了。
-                # 用 wait_template 而不是 wait_for_trigger：后者只认"变化"，
-                # 而任务可能在这之前就已经是 on 了。
-                - wait_template: "{{ is_state(task_active_entity, 'on') }}"
-                  timeout:
-                    seconds: 90
-                  continue_on_timeout: true
-
-            # 还没成功就等一等再试。等一等而不是立刻重试：立刻重试会在同一个
-            # 阻塞条件上反复下发命令，也会把设备打成命令风暴。
-            - if:
-                - condition: template
-                  value_template: >-
-                    {{ not is_state(task_active_entity, 'on')
-                       and as_timestamp(now()) <= deadline }}
-              then:
-                - delay:
-                    minutes: "{{ retry_interval | int(5) }}"
-
-  # ---- 窗口内始终没扫成才告警。原因在这里现算，不依赖任何跨块变量。----
+          - action: select.select_option
+            target:
+              entity_id: '{{ mop_route_entity }}'
+            data:
+              option: '{{ mop_route }}'
+            continue_on_error: true
+        - if:
+          - condition: template
+            value_template: '{{ cleaning_mode == ''仅拖地'' }}'
+          then:
+          - action: vacuum.set_fan_speed
+            target:
+              entity_id: '{{ vacuum_entity }}'
+            data:
+              fan_speed: off_raise_main_brush
+            continue_on_error: true
+        - action: vacuum.clean_area
+          target:
+            entity_id: '{{ vacuum_entity }}'
+          data:
+            cleaning_area_id: !input areas
+          continue_on_error: true
+        - wait_template: '{{ is_state(task_active_entity, ''on'') }}'
+          timeout:
+            seconds: 90
+          continue_on_timeout: true
+        - if:
+          - condition: template
+            value_template: >-
+              {{ is_state(task_active_entity, 'on')
+                 and notify_on_start and notify_script != '' }}
+          then:
+          - action: '{{ notify_script }}'
+            data:
+              level: info
+              title: '{{ area_label }}：已开始清扫'
+              message: '{{ cleaning_mode }}。扫地机状态：{{ states(vacuum_entity) }}。'
+        else:
+        - if:
+          - condition: template
+            value_template: '{{ notify_on_skip and notify_script != '''' }}'
+          then:
+          - action: '{{ notify_script }}'
+            data:
+              level: info
+              title: '{{ area_label }}：本轮跳过'
+              message: >-
+                {%- set reasons = [] -%}
+                {%- if occupied -%}
+                  {%- set present = expand(presence_sensors) | selectattr('state', 'eq', 'on')
+                      | map(attribute='name') | list -%}
+                  {%- set reasons = reasons + ['区域内有人：' ~ (present | join('、'))] -%}
+                {%- endif -%}
+                {%- if doors_shut | count > 0 -%}
+                  {%- set reasons = reasons + ['门未开：' ~ (doors_shut | join('、'))] -%}
+                {%- endif -%}
+                {%- if busy -%}
+                  {%- set reasons = reasons + ['扫地机正忙：' ~ states(vacuum_entity)] -%}
+                {%- endif -%}
+                {{ reasons | join('；') }}。
+                {%- if repeat.index < max_attempts %}
+                会在 {{ retry_window }} 分钟窗口内继续重试，条件满足就自动开始。
+                {%- else %}
+                重试窗口已用尽，本次不扫了。
+                {%- endif %}
+      - if:
+        - condition: template
+          value_template: >-
+            {{ not is_state(task_active_entity, 'on')
+               and as_timestamp(now()) <= deadline }}
+        then:
+        - delay:
+            minutes: '{{ retry_interval | int(5) }}'
+- if:
+  - condition: template
+    value_template: '{{ is_state(task_active_entity, ''on'') }}'
+  then:
+  - variables:
+      clean_started_at: '{{ as_timestamp(now()) }}'
+  - wait_template: >-
+      {{ not is_state(task_active_entity, 'on')
+         or is_state(vacuum_entity, 'unavailable')
+         or is_state(vacuum_entity, 'error') }}
+    timeout:
+      hours: 8
+    continue_on_timeout: true
+  - variables:
+      clean_minutes: >-
+        {{ ((as_timestamp(now()) - clean_started_at) / 60) | round(0) | int }}
   - if:
-      - condition: template
-        value_template: "{{ not is_state(task_active_entity, 'on') }}"
+    - condition: template
+      value_template: >-
+        {{ is_state(vacuum_entity, 'unavailable') or is_state(vacuum_entity, 'error') }}
     then:
-      - action: "{{ notify_script }}"
+    - action: '{{ notify_script }}'
+      data:
+        level: critical
+        title: '{{ area_label }}：清扫中断'
+        message: >-
+          清扫过程中扫地机离线或报错，状态：{{ states(vacuum_entity) }}。
+          已运行约 {{ clean_minutes }} 分钟。请检查扫地机。
+    else:
+    - if:
+      - condition: template
+        value_template: '{{ is_state(task_active_entity, ''on'') }}'
+      then:
+      - action: '{{ notify_script }}'
         data:
           level: warning
-          title: 扫地机定时清扫未执行
+          title: '{{ area_label }}：清扫超时'
           message: >-
-            {{ retry_window }} 分钟内未能启动清扫。
-            区域：{{ areas | map('area_name') | join('、') }}。
-            扫地机状态：{{ states(vacuum_entity) }}。
-            {%- set sensors = presence_sensors | default([], true) %}
-            {%- if sensors | count > 0 %}
-            {%- set present = expand(sensors) | selectattr('state', 'eq', 'on')
-                  | map(attribute='name') | list %}
-            区域内有人：{{ present | join('、') if present else '否' }}。
-            {%- else %}
-            未配置人体传感器。
-            {%- endif %}
-            请手动处理，或调整重试窗口。
+            清扫已运行 {{ clean_minutes }} 分钟仍未结束，状态：{{ states(vacuum_entity) }}。
+            已停止等待；请确认扫地机是否卡住。
+      else:
+      - if:
+        - condition: template
+          value_template: >-
+            {{ is_state(vacuum_entity, 'docked') or is_state(vacuum_entity, 'charging') }}
+        then:
+        - action: '{{ notify_script }}'
+          data:
+            level: info
+            title: '{{ area_label }}：已完成'
+            message: '清扫结束，用时约 {{ clean_minutes }} 分钟。扫地机状态：{{ states(vacuum_entity) }}。'
+        else:
+        - action: '{{ notify_script }}'
+          data:
+            level: warning
+            title: '{{ area_label }}：清扫异常结束'
+            message: >-
+              清扫任务停了，但扫地机没有回到基站，状态：{{ states(vacuum_entity) }}。
+              已运行约 {{ clean_minutes }} 分钟。可能被卡住或中途取消，请检查。
+- if:
+  - condition: template
+    value_template: '{{ not is_state(task_active_entity, ''on'') }}'
+  then:
+  - action: '{{ notify_script }}'
+    data:
+      level: warning
+      title: 扫地机定时清扫未执行
+      message: >-
+        {{ retry_window }} 分钟内未能启动清扫。区域：{{ area_label }}。
+        扫地机状态：{{ states(vacuum_entity) }}。
+        {%- set sensors = presence_sensors | default([], true) %}
+        {%- if sensors | count > 0 %}
+        {%- set present = expand(sensors) | selectattr('state', 'eq', 'on')
+            | map(attribute='name') | list %}
+        区域内有人：{{ present | join('、') if present else '否' }}。
+        {%- else %} 未配置人体传感器。{%- endif %}
+        {%- set shut = expand(door_sensors | default([], true))
+            | rejectattr('state', 'eq', door_open_state | default('on'))
+            | map(attribute='name') | list %}
+        {%- if shut | count > 0 %} 门未开：{{ shut | join('、') }}。{%- endif %}
+        请手动处理，或调整重试窗口。

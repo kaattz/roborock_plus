@@ -30,6 +30,9 @@ SSH_PASSWORD = "gsd" + "jsj"
 # a history rewrite or a credential rotation, not an edit.
 KNOWN_LEAKS = {
     "scripts/garage_button_cycle/verify_deployed.py",
+    # `scripts/garage_state_machine/` was deleted on 2026-11-08. The entry stays:
+    # the password is still in the pushed history, and this list is the record of
+    # what has to be rotated. Removing the entry would not remove the leak.
     "scripts/garage_state_machine/fetch_deployed.py",
     "scripts/validate_map_block_against_library.py",
 }

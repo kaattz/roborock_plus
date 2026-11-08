@@ -28,7 +28,6 @@ ROOT = Path(__file__).resolve().parents[1]
 AUTOMATIONS = ROOT / "automations"
 BLUEPRINTS = ROOT / "blueprints"
 
-STATEMACHINE = AUTOMATIONS / "roborock_garage_door_statemachine.yaml"
 STUCK = AUTOMATIONS / "roborock_stuck_or_error_stop.yaml"
 NOT_STARTED = AUTOMATIONS / "roborock_clean_command_not_started.yaml"
 
@@ -64,93 +63,6 @@ def _text(path: Path) -> str:
 
 def _config(path: Path) -> dict:
     return yaml.safe_load(_text(path))
-
-
-class TestStateMachineUsesTheIntegration:
-    """It closes the door; it needs the integration for three separate things."""
-
-    def test_the_mirror_carries_the_same_steps_as_the_generated_config(self) -> None:
-        """The YAML is what gets pasted into HA, so it must not drift.
-
-        `scripts/garage_state_machine/build.py` generates `state_machine.json`,
-        and `automations/roborock_garage_door_statemachine.yaml` is the
-        hand-paste mirror of it. On 2026-10-10 the door waits gained a settle
-        delay in the JSON while the mirror kept the old steps, so pasting the
-        mirror would have shipped the position-echo bug back into HA -- the same
-        half-second wait the fix exists to remove.
-
-        Only `id` may differ: it is HA's unique_id and exists only in the YAML.
-        """
-        generated = json.loads(
-            (
-                ROOT / "scripts" / "garage_state_machine" / "state_machine.json"
-            ).read_text(encoding="utf-8")
-        )
-        mirror = _config(STATEMACHINE)
-        mirror.pop("id", None)
-
-        assert mirror.get("actions") == generated["actions"], (
-            "the pasted YAML's actions differ from the generated config; "
-            "re-run scripts/garage_state_machine/build.py and regenerate the "
-            "mirror, or HA will run steps the repo does not test"
-        )
-
-    def test_the_mirror_carries_the_same_triggers_as_the_generated_config(self) -> None:
-        """Triggers drift too, and they carry the anti-flap guards.
-
-        Comparing only `actions` left the trigger half unprotected: `from: off`
-        on the departure trigger and `for: seconds: 10` on the return trigger are
-        exactly the guards that stop one departure being counted repeatedly, and
-        dropping either from the mirror used to leave the whole suite green.
-        """
-        generated = json.loads(
-            (
-                ROOT / "scripts" / "garage_state_machine" / "state_machine.json"
-            ).read_text(encoding="utf-8")
-        )
-        mirror = _config(STATEMACHINE)
-
-        assert mirror.get("triggers") == generated["triggers"], (
-            "the pasted YAML's triggers differ from the generated config; the "
-            "departure `from:` and the return `for:` are load-bearing guards"
-        )
-
-    def test_the_mirror_carries_the_same_scalar_settings(self) -> None:
-        """Mode and bounds decide how bursts of triggers are handled."""
-        generated = json.loads(
-            (
-                ROOT / "scripts" / "garage_state_machine" / "state_machine.json"
-            ).read_text(encoding="utf-8")
-        )
-        mirror = _config(STATEMACHINE)
-
-        for key in ("mode", "max", "max_exceeded", "conditions"):
-            assert mirror.get(key) == generated.get(key), (
-                f"the pasted YAML's {key!r} differs from the generated config"
-            )
-
-    def test_it_resumes_with_the_integration_service(self) -> None:
-        """Closing the door requires pausing, and only resume_task continues the
-        original task -- plain vacuum.start would restart it."""
-        assert "roborock_plus.resume_task" in _text(STATEMACHINE)
-
-    def test_it_pauses_before_closing(self) -> None:
-        """Closing onto a moving robot is the failure this prevents."""
-        text = _text(STATEMACHINE)
-        assert "vacuum.pause" in text
-        assert text.index("vacuum.pause") < text.index("cover.close_cover")
-
-    def test_it_keys_departure_on_the_danger_zone_entity(self) -> None:
-        assert "binary_sensor.g20s_ultra_outside_danger_zone" in _text(STATEMACHINE)
-
-    def test_it_requires_the_task_active_sensor(self) -> None:
-        assert "binary_sensor.g20s_ultra_task_active" in _text(STATEMACHINE)
-
-    def test_it_never_closes_without_pausing_first(self) -> None:
-        """Every close_cover must be preceded by a pause somewhere earlier."""
-        text = _text(STATEMACHINE)
-        assert text.count("cover.close_cover") >= 1
-        assert text.count("vacuum.pause") >= 1
 
 
 class TestStuckAutomationUsesTheIntegrationEvent:
@@ -206,23 +118,44 @@ class TestBlueprintUsesTheIntegration:
 
 
 class TestDocumentedLinksExist:
-    """The README names these; the files must actually contain them."""
+    """The README names these; something shipped must actually provide them.
+
+    Until 2026-11-08 the corpus included the hand-pasted garage-door state
+    machine, which is where `resume_task`, `task_active` and `outside_danger_zone`
+    were used. That automation was retired (the built-in door control does the
+    job), so those three are now checked against the integration itself rather
+    than against a YAML nobody installs.
+    """
+
+    COMPONENT = ROOT / "custom_components" / "roborock_plus"
 
     @pytest.mark.parametrize(
         "needle",
         [
-            "roborock_plus.resume_task",
-            "binary_sensor.g20s_ultra_task_active",
-            "binary_sensor.g20s_ultra_outside_danger_zone",
+            "resume_task",
+            "task_active",
+            "outside_danger_zone",
+        ],
+    )
+    def test_integration_provides_it(self, needle: str) -> None:
+        corpus = "".join(
+            path.read_text(encoding="utf-8") for path in self.COMPONENT.glob("*.py")
+        )
+        assert needle in corpus, (
+            f"{needle!r} is documented as part of the system but the integration "
+            "does not mention it"
+        )
+
+    @pytest.mark.parametrize(
+        "needle",
+        [
             "roborock_plus_vacuum_stuck",
             "roborock_plus_clean_command_not_started",
             "vacuum.clean_area",
         ],
     )
-    def test_link_present_somewhere(self, needle: str) -> None:
-        corpus = "".join(
-            _text(path) for path in (STATEMACHINE, STUCK, NOT_STARTED, BLUEPRINT)
-        )
+    def test_shipped_automation_or_blueprint_uses_it(self, needle: str) -> None:
+        corpus = "".join(_text(path) for path in (STUCK, NOT_STARTED, BLUEPRINT))
         assert needle in corpus, (
             f"{needle!r} is documented as part of the system but appears in "
             "none of the shipped automations or the blueprint"
@@ -230,18 +163,23 @@ class TestDocumentedLinksExist:
 
 
 class TestReadmeDescribesTheSystem:
-    def test_readme_links_all_four_parts(self) -> None:
+    def test_readme_does_not_advertise_retired_automations(self) -> None:
+        """Two things were taken out of the README on 2026-11-08.
+
+        The garage-door state machine was never installed in Home Assistant, and
+        the two auxiliary alert automations are household-specific: they exist in
+        this deployment's `automations.yaml`, but the README is shipped to other
+        people, who do not have those entity event handlers wired up. Listing them
+        only invites someone to paste automations that reference events they have
+        not configured.
+        """
         readme = _text(ROOT / "README.md")
-        for name in (
-            "automations/roborock_garage_door_statemachine.yaml",
-            "automations/roborock_stuck_or_error_stop.yaml",
-            "automations/roborock_clean_command_not_started.yaml",
+        for retired in (
+            "roborock_garage_door_statemachine.yaml",
+            "roborock_stuck_or_error_stop.yaml",
+            "roborock_clean_command_not_started.yaml",
         ):
-            assert name in readme, f"README does not link {name}"
-        # The blueprint is linked by its (Chinese) filename.
-        assert f"blueprints/{BLUEPRINT.name}" in readme, (
-            f"README does not link blueprints/{BLUEPRINT.name}"
-        )
+            assert retired not in readme, f"README still advertises {retired}"
 
     def test_readme_has_no_stale_entity_names(self) -> None:
         """The zone entities were renamed; the README must not teach the old ones."""

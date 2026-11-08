@@ -2,570 +2,530 @@
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz/)
 
-当前发布：**v0.7.9**，修复短暂失采导致车库控制锁存、故障时跳过返航暂停，以及旧门请求干扰后续恢复的问题。沿用现有配置，无新增参数；新车库控制仍需明确启用。[更新记录](CHANGELOG.md)
+当前版本：**v0.12.1**
 
-升级后，可信全闭且没有门控等待时，旧解锁自动化的 `cover.stop_cover` 不再误锁后续清扫；运动中停止和已有人工保持仍生效。
-分区定时蓝图保留原重试窗口与间隔；多阶段蓝图则逐段确认成功才继续，人工中断、失败或超时会停止后续。
-HACS 更新集成本体，蓝图和脚本实例需另行安装，原例程按钮不会自动替换。
+基于官方内置 `roborock` 集成演化的 Home Assistant 自定义集成。除了保留原有能力、补齐暂停恢复语义之外，主要解决一件事：
+扫地机停在一扇电动门后面，出门清扫时门要开，回来时门要开，其余时间门要关，而任何一步出错都不能让它撞门。
 
-`Roborock Plus` 是一个 Home Assistant 自定义集成，基于官方内置 `roborock` 集成演化而来。
+- 可与内置 `roborock` 并存
+- 暂停后继续原任务，而不是重新开始
+- 原生支持「扫地机在门内，靠一扇 `cover` 出入」的部署
+- 可对接自建服务器 [python-roborock/local_roborock_server](https://github.com/Python-roborock/local_roborock_server)
 
-这个项目的目标很明确：
+---
 
-- 保留官方 `roborock` 的主体能力
-- 补齐更完整的 `pause/resume` 语义
-- 作为独立第三方集成存在，可与内置版并存
+## 目录
 
-## 适用场景
+1. [功能](#功能)
+2. [和电动门配合](#和电动门配合)
+3. [安装](#安装)
+4. [连接方式](#连接方式)
+5. [配置参数](#配置参数)
+6. [实体](#实体)
+7. [服务](#服务)
+8. [配套蓝图](#配套蓝图)
+9. [故障排查](#故障排查)
+10. [已知限制](#已知限制)
 
-如果你遇到下面这类问题，这个集成就是为你准备的：
+---
 
-- 扫地机暂停后，继续任务时会重新开始，而不是继续原任务
-- 你需要在自动化里显式区分“开始任务”和“恢复任务”
-- 你希望保留官方内置 `roborock`，同时安装一个增强版并行验证
+## 功能
 
-## 当前增强点
+### 暂停与恢复
 
-目前 `Roborock Plus` 已经补上这些能力：
+官方集成没有区分任务类型。暂停后点继续，有时会重新开始而不是接着扫。这个集成记录了暂停时的任务类型（全屋、划区、房间、回基站、建图），`vacuum.start` 会恢复原任务。也可以直接调用 `roborock_plus.resume_task`。
 
-- 为暂停后的任务增加统一的恢复分发逻辑
-- 支持全屋、划区、房间、回基站、建图等任务类型的恢复判定
-- 新增显式服务 `roborock_plus.resume_task`
-- 新增 `task_active` 语义实体：区分“设备正在动作”和“任务仍然存在”，暂停也算任务在
-- 支持按机器人启用原生车库控制：统一门状态判断、通行互锁和标准出入库流程，默认任务期间保持门开
-- 提供 HA 串行多阶段清扫蓝图，每段经过同一门互锁，确认本段成功后才启动下一段
-- 保留旧全局柜门 guard，升级不会自动迁移或接管门
-- 可配置本地状态轮询间隔（1–60 秒），只刷新状态类实体
-- 支持填写自建服务器地址（区域选择 `Manual`），可对接 [local_roborock_server](https://github.com/Python-roborock/local_roborock_server)
+### `task_active`
 
-## 原生车库控制：集成管流程，自动化管家庭策略
+`vacuum.*.state` 表达不了「任务还在不在」。暂停时它是 `paused`，但任务其实没结束；中途回充时它是 `charging`，但机器人还会再出来。
 
-新车库控制是 **opt-in（需要明确启用）**。HACS 更新集成本体后，标准流程就在集成内，
-不需要复制柜门状态机 YAML。没有启用新绑定时，原有配置继续走旧路径。
+`binary_sensor.<robot>_task_active` 补上这个语义：
 
-部署前先看[一页配置、迁移和验收清单](docs/garage-control-checklist.md)，其中解释端点极性、完整行程和旧门控交接。
-
-v0.7.1 支持 **V1 + `hold_open` / `after_exit`**，新控制默认关闭。默认 `hold_open`：HA 发起需要通行的请求，先开门、等待所选来源
-允许通行，再下发机器人命令；任务期间不主动关门，回洗拖布、补电和自主继续不算任务结束。
-只有确认本次任务终结、稳定停靠、基站位置自洽且所有关闭守卫通过，才会收尾关门。
-危险区包含基站；最终停靠关门使用停靠守卫，不把“在危险区外”当成最终关闭的条件。
-
-v0.7.1 补齐 **`after_exit`（离库后关门）**：出库不额外暂停，确认离开危险区后关门；
-实际返航且门未允许通行时，暂停并确认 → 开门并确认 → `app_resume` 继续原返航。
-中途洗拖布/补电停靠时保持开门，再次离库再次关门；最终仍按本次任务终结和稳定停靠收尾。
-用户暂停或停止会撤销自动恢复授权；暂停、门位或原返航未确认时阻塞报告，不补发回充/新清扫。
-v0.7.9 将返航制动与自动开门/恢复授权分开：明确返航且通行未确认时，即使已有故障、人工保持、取消或未知会话，也先暂停并确认；这些状态只制动，保持原故障，不自动开门或恢复。正常同任务仍按暂停确认、开门确认、恢复原返航的顺序执行。
-关门中短暂缺样会先停止并限时重采样；没有停止能力则反向打开自己的关闭动作，恢复后本次不重关。门已关时缺样不发新动作，限时重采样，持续失败报错。未知观测不会授权关门，也不会自动清除故障。慢速旧门请求全部结束前，重置和新门动作会被拒绝。
-v0.8.1 修正离库判定：`outside_danger_zone` 读不到位置时（本地服务器实测每约 30 秒出现一次、持续约 1.2 秒）不再清掉「已离区」的武装状态，因此一次丢包不会让本次清扫失去自动关门机会；位置本身不可信（`position_trusted` 为假）仍立即撤销。同一版把「机器人已确认在危险区外时用户手动关门」从锁存改为记录并发布 `external_close_after_exit` 事件——那正是 `after_exit` 本来要做的事；机器人在区内或位置未知时仍锁存。
-v0.7.0 标签中的代码尚未提供此模式。Q7、Q10、A01 和多机器人共用一扇门不在范围；不同 V1 可以分别绑定不同门。
-配置范围不代表所有 V1 机型已经做过硬件验证。隔离 Home Assistant 2026.9.4 已验证原生
-加载、表单、服务和内存完整流程；实际时长、极性、停靠与任务保持行为仍由用户操作设备验收。
-仓库回放不能替代实测；本批待关闭事项见[实施计划](specs/2026-10-15-plan-garage-control.md)。
-
-独立回充按本次返航和稳定停靠收尾，不要求虚构清扫记录。导航须先观测移动，再以
-两次新鲜、可信且无活动标志的 idle 样本确认停稳；区外导航结束不自动关门，
-可再明确请求回充或清扫。这只确认停稳，不承诺精确命中目标坐标。
-
-若在没有受管活动会话时观测到 App 等外部任务，旧导航/空闲记录的授权会失效，
-并显示阻塞故障；之后停稳、重启或调用 reset 都不会重新授权该旧记录。
-外部未知任务不能被当作已完成的本次任务，也不能靠复核服务清空上下文。
-
-### HA 多阶段清扫（v0.7.8）
-
-服务器中的整套例程可能在第一段结束后自行启动第二段，HA 无法逐段拦截。
-新增[多阶段脚本蓝图](blueprints/多阶段清扫.yaml)：由 HA 按顺序调用
-`roborock_plus.start_garage_cleaning_stage`，每段都重新经过车库互锁。
-只有本段实际开始、成功记录匹配且稳定停靠后才继续；回洗、补电、暂停或取消不算成功。
-暂停后恢复机器人不会继续旧脚本；脚本超时、故障、取消和 HA 重启也不会自动续跑。
-
-升级到 v0.7.8 后，将蓝图放到 HA 的
-`/config/blueprints/script/roborock_plus/多阶段清扫.yaml`，从脚本蓝图创建脚本。
-选择扫地机及同一设备的“车库控制阶段”传感器，填写来自原例程的完整阶段 JSON 列表。
-每段含 `command`、原始 `params` 和 `settings` 列表；吸力、水量、拖地路线须明确设置，
-全屋阶段还须明确次数。没有默认清扫参数；未知设置会拒绝，不能靠删除未知项完成迁移。
-当前支持的命令和参数边界见[规格 S5.3](specs/2026-10-15-spec-garage-control.md)。
-
-核对每段房间、模式和次数并完成隔离验证后，再把卡片对应按钮从 `button.press` 改为调用该脚本，
-去掉旧例程按钮目标。原分区清扫脚本、暂停/停止/回充入口不需一起替换。
-提供[客餐厅先扫后拖配置候选](docs/examples/living-dining-sweep-then-mop.yaml)：按用户明确要求，
-两个房间先扫再拖，各一次；使用只读核对的均衡吸力、中等水量和标准路线。
-该机型的中等水量为235，不能套用旧机型的202。此配置固定地图0、客厅3、餐厅7；
-换地图或重新分房后需重新核对编号。它是用户指定的新目标，未声称与原服务器例程参数等价。
-另有[厨房、主卧、次卧、主卫和外卫配置](docs/examples/rooms-sweep-then-mop.yaml)，
-每个房间是独立脚本，同样先扫一次再拖一次，沿用上述参数与门控保护。
-两个文件合计 **6 个本地脚本候选**，已具备部署所需的阶段参数与蓝图入口。
-部署状态：待本次部署完成后补记安装、配置校验与卡片切换结果；设备动作验收尚未运行。
-其他服务器例程的完整定义仍未取得，不将这些候选声称为原例程的等价迁移。
-
-### 配置来源与标定
-
-在集成选项首页顶部勾选“继续配置单机车库控制”，提交后选择本条目的 V1 扫地机。
-首页仅保留“运行监测”（默认展开）和“地图显示”（默认折叠）两个分组，仍在同一页提交；地图项使用中文名称与说明。
-“旧版兼容设置”分组及旧“柜门保护”“柜门实体”字段已移出界面；已有存储值保留，不自动停用旧保护，也不自动改动门/机器人流程或绑定。
-不继续配置车库时，本页提交即保存；勾选继续时，本页改动在车库流程最后与车库设置一起保存。
-运行监测数值正常预填；实际缺项或无效数字提交后，顶部中文提示会列出具体字段名，并保留已填内容。升级后的现场界面、保存和物理验收仍待用户完成。
-绑定按稳定 duid 保存；控制门的 cover 与全开、全闭的判断来源分开配置。
-
-配置分为三步：①基本设置/来源，②所选反馈，③相关时长/交接。
-首屏不再展开全部参数；触点只配触点及稳定时间，真实位置只配位置与稳定时间，
-计时/估算才要求对应方向完整行程与余量。已有值保留，切换来源时补齐新必填项，不猜硬件参数。
-
-v0.7.2 为缺失辅助项预填余量10秒、触点稳定1秒、位置稳定2秒、停靠稳定5秒，超时初值至少90秒并参考已知行程；已有值不覆盖。真实行程、阈值和极性仍需用户实测。必填项有标记，提交错误同时在页顶和字段显示；例如超时21秒会明确提示须大于开门35秒加余量10秒所得的45秒。v0.7.1 标签尚不包含这项配置体验修复。
-
-v0.7.3 已修复最后提交时出现“Unknown error occurred”的重载冲突，配置保存后只重载一次。
-
-| 来源 | 使用条件 | 到位显示 |
+| 情况 | `vacuum.state` | `task_active` |
 | --- | --- | --- |
-| `contact` | 选定端点 binary_sensor，并实测到位是 `on` 还是 `off`；全开、全闭不能使用同一个实体 | 稳定到位后为已确认 |
-| `position` + `measured` | 已核实为真实物理位置反馈，实测开关阈值，满足 `0 ≤ 全闭 < 全开 ≤ 100` | 稳定到位后为已确认 |
-| `position` + `estimated` | 位置可能是目标回声或软件估算，必须接受估算风险并填写完整行程 | 仅为预计到位 |
-| `timed` | 无对应反馈时明确选择，填写完整行程并接受估算风险 | 仅为预计到位 |
+| 正在清扫 | `cleaning` | `on` |
+| 清扫中暂停 | `paused` | `on` |
+| 中途回充 | `charging` | `on` |
+| 任务结束回基站 | `returning` | `on` |
+| 已结束 | `docked` / `charging` | `off` |
 
-两个方向独立：只有全闭触点时，全开可以明确选计时；没有全闭不等于已经全开。
-`current_position` 字段存在、cover 支持设置位置，都不能证明位置是真实测量。
-所选来源失联时判为未知，不自动改用计时。计时无法发现卡门、电机空转或通路障碍。
+判断清扫是否真的在跑，用这个，不要看服务调用有没有报错。命令被服务器接受，不代表机器人动了。
 
-v0.7.6 中，`timed` 或 `position` + `estimated` 的反馈恢复后，新显式请求不再被旧失效标记误拦，但必须重新等待该方向完整行程加余量。以本门35秒行程+10秒余量=45秒为例，这不是通用硬件默认值；旧等待作废，不会因反馈恢复而复活。
-已锁存的故障（fault）或人工保持（manual_hold）不会自动清除；`reset_garage_control` 只复核，不发送设备命令。活动任务复核后仍无通行许可时保持 `manual_hold`，等待用户明确请求 `resume_task`，再重新开门、重新计时，并沿用原会话 sid。
+### 电动门协同
 
-新绑定没有通用的硬件标定值。用户只需核实所选来源对应的稳定时间、估算行程/余量，
-以及动作超时和停靠稳定时间；动作超时须覆盖该来源的最长证据等待。
-低开位或高关位阈值尤其要验证实际通行和闭合空间。旧门的 95/5、45 秒只是旧配置建议，
-不会自动套用。可保存不完整的未启用草稿；来源离线可以保存配置，但不能由此获得通行许可。
+见下一节。
 
-### 从旧 guard／状态机交接
+### 危险区
 
-1. 在没有正在清扫或待续任务时操作，确认机器人安全停靠；先保存未启用的单机草稿。
-2. 核对所有会操作同一扇门的自动化，停用旧 `roborock_garage_door_statemachine` 及其
-   `*_plus` 前身的主动门控。升级不会按名称自动关闭或删除任何家庭自动化。
-3. 逐项处理无人关门、洗衣机占用、自动解锁和手动按键：自动关门改走
-   `roborock_plus.request_garage_close`；需要开门通行（例如折叠门联动）改走
-   `roborock_plus.request_garage_open`；释放离合须在可靠停稳后，旧解锁自动化可继续使用 `cover.stop_cover`。
-   可信全闭且没有门控等待时，这条停止不再新增人工保持；推窗器由此释放离合后可手动或电动开门。
-   行进中停止、任务进行中的外部移动仍按人工接管处理，已有人工保持不会自动解除；
-   空闲且门已静止时的外部开门/关门只记录、不锁存（v0.8.0）。
-4. 多机使用旧全局 guard 时，逐台确认保护关系。同门仍被另一台机器人依赖时，新绑定拒绝接管；
-   可将另一台绑定到它自己的门，不能静默解除它的保护。同一机器人的旧 guard 可以转发到新控制器。
-5. 完成来源标定后明确勾选交接确认，再启用新绑定。单机器人也需要确认；不同时运行新旧主动状态机。
+在扫地机地图上标一个矩形，代表门开关会扫到的空间。集成据此判断机器人是否在区内，并给出可视化编辑面板和出库点推算。
 
-首次交接仍需两次成功状态样本跨越停靠稳定窗口，结合位置核实空闲；仅勾选确认不会直接放行。
-重启后只恢复核对，不重放清扫或门动作；已运行过却丢失会话记录时会阻塞报告，不能当成首次安装。
+### 卡困检测
 
-### 留给家庭自动化的接口
+`binary_sensor.<robot>_stuck`，依据位置长时间不动、任务仍在进行等信号判断。
 
-| 接口 | 用途 |
-| --- | --- |
-| `close_permission_entity` | 可选 input_boolean / binary_sensor，只读；仅 `on` 允许关闭，其他状态拒绝。留空表示没有家庭附加限制 |
-| `roborock_plus.request_garage_close` | 以 vacuum 为目标请求关闭，重新检查任务、停靠、位置和许可等守卫，无 `force` 绕过 |
-| `roborock_plus.request_garage_open` | 以 vacuum 为目标请求**通行开门**：重查反馈与端点守卫后开门，等完整行程才报告可通行；已可通行时不发命令。关闭许可不参与判断（它只限制关门），无 `force` 绕过 |
-| `roborock_plus.reset_garage_control` | 重新观察并复核可恢复故障及人工保持，不发送设备命令、不清除活动任务；无通行许可的活动任务仍保持人工保持 |
-| `roborock_plus.start_garage_cleaning_stage` | 受保护发起一个明确清扫阶段并返回回执；下一段携带前段成功回执再次复核，由 HA 脚本串行编排 |
-| `garage_open_confirmed` / `garage_closed_confirmed` | 各方向的物理确认；仅估算或无法判断时为 unknown |
-| `garage_passage_allowed` / `garage_phase` / `garage_problem` | 当前通行许可、流程阶段和阻塞故障；阶段属性含会话、原因与来源质量 |
-| `roborock_plus_garage_issue` 事件 | 故障激活/解除事件，含 `reason`、`phase`、`previous_phase`、`session_id` 等字段，家庭自动化自行选择通知渠道 |
+### 地图与坐标
 
-清扫日程、房间选择、家庭占用和通知继续由自动化决定。家庭许可限制关闭，不能绕过安全守卫；
-许可恢复也不清除人工保持或故障。人工操作优先，控制器不会立即抢回门，下一次明确请求仍需完整检查。
-许可输入不替代硬件防夹，也不承诺能撤回已经发出的门动作。
+地图图片实体（图层可配），以及查询机器人位置、充电座位置的服务。
 
-Roborock App、厂商定时和机器人实体按键不经过 HA 命令入口，无法事前互锁。
-观察到机器人已经动作也不能补回这一时机；使用这些入口前，应由用户确保通道安全。
+---
 
-## 旧方案（legacy）：这套东西怎么配合
+## 和电动门配合
 
-以下保留旧全局 guard 与 YAML 状态机的分工和验证历史，仅适用于**尚未启用新绑定**的配置。
-在旧方案中，**集成、三个自动化、一个蓝图是一套系统**；迁入原生车库控制后，不再需要状态机承担标准流程。
+### 场景
 
-### 为什么必须配合
+充电座在门内侧。机器人要出门清扫，门得开；扫完回来，门得开；其余时间门关着。这扇门在 HA 里是一个 `cover`。
 
-难点在于**柜门**。扫地机停在柜子里，出门前门必须开，出门后门必须关（门是共用的）。而这件事分成两半，各自都做不全：
+难点不在开和关，而在：
 
-| 谁 | 能做 | 做不到 |
+- 门「正在开」和「已经全开」是两回事，机器人不能在门没开到位时出发
+- 机器人出门后门要及时关，否则敞着几小时
+- 机器人回程时门要开，否则它撞门
+- 回程中它会暂停，而暂停的机器人看起来像「任务结束了」
+- 任何一步没确认就不能继续
+
+### 两种模式
+
+配置项 `task_door_mode`：
+
+| 模式 | 行为 | 适用 |
 | --- | --- | --- |
-| **集成** | 在命令**下发前**开门并等门全开 —— 它在命令通路上，可以阻塞 | 看不到机器人**之后**的动向 |
-| **自动化** | 看机器人**之后**的动向，决定何时关门、何时再开 | 做不到"命令下发前就把门开好"：等它看到机器人动了，机器人已经在动了 |
+| `hold_open` | 任务期间门一直开着，任务结束才关 | 门在室内，敞着无妨 |
+| `after_exit` | 出门后立即关门；回程时暂停 → 开门 → 恢复 → 进站 → 关门 | 门临街或需要随手关 |
 
-所以：**集成负责"出门前"，自动化负责"出门后"**。蓝图则是"什么时候开始"。
+`after_exit` 是主要验证的模式，下面的时序都指它。
 
-### 一条完整的时序
+### 完整时序
 
 ```
-蓝图（到点触发）
-  │  设拖地意图 → vacuum.clean_area
-  ▼
-集成 garage_guard ──────── 开门 → 等 position ≥ 95 → 才下发清扫命令
-  │                        （门没开到位就不发命令，机器人不会被关着的门挡住）
-  ▼
-命令已下发
-  ├─ 自动化③ 清扫没启动？ ──→ 只告警，不关门
-  ▼
-机器人出门中
-  ├─ 自动化② 卡住 / 设备报错？ ──→ vacuum.stop + 告警（绝不自动关门）
-  ▼
-走出危险区
-  └─ 自动化① 柜门状态机 ──→ 暂停 → 关门 → roborock_plus.resume_task（集成提供）
-  ▼
-清扫中（中途回基站洗拖布？门全程开着）
-  ▼
-回基站途中
-  └─ 自动化① ──→ 开门
-  ▼
-任务结束 + 已停靠 + 危险区确认
-  └─ 自动化① ──→ 关门
+1. 清扫命令进来
+2. 开门 → 等确认全开
+3. 受控出库：app_goto_target 到出库点
+4. 等机器人报告 trip 结束，并确认在危险区外
+5. 关门 → 等确认全闭
+6. 下发清扫命令 → 等 task_active = on
+7. 清扫中：机器人出区就关门；中途回充或洗抹布时保持开门
+8. 任务结束，机器人回程
+9. 回程：暂停 → 等确认 → 开门 → 等确认全开 → 恢复
+10. 机器人进站 → 关门
 ```
 
-**三处关键分工**：
+### 门的反馈来源
 
-1. **开门靠集成，不靠自动化。** 开门必须在命令下发**之前**完成，只有走命令通路的集成代码能做到。这也是为什么"监控状态 → 开门"的方案必然有撞门窗口。
-2. **恢复任务靠集成的 `resume_task`。** 原生 `vacuum.start` 在暂停后会重开任务而不是续上；关门流程必须暂停机器人（否则门会夹到正在移动的它），暂停后又必须能续上原任务。
-3. **判断"清扫真的启动了"靠集成的 `task_active`。** 服务调用返回 200 不等于机器人动了 —— 这是实测过的坑（见下文）。
+`open_source` / `close_source` 三选一：
 
-### 各部分清单
-
-| 部分 | 位置 | 作用 |
+| 类型 | 说明 | 可靠性 |
 | --- | --- | --- |
-| **集成** | `custom_components/roborock_plus/` | 开门守卫、恢复语义、状态实体、失败事件 |
-| **自动化①** | [automations/roborock_garage_door_statemachine.yaml](automations/roborock_garage_door_statemachine.yaml) | 出门后关门、回基站前开门、停靠后关门 |
-| **自动化②** | [automations/roborock_stuck_or_error_stop.yaml](automations/roborock_stuck_or_error_stop.yaml) | 卡住或设备报错时停止并告警 |
-| **自动化③** | [automations/roborock_clean_command_not_started.yaml](automations/roborock_clean_command_not_started.yaml) | 命令下发了但任务没启动时告警 |
-| **蓝图** | [blueprints/扫地机分区定时清扫.yaml](blueprints/扫地机分区定时清扫.yaml) | 分区定时清扫，可选"区域内有人则跳过并重试" |
+| `contact` | 门磁 `binary_sensor` | 最好，物理确认 |
+| `position` | `cover` 的 `current_position` | 次之，可能不准 |
+| `timed` | 按行程时间估算 | 最差，前两者都不可用时才用 |
 
-**自动化和蓝图靠人工加入 HA，不在 HACS 流程里**（HACS 没有这两类）。
-细节见 [automations/README.md](automations/README.md)。
+极性必须自己填。同样表示「全开」，有的门磁报 `on`，有的报 `off`。`open_contact_state` / `close_contact_state` 就是填「这个状态代表到位」。填反的后果是集成把开着的门当成关着。
 
-### 集成提供的接口（自动化依赖这些）
+### 出库方向
 
-| 实体 | 作用 |
+`controlled_exit_direction: auto` 取「充电座到危险区中心」的主轴，不取最近的边。
+
+实测几何：
+
+| 边 | 充电座到该边的距离 |
 | --- | --- |
-| `binary_sensor.<vacuum>_task_active` | 任务是否仍然存在（暂停也算在） |
-| `binary_sensor.<vacuum>_outside_danger_zone` | 是否已离开危险区（出门信号） |
-| `binary_sensor.<vacuum>_in_danger_zone` | 是否位于危险区（关门确认） |
-| `binary_sensor.<vacuum>_danger_zone_configured` | 是否已配置危险区 |
-| `binary_sensor.<vacuum>_stuck` | 是否应该移动却停着不动 |
+| -X | 699 mm |
+| +X | 373 mm |
+| -Y | 1316 mm（真实出库方向） |
+| +Y | 325 mm |
 
-| 服务 / 事件 | 作用 |
+按最近的边会推出 +X 或 +Y，把机器人推向旁边那扇门。可以手动指定方向。
+
+### 相关实体
+
+| 实体 | 用途 |
 | --- | --- |
-| `roborock_plus.resume_task` | 恢复已暂停的任务（区别于"重新开始"） |
-| `roborock_plus.set_safe_zone` 等 | 危险区的读写 |
-| 事件 `roborock_plus_vacuum_stuck` | 集成判定卡住 → 自动化② 停止并告警 |
-| 事件 `roborock_plus_clean_command_not_started` | 命令没生效 → 自动化③ 告警 |
+| `binary_sensor.<robot>_garage_fully_open_confirmed` | 门确认全开 |
+| `binary_sensor.<robot>_garage_fully_closed_confirmed` | 门确认全闭 |
+| `binary_sensor.<robot>_garage_control_problem` | 有故障 |
+| `sensor.<robot>_garage_control_phase` | 当前阶段 |
+| `binary_sensor.<robot>_in_danger_zone` | 在危险区内 |
+| `binary_sensor.<robot>_outside_danger_zone` | 在危险区外 |
 
-> 危险区只表示位置，不能代替 `returning_home` 判断回基站意图；否则普通清扫靠近柜门时会误触发。
+排查问题先看 `garage_control_phase` 和 `garage_control_problem` 的 `reason` 属性。
 
-## 旧柜门保护（legacy）
+> 实体 ID 里带有 garage 字样，是历史命名，未随文档改动。
 
-扫地机停在柜子里时，需要先开门才能出 dock。`Roborock Plus` 会拦截 HA 发起的清扫命令：
+---
 
-- 覆盖 `vacuum.start`、房间清扫、`vacuum.send_command` 和清洁例程按钮
-- 调用配置的 cover，等待 `current_position >= 95` 才下发扫地机命令
-- 只影响从 Home Assistant 发起的命令；Roborock App 发起的命令不经过 HA，无法拦截
+## 安装
 
-关门需要配合自动化：等扫地机离开危险区后再暂停、关门、恢复任务。这个自动化就是
-[automations/roborock_garage_door_statemachine.yaml](automations/roborock_garage_door_statemachine.yaml)，
-它依赖下面这些由集成提供的实体：
+### HACS
 
-| 实体 | 作用 |
-| --- | --- |
-| `binary_sensor.<vacuum>_task_active` | 任务是否仍然存在（暂停也算在） |
-| `binary_sensor.<vacuum>_outside_danger_zone` | 是否已离开危险区 |
-| `binary_sensor.<vacuum>_in_danger_zone` | 是否位于危险区 |
-| `binary_sensor.<vacuum>_danger_zone_configured` | 是否已配置危险区 |
-| `binary_sensor.<vacuum>_stuck` | 是否应该移动却停着不动 |
+1. HACS → 自定义存储库 → 添加 `https://github.com/kaattz/roborock_plus`，类别选「集成」
+2. 搜索 `Roborock Plus` 安装
+3. 重启 Home Assistant
+4. 设置 → 设备与服务 → 添加集成 → Roborock Plus
 
-> 危险区只表示位置，不能代替 `returning_home` 判断回基站意图；否则普通清扫靠近柜门时会误触发。
+### 手动
 
-### ⚠️ 「命令成功」不等于「机器人动了」
-
-这是柜门保护的一个真实盲区。清扫命令是**异步执行**的：例程在服务器内部跑，HTTP 调用只要被接受就返回成功。如果例程随后失败（例如某条命令被固件拒绝），**扫地机根本不会启动，但 HA 会认为一切正常**。
-
-后果是门被打开了、活没干、却没有任何东西察觉。而上面那套自动化全都以「机器人已经动了」为前提（触发条件是 `docked` → `cleaning`），所以它们一个都不会触发。
-
-为此集成会**在受保护的清扫命令下发后观察一段时间**：如果始终没有任务开始，就发出事件：
-
-```yaml
-event_type: roborock_plus_clean_command_not_started
-data:
-  command: execute_scene          # 或 app_start / app_segment_clean …
-  entity_id: vacuum.g20s_ultra
-  timeout: 60
-  entry_id: <config entry id>
+```bash
+cd /config
+git clone https://github.com/kaattz/roborock_plus.git tmp
+cp -r tmp/custom_components/roborock_plus custom_components/
+rm -rf tmp
 ```
 
-配套自动化就是
-[automations/roborock_clean_command_not_started.yaml](automations/roborock_clean_command_not_started.yaml)
-（通知方式由你决定，本仓库用的是 `script.alert_notify`）。它做的事：
+重启 Home Assistant。
 
-```yaml
-triggers:
-  - trigger: event
-    event_type: roborock_plus_clean_command_not_started
-actions:
-  - action: script.alert_notify
-    data:
-      level: warning
-      title: 扫地机没有启动
-      message: >-
-        {{ trigger.event.data.command }} 已下发，但
-        {{ trigger.event.data.timeout }} 秒内扫地机没有开始任务，
-        柜门可能一直开着。
-```
+蓝图不随 HACS 更新，需单独下载，见[配套蓝图](#配套蓝图)。
 
-选项里的「清扫启动确认时间」控制等待秒数，填 `0` 关闭。默认 60 秒。
+### 与内置 roborock 并存
 
-> **本集成不会因为这个事件自动关门。** 命令失败并不等于扫地机没动（可能只是状态回报滞后），而柜门是共用的（兼作洗衣机柜门），贸然关门有夹机或困人的风险。事件只负责让你知道，关不关由你和自动化决定。
+可以。两者 domain 不同，实体不冲突。但若两套同时登录同一账号，云端请求会翻倍。
 
-### ⚠️ 任务启动了，但扫地机卡住了
+---
 
-上一个盲区是「命令没生效」。这个是「命令生效了，但机器人动不了」——任务一直是活的，所以上面那套以
-`docked` → `cleaning` 为触发条件的自动化**一个都不会触发**：
+## 连接方式
 
-- 门没开，扫地机一直顶着门
-- 清扫完回基站，**开着的门板挡住了回充路径**，一直回不去
+### 云端
 
-这两种情况在 HA 里的表现完全一样：任务进行中，但没有位移。
+安装时选区域（`auto` / `us` / `eu` / `ru` / `cn`），用 Roborock App 的邮箱登录，填收到的验证码。
 
-集成通过**坐标采样**识别它：任务状态属于「应该移动」时，如果坐标在一段时间内始终没有超出容差范围，
-就判定卡住。
+### 自建服务器
 
-| 实体 | 作用 |
-| --- | --- |
-| `binary_sensor.<vacuum>_stuck` | 是否卡住（附带 `seconds_stuck` 属性） |
+配置时区域选 **Manual**，填服务器地址。配合 [local_roborock_server](https://github.com/Python-roborock/local_roborock_server)：
 
-```yaml
-event_type: roborock_plus_vacuum_stuck
-data:
-  entity_id: vacuum.g20s_ultra
-  x: 25728
-  y: 24233
-  state: returning_home      # 卡住时的状态
-  seconds_stuck: 132
-  entry_id: <config entry id>
-```
-
-配套自动化就是
-[automations/roborock_stuck_or_error_stop.yaml](automations/roborock_stuck_or_error_stop.yaml)
-（停止 + 通知）：
-
-```yaml
-triggers:
-  - trigger: event
-    event_type: roborock_plus_vacuum_stuck
-actions:
-  - action: vacuum.stop
-    target:
-      entity_id: "{{ trigger.event.data.entity_id }}"
-  - action: script.alert_notify
-    data:
-      level: warning
-      title: 扫地机卡住了
-      message: >-
-        状态 {{ trigger.event.data.state }}，在
-        ({{ trigger.event.data.x }}, {{ trigger.event.data.y }})
-        停留 {{ trigger.event.data.seconds_stuck }} 秒，已停止。
-```
-
-> **本集成只负责上报，不会自己停止扫地机。** 停止是一个决定，放在自动化里你才能加自己的条件、
-> 也才能在 trace 里看到它为什么执行。
-
-#### 为什么不会在洗拖布时误报
-
-判断依据是一份**「应该移动」的状态白名单**（`cleaning`、`returning_home`、`docking`、
-`going_to_wash_the_mop` 等），而不是 `binary_sensor.<vacuum>_task_active`。
-
-后者回答的是「任务还在不在」，所以**暂停、洗拖布、回充时它依然是 `on`**。用它做判断，
-每次洗拖布都会误报一次卡住。白名单只列出确定该动的状态，没列到的状态就是不判断 ——
-万一将来固件加了新状态，也只是少判一次，而不会误停一台正常工作的扫地机。
-
-清扫中途回基站充电、洗拖布都属于「合法静止」，因此被排除在判断之外。
-
-#### 相关选项
-
-| 选项 | 默认 | 说明 |
+| 方面 | 云端 | 自建 |
 | --- | --- | --- |
-| 卡住检测 | 开 | 总开关 |
-| 卡住判定时长 | 120 秒 | 坐标在容差内停留多久算卡住 |
-| 卡住判定半径 | 200 | 坐标容差（地图单位）。静止采样本身有 1~2 单位抖动，所以需要容差 |
+| 状态延迟 | 数秒到十几秒 | 亚秒级 |
+| 位置采样 | 稀疏，约 30 秒一次丢包 | 密集 |
+| 门控可靠性 | 时序判断容易落在采样间隙 | 明显更稳 |
+| 隐私 | 数据经厂商服务器 | 局域网内 |
 
-> 检测质量取决于采样密度：判定窗口内需要有若干次有效采样。自建服务器默认 5 秒采样，
-> 120 秒窗口内有 24 次。**官方云 60 秒采样下这个功能会明显变粗**，这是限流约束带来的固有限制，
-> 不是可以通过调参解决的。
+门控更依赖采样密度。判断「是否已出区」「是否已停止」都看状态采样；云端每 30 秒左右有一段约 1.2 秒的丢包，正好落在关键判断上时集成会保守处理（不关门、继续等），代价是延后，不是误动作。
 
-### ⚠️ 地图坐标来自服务器，不是本地
+本地状态轮询间隔可配，1–60 秒，默认 1 秒。
 
-这一点很重要：`map_content` / `maps` 这两个 trait 在 `python-roborock` 里被标记为
-`@common.map_rpc_channel`，**强制走 MQTT 且没有本地回退**。也就是说，危险区传感器读的坐标
-**始终来自服务器**，无论机器人是否在局域网内可直连。
+---
 
-因此轮询频率不能只看本地连接，必须看服务器是谁：
+## 配置参数
 
-| 服务器 | 清扫中采样 | 空闲采样 | 说明 |
+配置分两层。
+
+### 集成选项
+
+设置 → 设备与服务 → Roborock Plus → 配置：
+
+| 参数 | 说明 |
+| --- | --- |
+| 地图可绘制元素 | 路径、充电座、禁区、障碍物、虚拟墙等图层开关 |
+| 本地状态轮询间隔 | 1–60 秒，默认 1 |
+
+### 门绑定
+
+选一台机器人后分三步填写。
+
+#### 第一步：门与来源
+
+| 参数 | 键 | 说明 |
+| --- | --- | --- |
+| 启用门控 | `enabled` | 总开关，默认关 |
+| 受控门 cover 实体 | `cover_entity_id` | 那扇电动门 |
+| 任务期间门的模式 | `task_door_mode` | `hold_open` 或 `after_exit` |
+| 全开判断来源 | `open_source` | `contact` / `position` / `timed` |
+| 全闭判断来源 | `close_source` | 同上 |
+| 家庭关闭许可 | `close_permission_entity` | 可选；关掉它集成就不会关门 |
+
+#### 第二步：来源反馈
+
+仅当选了 `contact` 或 `position` 时显示。
+
+| 参数 | 键 | 说明 |
+| --- | --- | --- |
+| 全开门磁 | `open_contact` | 代表门已全开的 `binary_sensor` |
+| 全闭门磁 | `close_contact` | 代表门已全闭的 `binary_sensor` |
+| 全开到位值 | `open_contact_state` | 该门磁在全开时报 `on` 还是 `off` |
+| 全闭到位值 | `close_contact_state` | 同上 |
+| 位置反馈类型 | `position_kind` | `measured` 或 `estimated` |
+| 全开位置阈值 | `open_position` | 0–100 |
+| 全闭位置阈值 | `close_position` | 0–100 |
+
+#### 第三步：时间与安全确认
+
+| 参数 | 键 | 范围 | 说明 |
 | --- | --- | --- | --- |
-| Roborock 官方云 | 60 秒 | 300 秒 | 太快会被限流甚至封号 |
-| 自建服务器 | 5 秒 | 60 秒 | 只消耗本地资源，可以放心加快 |
+| 开门行程时间 | `open_travel_seconds` | 1–600 | 仅 `timed` 模式使用 |
+| 关门行程时间 | `close_travel_seconds` | 1–600 | 同上 |
+| 行程余量 | `travel_margin_seconds` | 0–120 | 加在行程时间上 |
+| 门磁稳定时间 | `contact_settle_seconds` | 0–60 | 门磁是锁存开关，通常填 0 |
+| 位置稳定时间 | `position_settle_seconds` | 0–60 | 位置读数需持续多久才认 |
+| 门动作超时 | `operation_timeout_seconds` | 1–1800 | 一次开门或关门最多等多久 |
+| 停靠稳定时间 | `dock_settle_seconds` | 1–300 | 判断已停靠需稳定多久 |
+| 接受估算位置的风险 | `allow_estimated` | 布尔 | 用 `estimated` 时必须勾 |
+| 确认门控权已交接 | `handover_confirmed` | 布尔 | 从旧自动化接管时必须勾 |
+| 清扫前受控出库 | `controlled_exit_enabled` | 布尔 | 见下 |
+| 出库到达超时 | `controlled_exit_timeout_seconds` | 10–300 | 默认 120 |
+| 出库方向 | `controlled_exit_direction` | 五选一 | `auto` / `north` / `south` / `east` / `west` |
+| 出库距离 | `controlled_exit_distance_mm` | 1–65535 | 超出危险区边界多少毫米，默认 623 |
 
-选项里的「危险区坐标轮询间隔」填 `0`（默认）即按服务器自动选择。手动填写时：
+### 出库距离的含义
 
-- **官方云有 30 秒硬下限**，填更小的值会被自动夹到 30 秒 —— 防止误填导致账号被限流
-- 自建服务器无此限制，可填到 1 秒
+存的是从危险区边界往外多少毫米，不是从充电座算。安全规则约束的是机器人离门多远，也就是离区界多远；「从充电座前进多少」是同一趟行程的另一种说法，界面换算显示，不存储。
 
-> 坐标样本最多容忍 **1 次**读取失败就转为 `unknown`。这是失败安全的：过期的「已离开柜门」
-> 绝不能被用来判断可以关门，否则机器人折返时会被门夹住。
+填 100 就是走到区外 100mm 处。到达判断以机器人报告 trip 结束为准，坐标只做事后校核（属性 `controlled_exit_arrival_offset_mm` 记录实际差多少）。这样填多少就走多少，不会被容差吃掉。
 
-### 为什么柜门自动化建议配自建服务器
+---
 
-柜门状态机等 `outside_danger_zone` 翻转的窗口是 **2 分钟**。官方云下 60 秒才采样一次，
-最坏情况第一个新坐标就要等 60 秒，再叠加一次失败就越过窗口 —— 属于「能用但很紧」。
-自建服务器把采样缩短到 10 秒，这个窗口就非常从容。这是切本地服务器最实际的理由。
+## 实体
 
-## 对接自建服务器
+以 `vacuum.g20s_ultra` 为例，前缀 `g20s_ultra`。
 
-在集成配置的区域下拉里选择 `Manual`，填入你的服务器地址（例如 `https://api-rr.example.com:555`），
-然后按 [local_roborock_server 文档](https://python-roborock.github.io/local_roborock_server/) 填写本地登录邮箱和 6 位 PIN 作为验证码。
+### 主要实体
 
-切换到自建服务器后，危险区坐标轮询会自动放宽到 10 秒（不需要手动改选项）。
-
-## HACS 安装方法
-
-### 方式一：通过 HACS 自定义仓库安装
-
-1. 打开 HACS。
-2. 进入右上角菜单 `Custom repositories`。
-3. 仓库地址填写：`https://github.com/kaattz/roborock_plus`
-4. 分类选择：`Integration`
-5. 添加后，在 HACS 中搜索 `Roborock Plus`
-6. 点击下载并重启 Home Assistant
-7. 在 Home Assistant 集成页面中添加 `Roborock Plus`
-
-### 方式二：手动安装
-
-1. 将 `custom_components/roborock_plus` 整个目录复制到你的 Home Assistant 配置目录下
-2. 重启 Home Assistant
-3. 在集成页面添加 `Roborock Plus`
-
-## 配置后注意事项
-
-- 这是一个**独立域名**的第三方集成：`roborock_plus`
-- 它不会覆盖内置 `roborock`
-- 你可以同时保留内置版和 `Roborock Plus`
-- 但两者会生成**不同的实体**，自动化需要迁移到新的实体 ID
-
-## 自定义服务
-
-### 可视化安全区编辑面板
-
-安装集成后，侧边栏会出现 `Roborock Plus Zones` 面板。
-
-你可以在这个面板里：
-
-- 选择 `roborock_plus` 的 vacuum 实体
-- 加载当前地图
-- 生成建议框
-- 在地图上拖拽矩形框选安全区
-- 保存或清空安全区
-
-> 当前这一版是第一版可用实现，重点是先把“能框、能存、能读”做通。
-
-### `roborock_plus.resume_task`
-
-显式恢复当前已暂停的任务。
-
-适合这些场景：
-
-- 你不想依赖 `vacuum.start` 的默认语义
-- 你要在自动化里稳定区分“启动任务”和“恢复任务”
-- 你有柜门、门禁、回充联动这类复杂流程
-
-暂停时集成会记住“该用哪个命令恢复”，因此中途回洗拖布、回充这类状态下也能正确续上原任务。
-
-### 危险区相关服务
-
-| 服务 | 作用 |
+| 实体 | 说明 |
 | --- | --- |
-| `roborock_plus.get_dock_position` | 返回基站参考坐标 |
-| `roborock_plus.get_safe_zone` | 返回已保存的危险区 |
-| `roborock_plus.set_safe_zone` | 保存危险区 |
-| `roborock_plus.clear_safe_zone` | 清空危险区 |
-| `roborock_plus.get_safe_zone_suggestion` | 按方向和尺寸给出建议框 |
-| `roborock_plus.get_safe_zone_editor_context` | 返回编辑器需要的地图与坐标信息 |
-| `roborock_plus.get_maps` | 返回地图与房间列表 |
-| `roborock_plus.get_vacuum_current_position` | 返回扫地机当前位置 |
-| `roborock_plus.set_vacuum_goto_position` | 让扫地机前往指定坐标 |
+| `vacuum.<robot>` | 扫地机主体 |
+| `binary_sensor.<robot>_task_active` | 任务是否还在进行（暂停也算） |
+| `binary_sensor.<robot>_in_cleaning` | 是否在清扫 |
+| `binary_sensor.<robot>_stuck` | 是否卡住 |
+| `binary_sensor.<robot>_in_danger_zone` | 在危险区内 |
+| `binary_sensor.<robot>_outside_danger_zone` | 在危险区外 |
+| `binary_sensor.<robot>_garage_fully_open_confirmed` | 门确认全开 |
+| `binary_sensor.<robot>_garage_fully_closed_confirmed` | 门确认全闭 |
+| `binary_sensor.<robot>_garage_control_problem` | 门控故障 |
+| `sensor.<robot>_garage_control_phase` | 门控阶段 |
+| `image.<robot>_map` | 地图 |
+| `select.*` / `switch.*` / `number.*` / `button.*` | 设置与动作 |
 
-## 当前仓库结构
+### 阶段取值
 
-```text
-custom_components/roborock_plus/    集成本体（HACS 分发这一部分）
-automations/                        三个扫地机自动化 + 说明（人工加入 HA）
-blueprints/                         分区定时清扫与多阶段脚本蓝图（单独导入）
-scripts/                            构建、验证、变异检查工具
-tests/                              测试
-docs/plans/                         设计文档
-hacs.json
-README.md
+| 值 | 含义 |
+| --- | --- |
+| `idle` | 空闲，门不归集成管 |
+| `opening` | 正在开门 |
+| `outside` | 机器人在门外 |
+| `controlled_exit` | 受控出库中 |
+| `closing` | 正在关门 |
+| `closed_outside` | 机器人在外，门已关 |
+| `pausing_return` | 回程中，正在暂停 |
+| `resuming_return` | 门已开，正在恢复回程 |
+| `blocked` | 被故障挡住，看 `reason` |
+
+---
+
+## 服务
+
+| 服务 | 说明 |
+| --- | --- |
+| `roborock_plus.resume_task` | 继续被暂停的任务 |
+| `roborock_plus.get_maps` | 地图列表 |
+| `roborock_plus.get_vacuum_current_position` | 机器人当前坐标 |
+| `roborock_plus.get_dock_position` | 充电座坐标 |
+| `roborock_plus.set_vacuum_goto_position` | 指定 goto 目标 |
+| `roborock_plus.get_safe_zone` | 读取危险区 |
+| `roborock_plus.get_safe_zone_suggestion` | 推算建议危险区 |
+| `roborock_plus.set_safe_zone` | 写入危险区 |
+| `roborock_plus.clear_safe_zone` | 清除危险区 |
+| `roborock_plus.request_garage_open` | 请求开门 |
+| `roborock_plus.request_garage_close` | 请求关门 |
+| `roborock_plus.reset_garage_control` | 重置门控状态（清 `blocked`） |
+| `roborock_plus.start_garage_cleaning_stage` | 多阶段清扫的段启动 |
+
+---
+
+## 配套蓝图
+
+蓝图不随 HACS 更新，需要单独导入。Home Assistant 的蓝图界面可以直接从 URL 导入：
+
+1. 设置 → 自动化与场景 → 蓝图
+2. 右下角「导入蓝图」
+3. 粘贴下面的地址，确认
+
+扫地机分区定时清扫：
+
+```
+https://raw.githubusercontent.com/kaattz/roborock_plus/main/blueprints/%E6%89%AB%E5%9C%B0%E6%9C%BA%E5%88%86%E5%8C%BA%E5%AE%9A%E6%97%B6%E6%B8%85%E6%89%AB.yaml
 ```
 
-**HACS 只分发 `custom_components/roborock_plus/` 这一个目录。** 自动化和蓝图不在
-HACS 的类别里（它只支持 AppDaemon / Dashboard / Integration / Python Script /
-Template / Theme），所以单独维护，见 [automations/README.md](automations/README.md)。
+多阶段清扫：
 
-## 兼容性说明
-
-- Home Assistant：见 `hacs.json` 和 `manifest.json`
-- 安装方式：HACS 自定义仓库 / 手动复制
-- 集成类型：`integration`
-
-## 开发
-
-运行测试：
-
-```bash
-python -m pytest tests -q
+```
+https://raw.githubusercontent.com/kaattz/roborock_plus/main/blueprints/%E5%A4%9A%E9%98%B6%E6%AE%B5%E6%B8%85%E6%89%AB.yaml
 ```
 
-测试覆盖恢复命令选择、危险区几何、柜门保护、轮询策略、状态表互斥和翻译文件完整性。
+导入后 HA 会把它存在 `blueprints/automation/` 下的一个子目录里，子目录名取自导入地址的
+GitHub 账号（`kaattz`）。这个名字不影响使用，蓝图按文件名区分。界面上能直接看到。
 
-改蓝图或自动化后，提交前跑这两个：
+地址用的是 `raw.githubusercontent.com`，不是 GitHub 的文件页面。文件页面的 HTML 不是蓝图，导入会失败。
 
-```bash
-python scripts/validate_blueprints.py    # 蓝图结构（HA 导入时才会发现的结构错误）
-python scripts/mutation_check_blueprint.py   # 确认上面的检查真的能抓到问题
+若 HA 无法访问外网，改成手动放置：把这两个文件放进 `blueprints/automation/` 下的任意子目录，
+再重载蓝图。放好后的相对路径要写进自动化的 `use_blueprint.path`。
+
+- [`blueprints/扫地机分区定时清扫.yaml`](blueprints/扫地机分区定时清扫.yaml)
+- [`blueprints/多阶段清扫.yaml`](blueprints/多阶段清扫.yaml)
+
+### 扫地机分区定时清扫
+
+按房间清扫，支持有人跳过、门磁检查、失败重试、全程通知。
+
+#### 参数
+
+| 参数 | 键 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| 扫地机 | `vacuum_entity` | — | 只选这一个，其余实体从设备自动推导 |
+| 何时清扫 | `my_trigger` | — | 自定义触发器 |
+| 区域 | `areas` | — | HA 区域，可多选 |
+| 意图 | `cleaning_mode` | 扫拖一体 | 仅扫地 / 扫拖一体 / 仅拖地 |
+| 拖地强度 | `mop_intensity` | `medium` | 仅扫地时忽略，强制 `off` |
+| 拖地模式 | `mop_route` | `standard` | 走几遍的路线 |
+| 人体传感器 | `presence_sensors` | `[]` | 留空＝不检查 |
+| 门磁 | `door_sensors` | `[]` | 留空＝不检查；填了就必须都开着才扫 |
+| 门开状态 | `door_open_state` | `on` | 门磁开门时报什么；反极性填 `off` |
+| 重试窗口 | `retry_window_minutes` | 30 | 人体和门磁共用；0＝只试一次 |
+| 重试间隔 | `retry_interval_minutes` | 5 | 窗口 ÷ 间隔 = 尝试次数 |
+| 信息发送 | `notify_script` | `script.alert_notify` | 脚本需接收 `title` / `message` / `level` |
+| 开始时通知 | `notify_on_start` | `true` | |
+| 跳过时通知 | `notify_on_skip` | `true` | 建议开着，否则点了没反应看不出原因 |
+
+#### 通知
+
+| 时机 | level | 标题 |
+| --- | --- | --- |
+| 配置错误 | warning | 找不到设备实体 |
+| 开始 | info | 已开始清扫 |
+| 跳过 | info | 本轮跳过（附原因） |
+| 完成 | info | 已完成（附用时） |
+| 中断 | critical | 清扫中断（离线或报错） |
+| 超时 | warning | 清扫超时（8 小时） |
+| 异常结束 | warning | 清扫异常结束（没回基站） |
+| 未执行 | warning | 定时清扫未执行（重试窗口耗尽） |
+
+#### 示例
+
+```yaml
+- id: '1794200000001'
+  alias: 主卧打扫任务
+  use_blueprint:
+    path: kaattz/扫地机分区定时清扫.yaml
+    input:
+      vacuum_entity: vacuum.g20s_ultra
+      areas: [zhu_wo]
+      cleaning_mode: 仅扫地
+      presence_sensors: []
+      door_sensors: [binary_sensor.master_bedroom_door]
+      door_open_state: 'on'
+      my_trigger:
+      - trigger: time
+        at: '10:00:00'
+        weekday: [tue, thu, sat]
 ```
 
-`validate_blueprints.py` 不是多余的：蓝图第一版的**每个 Jinja 模板都渲染正确**，
-但被 HA 导入器拒收 —— `then:` 的缩进落在了 `if:` 的条件列表里。只渲染模板
-永远发现不了这类结构错误。
+更多见 `automations/` 目录。
 
-## 项目状态
+#### 通知脚本接口
 
-已完成的主线：恢复语义、危险区/柜门保护、状态轮询、卡住检测、位置可信度、
-三个自动化、分区定时清扫蓝图与 HA 串行多阶段清扫蓝图。
+蓝图调用时传三个参数：
 
-如果你只是想直接替代内置集成，这个项目**不是覆盖版**，而是**并存版**。
+```yaml
+data:
+  level: info | warning | critical
+  title: 标题
+  message: 正文
+```
 
-## 已知问题
+自己写一个接收这三个参数的脚本即可：
 
-- **`last_resume_command` 在 HA 重启后丢失。** 它存在内存里，用于暂停后
-  恢复原任务。若恰好在"暂停中"重启，`resume_task` 会因为没有兜底命令而报
-  `resume_not_available`。集成已经尽量从设备状态推导，但暂停态本身信息不足。
-- **官方云下卡住检测精度受限。** 采样 60 秒时，120 秒窗口内只有 2 个样本，
-  判定会明显变粗。这是限流约束带来的固有限制，调参解决不了。
-- **App 发起的清扫不受保护。** 从 Roborock App 启动的命令不经过 HA，
-  `garage_guard` 拦不到，柜门不会自动打开。这是架构限制，不是 bug。
-- **依赖装不上时整个集成不会加载。** `manifest.json` 声明的
-  `python-roborock==7.12.0` 由 HA 在启动时从 pypi 安装；网络不通时
-  `async_setup` 根本不会执行，所有 `roborock_plus.*` 服务和实体一起消失。
-  2026-10-13 那晚就发生了约 3.5 小时。此时 Spook 会报自动化引用了
-  「未知动作」—— 那是**掉线的症状，不是配置错误**，不要按它的建议删掉动作。
-  柜门状态机已经对这种情况做了前置检查（见
-  [scripts/garage_state_machine/README.md](scripts/garage_state_machine/README.md) 守卫 4）。
-- **HA 2026.10 起 `protobuf` 升到 7.x，旧版 `python-roborock` 装不上。**
-  HA 2026.10.1 在 `package_constraints.txt` 里冻结 `protobuf==7.36.0`，
-  而 `python-roborock<6` 要求 `protobuf<7`，解析必然失败，症状是
-  `Requirements for roborock_plus not found`。v0.7.6 的 `5.5.1` 属于这一类；
-  v0.7.7 起改用 `7.12.0`（要求 `protobuf<8,>=6.31.1`，与 HA 官方
-  `roborock` 集成的 pin 一致）。以后升级 HA 时先跑
-  `python scripts/reproduce_ha_requirement_conflict.py`。
+```yaml
+alert_notify:
+  alias: alert_notify
+  mode: parallel
+  fields:
+    title: {required: true, selector: {text: {}}}
+    message: {required: true, selector: {text: {}}}
+    level:
+      default: info
+      selector:
+        select: {options: [info, warning, critical]}
+  sequence:
+  - action: persistent_notification.create
+    data:
+      title: '{{ title }}'
+      message: '{{ message }}'
+  - action: notify.mobile_app_your_phone
+    data:
+      title: '{{ title }}'
+      message: '{{ message }}'
+```
+
+### 多阶段清扫
+
+`blueprints/多阶段清扫.yaml`
+
+把一个清扫拆成多段（例如先扫后拖），每段经过同一套门互锁，确认本段成功后才启动下一段。人工中断、失败或超时都会停止后续。
+
+| 参数 | 说明 |
+| --- | --- |
+| 扫地机 | |
+| 分段传感器 | 区分阶段的实体 |
+| 清扫阶段列表 | 每段的目标与模式 |
+| 阶段超时 | 每段最多等多久 |
+
+### 这套东西怎么配合
+
+| 谁 | 管什么 |
+| --- | --- |
+| 集成 | 门和机器人的时序、互锁、每一步的确认。不管什么时候该扫 |
+| 蓝图 | 什么时候扫、扫哪个房间、有人要不要跳过、失败怎么重试、通知发给谁 |
+| 自动化 | 家庭策略：周几几点、什么事件触发、谁收到消息 |
+
+集成负责不出事故，蓝图负责按你的意愿做事。在自动化里自己写开门关门就绕过了互锁。
+
+---
+
+## 故障排查
+
+先看两个：
+
+```yaml
+sensor.<robot>_garage_control_phase        # 当前阶段
+binary_sensor.<robot>_garage_control_problem   # 有无故障，reason 属性说明原因
+```
+
+### 常见 reason
+
+| reason | 含义 | 处理 |
+| --- | --- | --- |
+| `duplicate_binding` | 门被另一个已失效的集成实例占着 | 重启 Home Assistant |
+| `pause_not_observed` | 暂停命令发了但状态没确认 | 检查网络或采样；机器人可能停着，需人工恢复 |
+| `open_not_confirmed` | 门没在超时内确认全开 | 检查门磁极性、行程时间、门是否卡住 |
+| `close_not_confirmed` | 门没确认全闭 | 同上 |
+| `controlled_exit_failed` | 受控出库没在超时内完成 | 检查出库点是否可达 |
+| `estimated_risk_not_accepted` | 用了估算位置但没勾风险确认 | 回配置勾上，或改用 `contact` |
+| `handover_required` | 从旧自动化接管但没确认交接 | 回配置勾上 |
+
+### 点了没反应
+
+按顺序查：
+
+1. `binary_sensor.<robot>_task_active` 是否为 `on`——已经有任务在跑，`mode: single` 会丢弃新请求
+2. `sensor.<robot>_garage_control_phase` 是否为 `blocked`——看 `reason`
+3. 自动化的 `current` 属性是否大于 0——蓝图可能在重试循环里（有人、门没开、机器人忙）
+4. 有没有收到「本轮跳过」通知——蓝图会写明原因
+
+### 门开了但机器人不走
+
+- 检查 `binary_sensor.<robot>_garage_fully_open_confirmed` 是否为 `on`
+- 状态是 `unknown` 说明门磁读不到：未接线、极性填反，或实体不可用
+
+---
+
+## 已知限制
+
+- 只支持 V1 协议。Q7、Q10、A01 等新协议型号不在范围
+- 一扇门只能绑一台机器人；多台共用一扇门不支持，但可以分别绑不同的门
+- 危险区是矩形，不支持多边形
+- 地图坐标来自服务器，不是本地计算；自建服务器时更可靠
+- 受控出库依赖 `app_goto_target`，机器人必须在基站上
+- 蓝图在重试窗口内条件满足就自动开始；条件始终不满足时只发一条失败通知
+
+---
 
 ## 致谢
 
-本项目基于 Home Assistant 官方 `roborock` 集成修改而来，保留其原有整体结构，并针对暂停/恢复行为做增强。
+基于 Home Assistant 官方 `roborock` 集成演化。地图解析使用 `vacuum-map-parser-roborock`，设备通信使用 `python-roborock`。

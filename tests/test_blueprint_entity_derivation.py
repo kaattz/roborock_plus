@@ -55,7 +55,14 @@ def _load_validator():
 
 VALIDATOR = _load_validator()
 BLUEPRINT = _blueprint_path()
+#: The blueprint wrapped by the YAML emitter, so line breaks land where the
+#: emitter chose. Comparisons about *content* must not depend on that: collapse
+#: whitespace before looking for a predicate.
 TEXT = BLUEPRINT.read_text(encoding="utf-8")
+
+
+def _squashed(text: str) -> str:
+    return " ".join(text.split())
 CONFIG = VALIDATOR.load_blueprint(BLUEPRINT)
 
 
@@ -87,7 +94,8 @@ class TestRemovedInputs:
         `vacuum_entity` anchors the whole thing. `presence_sensors` is a choice
         about the user's intent -- which rooms count as "occupied for this task"
         -- not something derivable. `notify_script` is the user's notification
-        path. The other three were derivable and are now gone.
+        path, and `door_sensors` are the household's room doors. The other three
+        were derivable and are now gone.
         """
         entity_inputs = []
         for key, value in (CONFIG["blueprint"].get("input") or {}).items():
@@ -100,7 +108,10 @@ class TestRemovedInputs:
                 selector = (spec or {}).get("selector") or {}
                 if "entity" in selector:
                     entity_inputs.append(name)
+        # `door_sensors` joined the list on 2026-11-08: a room door is a fact
+        # about the house, not something derivable from the vacuum's own device.
         assert sorted(entity_inputs) == [
+            "door_sensors",
             "notify_script",
             "presence_sensors",
             "vacuum_entity",
@@ -111,14 +122,14 @@ class TestDerivationPredicates:
     """Each derived entity is found by a capability, not by its name."""
 
     def test_lookup_starts_from_the_vacuum_device(self) -> None:
-        assert "device_entities(device_id(vacuum_entity))" in TEXT
+        assert "device_entities(device_id(vacuum_entity))" in _squashed(TEXT)
 
     def test_lookup_is_guarded_against_a_missing_device(self) -> None:
         """device_id('vacuum.nope') yields nothing; default([]) keeps it safe."""
-        assert "device_entities(device_id(vacuum_entity)) | default([], true)" in TEXT
+        assert "device_entities(device_id(vacuum_entity)) | default([], true)" in _squashed(TEXT)
 
     def test_task_active_uses_device_class_running(self) -> None:
-        assert "'attributes.device_class', 'eq', 'running'" in TEXT
+        assert "'attributes.device_class', 'eq', 'running'" in _squashed(TEXT)
 
     def test_mop_intensity_uses_off_and_extreme(self) -> None:
         """`off` is what makes 'vacuum only' expressible, so it is the key signal.
@@ -126,11 +137,11 @@ class TestDerivationPredicates:
         The two selects differ only by suffix; matching on their option sets is
         what makes the lookup independent of that suffix.
         """
-        assert "'attributes.options', 'contains', 'off'" in TEXT
-        assert "'attributes.options', 'contains', 'extreme'" in TEXT
+        assert "'attributes.options', 'contains', 'off'" in _squashed(TEXT)
+        assert "'attributes.options', 'contains', 'extreme'" in _squashed(TEXT)
 
     def test_mop_route_uses_deep_plus(self) -> None:
-        assert "'attributes.options', 'contains', 'deep_plus'" in TEXT
+        assert "'attributes.options', 'contains', 'deep_plus'" in _squashed(TEXT)
 
     def test_all_three_predicates_are_distinct(self) -> None:
         """A shared predicate would return the same entity three times."""
@@ -157,8 +168,8 @@ class TestDerivationFailsLoudly:
 
     def test_the_alert_names_what_was_found_instead(self) -> None:
         """So the user can see what the device actually exposes."""
-        assert "device_entities_list | select('match', '^select\\.')" in TEXT
-        assert "device_entities_list | select('match', '^binary_sensor\\.')" in TEXT
+        assert "device_entities_list | select('match', '^select\\.')" in _squashed(TEXT)
+        assert "device_entities_list | select('match', '^binary_sensor\\.')" in _squashed(TEXT)
 
     def test_the_guard_explains_why_the_two_are_required(self) -> None:
         assert "任务进行中" in TEXT and "仅扫地" in TEXT
@@ -168,13 +179,19 @@ class TestOptionalMopRoute:
     """The route is optional; a device without it must still work."""
 
     def test_route_step_is_conditional(self) -> None:
-        assert "mop_route_entity not in ['', none]" in TEXT
+        assert "mop_route_entity not in ['', none]" in _squashed(TEXT)
 
     def test_route_is_skipped_for_vacuum_only(self) -> None:
         """Setting a mop route when dry-vacuuming is meaningless."""
-        assert "cleaning_mode != '仅扫地'" in TEXT
+        assert "cleaning_mode != '仅扫地'" in _squashed(TEXT)
 
 
 class TestVacuumOnlyStillUsesWaterOff:
     def test_intent_maps_to_water_off(self) -> None:
-        assert "'off' if cleaning_mode == '仅扫地' else mop_intensity" in TEXT
+        squashed = _squashed(TEXT)
+        # YAML doubles the quotes inside a single-quoted scalar, so the template
+        # reads `''仅扫地''`; both spellings mean the same string to Jinja.
+        assert (
+            "'off' if cleaning_mode == '仅扫地' else mop_intensity" in squashed
+            or "''off'' if cleaning_mode == ''仅扫地'' else mop_intensity" in squashed
+        )

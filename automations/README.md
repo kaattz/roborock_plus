@@ -6,9 +6,9 @@
 明确启用 V1 的单机绑定后，门来源判断、通行等待和 `hold_open` 标准流程由集成负责，
 随集成本体更新，不需要导入本目录的柜门状态机。未启用新绑定的旧配置继续使用原方案。
 
-本目录的 `roborock_garage_door_statemachine.yaml`、对应 JSON 和 `*_plus` 前身属于
-**legacy 主动门控**。文件保留用于旧配置和回放对照；迁移时由用户核对并停用同门的旧主动流程，
-再确认交接，不能与新控制器并行。多机器人旧全局 guard 的保护关系需逐台处理。
+旧版门状态机及其生成链已于 2026-11-08 删除：内置门控接管了这件事，HA 里也从来没有
+装过那个自动化。同门的旧主动流程若还在别处运行，迁移时仍需停用并确认交接，不能与新控制器
+并行。多机器人旧全局 guard 的保护关系需逐台处理。
 
 家庭策略仍可保留：日程/房间选择、占用许可、卡住告警和通知渠道由家庭自动化决定。
 无人自动关门等流程改为以目标 vacuum 调用 `roborock_plus.request_garage_close`，
@@ -25,13 +25,13 @@ App、厂商定时和机器人实体按键的动作不经过 HA，不能依靠�
 
 | 文件 | HA unique_id | entity_id |
 | --- | --- | --- |
-| `roborock_garage_door_statemachine.yaml` | `1791392186966` | `automation.roborock_garage_door_statemachine` |
 | `roborock_stuck_or_error_stop.yaml` | `1791390713215` | `automation.roborock_stuck_or_error_stop` |
 | `roborock_clean_command_not_started.yaml` | `1791372324572` | `automation.roborock_clean_command_not_started` |
 | `vacuum_garage_door_auto_unlock.yaml` | `1788771256556` | `automation.vacuum_garage_door_auto_unlock` |
 | `garage_door_sync_folding_door.yaml` | `1746705574425` | `automation.garage_door_sync_folding_door` |
 | `roborock_garage_issue_notify.yaml` | `1791600000001` | `automation.roborock_garage_issue_notify` |
 | `ciwo_cleaning_task.yaml` | `1794116696310` | `automation.ci_wo_da_sao_ren_wu` |
+| `zhuwo_cleaning_task.yaml` | `1794200000001` | `automation.zhu_wo_da_sao_ren_wu` |
 
 **`garage_door_sync_folding_door.yaml` 不是新文件，是从 HA 回写的现有自动化。**
 折叠门打开时，它请集成把车库门开到可通行位。曾经直接发 `cover.open_cover`，
@@ -50,12 +50,6 @@ App、厂商定时和机器人实体按键的动作不经过 HA，不能依靠�
 
 HA 那边**人工添加、人工更新** —— 在 UI 里粘贴本文件的 YAML 内容即可。
 没有同步脚本,也不需要。
-
-> **`roborock_garage_door_statemachine.yaml` 必须与 `scripts/garage_state_machine/state_machine.json` 保持一致。**
-> JSON 是 `build.py` 的产物,是逻辑的源头;YAML 是要粘进 HA 的那一份。改了一边忘了另一边,
-> 粘贴时就会把已修的 bug 贴回线上 —— 2026-10-10 的 position 回声修复就踩过这个坑。
-> `tests/test_system_composition.py` 现在会比对两者的 `actions`/`triggers`/`mode` 等,不一致就红。
-> 重新生成:先 `python scripts/garage_state_machine/build.py`,再把新的 YAML 补上。
 
 > **`id` 不能改。** 它是 HA 的 unique_id,改了等于换一个自动化:历史断掉、
 > 实体注册表的身份丢失。2026-10-09 改成英文名时只改了 alias 和 entity_id,

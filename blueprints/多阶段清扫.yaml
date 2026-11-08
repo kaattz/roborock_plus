@@ -8,7 +8,7 @@ blueprint:
     本脚本不操作车库门、不自动重试，Home Assistant 重启后不续跑。
   domain: script
   author: kaattz
-  source_url: https://github.com/kaattz/roborock_plus/blob/main/blueprints/%E5%A4%9A%E9%98%B6%E6%AE%B5%E6%B8%85%E6%89%AB.yaml
+  source_url: https://raw.githubusercontent.com/kaattz/roborock_plus/main/blueprints/%E5%A4%9A%E9%98%B6%E6%AE%B5%E6%B8%85%E6%89%AB.yaml
   homeassistant:
     min_version: "2026.8.0"
   input:

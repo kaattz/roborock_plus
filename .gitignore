@@ -61,3 +61,13 @@ cloudflare_token
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Working notes, not part of the integration.
+#
+# AGENTS.md and lessons.md are operating notes for whoever (or whatever) works on
+# this repo; specs/ holds per-change requirement/spec/plan write-ups. They are
+# kept locally but not published: they are process artefacts, not the shipped
+# component, and they go stale the moment the code moves.
+AGENTS.md
+lessons.md
+specs/

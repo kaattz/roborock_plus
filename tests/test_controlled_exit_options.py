@@ -44,15 +44,15 @@ def test_the_waypoint_numbers_are_hidden_while_the_switch_is_off():
     """An off feature must not demand three numbers."""
     page = timing_step(BASE)
     keys = _page_keys(page)
-    assert 'controlled_exit_x' not in keys
-    assert 'controlled_exit_y' not in keys
+    assert 'controlled_exit_direction' not in keys
+    assert 'controlled_exit_distance_mm' not in keys
     assert 'controlled_exit_timeout_seconds' not in keys
 
 
 def test_the_waypoint_numbers_appear_once_the_switch_is_on():
     page = timing_step({**BASE, 'controlled_exit_enabled': True})
     keys = _page_keys(page)
-    assert {'controlled_exit_x', 'controlled_exit_y',
+    assert {'controlled_exit_direction', 'controlled_exit_distance_mm',
             'controlled_exit_timeout_seconds'} <= keys
 
 
@@ -63,22 +63,23 @@ def test_the_defaults_describe_the_measured_geometry():
         key = marker.key
         if key.startswith('controlled_exit'):
             defaults[key] = marker.description.get('suggested_value', marker.default)
-    assert defaults.get('controlled_exit_x') == 25696
-    assert defaults.get('controlled_exit_y') == 26500
+    assert defaults.get('controlled_exit_distance_mm') == 623
+    assert defaults.get('controlled_exit_direction') == 'auto'
     assert defaults.get('controlled_exit_timeout_seconds') == 120
 
 
 def test_saved_values_win_over_the_defaults():
     page = timing_step({**BASE, 'controlled_exit_enabled': True,
-                        'controlled_exit_x': 25000, 'controlled_exit_y': 26000,
+                        'controlled_exit_distance_mm': 900,
+                        'controlled_exit_direction': 'west',
                         'controlled_exit_timeout_seconds': 60})
     values = {}
     for marker, _selector in page['data_schema'].items():
         key = marker.key
         if key.startswith('controlled_exit'):
             values[key] = marker.description.get('suggested_value', marker.default)
-    assert values['controlled_exit_x'] == 25000
-    assert values['controlled_exit_y'] == 26000
+    assert values['controlled_exit_distance_mm'] == 900
+    assert values['controlled_exit_direction'] == 'west'
     assert values['controlled_exit_timeout_seconds'] == 60
 
 
@@ -87,7 +88,7 @@ def test_every_label_exists_in_all_three_translation_files():
     for name in ('strings.json', 'translations/en.json', 'translations/zh-Hans.json'):
         step = json.loads((CONFIG_FLOW.parent / name).read_text(encoding='utf-8'))[
             'options']['step']['garage_timing']
-        for key in ('controlled_exit_enabled', 'controlled_exit_x',
-                    'controlled_exit_y', 'controlled_exit_timeout_seconds'):
+        for key in ('controlled_exit_enabled', 'controlled_exit_direction',
+                    'controlled_exit_distance_mm', 'controlled_exit_timeout_seconds'):
             assert key in step['data'], f'{name}: no label for {key}'
             assert key in step['data_description'], f'{name}: no description for {key}'

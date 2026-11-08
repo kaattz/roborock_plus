@@ -73,10 +73,12 @@ from .const import (
 from .garage_config import (
     CONF_GARAGE_BINDINGS,
     CONF_GARAGE_CONTROL_VERSION,
+    DEFAULT_CONTROLLED_EXIT_DISTANCE,
     DEFAULT_CONTROLLED_EXIT_TIMEOUT,
-    DEFAULT_CONTROLLED_EXIT_X,
-    DEFAULT_CONTROLLED_EXIT_Y,
     EVIDENCE_SOURCES,
+    exit_distance_from_dock,
+    legacy_exit_distance,
+    EXIT_DIRECTIONS,
     GARAGE_CONTROL_VERSION,
     NUMERIC_RANGES,
     GarageConfigError,
@@ -777,10 +779,111 @@ class RoborockOptionsFlowHandler(OptionsFlow):
         fields.append("controlled_exit_enabled")
         if values.get("controlled_exit_enabled"):
             # Only ask for the waypoint once the feature is switched on: an
-            # off feature should not demand three numbers nobody will use.
-            fields.extend(("controlled_exit_x", "controlled_exit_y",
+            # off feature should not demand numbers nobody will use.
+            fields.extend(("controlled_exit_direction", "controlled_exit_distance_mm",
                            "controlled_exit_timeout_seconds"))
         return tuple(fields)
+
+    def _garage_coordinator(self) -> Any:
+        """Return the selected robot's coordinator, if it is loaded."""
+        runtime = getattr(self.config_entry, "runtime_data", None)
+        for coordinator in getattr(runtime, "v1", ()):
+            if coordinator.duid == self._garage_duid:
+                return coordinator
+        return None
+
+    def _stored_zone(self, duid: str) -> Any:
+        """Return the persisted danger zone for a robot, or None.
+
+        Behind a method so the form logic can be exercised without Home
+        Assistant's storage layer: that import reaches into `homeassistant`,
+        which the offline harness cannot import.
+        """
+        try:
+            from .safe_zone_store import get_safe_zone_store
+        except ImportError:      # offline harness
+            return None
+        return get_safe_zone_store(self.hass).get_loaded(duid)
+
+    def _exit_geometry(self) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]] | None:
+        """Return (dock, zone_min, zone_max) when both are readable.
+
+        Used only to phrase the form. When the map has not loaded there is no
+        charger marker, and the form must still render and save -- the operator is
+        entering a distance, not a dock position -- so this returns None instead
+        of raising.
+        """
+        coordinator = self._garage_coordinator()
+        if coordinator is None:
+            return None
+        stored = self._stored_zone(coordinator.duid)
+        if stored is None:
+            return None
+        try:
+            map_data = coordinator.properties_api.map_content.map_data
+            charger = getattr(map_data, "charger", None)
+        except (AttributeError, TypeError):
+            return None
+        if charger is None:
+            return None
+        dock_x, dock_y = getattr(charger, "x", None), getattr(charger, "y", None)
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                   for v in (dock_x, dock_y)):
+            return None
+        zone = stored.zone
+        return (
+            (float(dock_x), float(dock_y)),
+            (float(zone.min_x), float(zone.min_y)),
+            (float(zone.max_x), float(zone.max_y)),
+        )
+
+    def _legacy_distance_suggestion(self) -> int | None:
+        """Convert a pre-0.12.0 coordinate waypoint into a distance, for prefill.
+
+        Display only. The binding keeps its coordinates until the operator saves,
+        and the runtime does the authoritative conversion in the same way.
+        """
+        values = self._garage_values()
+        geometry = self._exit_geometry()
+        if geometry is None:
+            return None
+        raw_x, raw_y = values.get("controlled_exit_x"), values.get("controlled_exit_y")
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                   for v in (raw_x, raw_y)):
+            return None
+        try:
+            converted = legacy_exit_distance(
+                waypoint=(float(raw_x), float(raw_y)), dock=geometry[0],
+                zone_min=geometry[1], zone_max=geometry[2],
+                direction=values.get("controlled_exit_direction", "auto"),
+            )
+        except GarageConfigError:
+            return None
+        return None if converted is None else converted[0]
+
+    def _exit_distance_placeholder(self) -> str:
+        """Phrase the distance the way the household thinks about it.
+
+        "623mm past the edge" is precise but abstract; "1939mm forward from the
+        dock" is the same trip described in the terms the question was asked in.
+        """
+        values = self._garage_values()
+        geometry = self._exit_geometry()
+        distance = values.get("controlled_exit_distance_mm",
+                              DEFAULT_CONTROLLED_EXIT_DISTANCE)
+        if geometry is None:
+            return "充电座位置未知，无法换算成「从充电座前进多少」"
+        try:
+            total = exit_distance_from_dock(
+                dock=geometry[0], zone_min=geometry[1], zone_max=geometry[2],
+                direction=values.get("controlled_exit_direction", "auto"),
+                distance_mm=float(distance),
+            )
+        except (TypeError, ValueError):
+            return "无法换算"
+        if total is None:
+            return "方向未知，无法换算"
+        return f"相当于从充电座前进 {total:.0f} mm"
 
     def _garage_error_form(self, error: GarageConfigError) -> ConfigFlowResult:
         errors = {"base": error.reason}
@@ -808,21 +911,29 @@ class RoborockOptionsFlowHandler(OptionsFlow):
         if step_id == "garage_timing":
             # Prefill the waypoint from the measured geometry. These are form
             # defaults only: validation still refuses to enable the feature
-            # unless the operator states all three values.
+            # unless the operator states the values.
             for key, value in (
-                ('controlled_exit_x', DEFAULT_CONTROLLED_EXIT_X),
-                ('controlled_exit_y', DEFAULT_CONTROLLED_EXIT_Y),
+                ('controlled_exit_direction', 'auto'),
+                ('controlled_exit_distance_mm', DEFAULT_CONTROLLED_EXIT_DISTANCE),
                 ('controlled_exit_timeout_seconds', DEFAULT_CONTROLLED_EXIT_TIMEOUT),
             ):
                 if key not in values:
                     timing_suggestions[key] = value
+            # A binding saved before 0.12.0 has a coordinate waypoint and no
+            # distance. Without this the field would render empty and the
+            # operator would have to guess what number preserves their setup.
+            if 'controlled_exit_distance_mm' not in values and (
+                    'controlled_exit_x' in values or 'controlled_exit_y' in values):
+                migrated = self._legacy_distance_suggestion()
+                if migrated is not None:
+                    timing_suggestions['controlled_exit_distance_mm'] = migrated
         def field(key: str, default: Any = None) -> Any:
             # The waypoint numbers are only shown once the switch is on, so they
             # cannot be Required: a hidden Required field would block the form.
             optional = (
                 "allow_estimated", "handover_confirmed",
-                "controlled_exit_enabled", "controlled_exit_x",
-                "controlled_exit_y", "controlled_exit_timeout_seconds",
+                "controlled_exit_enabled", "controlled_exit_direction",
+                "controlled_exit_distance_mm", "controlled_exit_timeout_seconds",
             )
             marker = vol.Required if step_id in ("garage_feedback", "garage_timing") and key not in optional else vol.Optional
             if key in values and values[key] not in (None, ""):
@@ -852,23 +963,29 @@ class RoborockOptionsFlowHandler(OptionsFlow):
             field("allow_estimated", False): bool,
             field("handover_confirmed", False): bool,
             field("controlled_exit_enabled", False): bool,
+            field("controlled_exit_direction", "auto"): choice(
+                list(EXIT_DIRECTIONS), "garage_exit_direction"),
         }
         for key, (minimum, maximum) in {
             **NUMERIC_RANGES, "open_position": (0, 100), "close_position": (0, 100)
         }.items():
+            if key == "controlled_exit_direction":
+                continue
             default = timing_suggestions.get(key) if key not in values else None
             selectors[field(key, default)] = NumberSelector(NumberSelectorConfig(
                 min=minimum, max=maximum, step=1,
                 mode=NumberSelectorMode.BOX,
                 unit_of_measurement=(
                     "%" if key.endswith("_position")
-                    else "mm" if key in ("controlled_exit_x", "controlled_exit_y")
+                    else "mm" if key.startswith("controlled_exit_distance")
                     else "s"
                 ),
             ))
         visible = (*self._garage_fields(step_id), *extra_fields)
         data_schema = {key: selector for key, selector in selectors.items() if key.schema in visible}
         placeholders = {"robot": self._garage_devices().get(self._garage_duid, self._garage_duid)}
+        if step_id == "garage_timing" and values.get("controlled_exit_enabled"):
+            placeholders["exit_from_dock"] = self._exit_distance_placeholder()
         if errors and "operation_timeout_too_short" in errors.values():
             placeholders.update(
                 current_timeout=f"{values['operation_timeout_seconds']:g}",

@@ -90,6 +90,10 @@ class GarageDiagnosticEntity(RoborockEntity):
         }
         if runtime is not None:
             attributes.update(runtime.stage_attributes())
+            # Guarded: a runtime double (tests, or a partially-built object) is not
+            # required to implement every diagnostic hook.
+            if hasattr(runtime, "exit_target_attributes"):
+                attributes.update(runtime.exit_target_attributes())
         for direction in ("open", "close"):
             endpoint = getattr(state, direction, None)
             attributes[f"{direction}_quality"] = getattr(endpoint, "quality", "unknown")

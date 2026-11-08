@@ -11,6 +11,11 @@ CONF_GARAGE_BINDINGS = "garage_bindings"
 CONF_GARAGE_CONTROL_VERSION = "garage_control_version"
 GARAGE_CONTROL_VERSION = 1
 
+#: Directions a controlled exit may travel, plus ``auto`` which derives one.
+EXIT_DIRECTIONS = ("auto", "north", "south", "east", "west")
+#: The four concrete axes; ``auto`` is resolved before anything acts on it.
+EXIT_AXES = ("north", "south", "east", "west")
+
 NUMERIC_RANGES = {
     "open_travel_seconds": (1, 600),
     "close_travel_seconds": (1, 600),
@@ -21,6 +26,7 @@ NUMERIC_RANGES = {
     "dock_settle_seconds": (1, 300),
     "controlled_exit_x": (0, 65535),
     "controlled_exit_y": (0, 65535),
+    "controlled_exit_distance_mm": (1, 65535),
     "controlled_exit_timeout_seconds": (10, 300),
 }
 EVIDENCE_SOURCES = ("contact", "position", "timed")
@@ -34,20 +40,134 @@ EVIDENCE_SOURCES = ("contact", "position", "timed")
 # detour. It is only a form default; enabling the feature requires the operator
 # to state all three numbers explicitly, because default-x-with-custom-y is a
 # combination nobody has verified.
-DEFAULT_CONTROLLED_EXIT_X = 25696
-DEFAULT_CONTROLLED_EXIT_Y = 26500
 DEFAULT_CONTROLLED_EXIT_TIMEOUT = 120
 
-# How close the reported position must be to the waypoint to count as arrived.
-# Robot docking precision is not zero; demanding the exact point would time out
-# forever. 400mm is smaller than the body, so the robot really is "there".
-CONTROLLED_EXIT_TOLERANCE_MM = 400
+#: How far past the danger-zone edge the waypoint sits, in millimetres. This is
+#: the number the safety rule actually constrains, and the one stored in the
+#: binding. The household's current waypoint (25696, 26500) is exactly 623mm past
+#: the -Y edge at y=27123, so this default reproduces it behaviour-for-behaviour.
+DEFAULT_CONTROLLED_EXIT_DISTANCE = 623
+
+#: How close the reported position must be to the waypoint to count as arrived.
+#: Robot docking precision is not zero; demanding the exact point would time out
+#: forever.
+#:
+#: 200mm rather than the original 400mm: the waypoint clears the zone edge by
+#: 623mm, so a 400mm tolerance would let the robot be judged "arrived" while only
+#: 223mm clear of the door -- close enough that the swing could reach it. At
+#: 200mm the worst case keeps 423mm. The risk of a stricter tolerance is a
+#: timeout when localisation drifts, which `trip_finished()` covers: a robot that
+#: reports its trip over and is confirmed outside still counts as arrived.
+CONTROLLED_EXIT_TOLERANCE_MM = 200
 
 CONTROLLED_EXIT_FIELDS = (
-    "controlled_exit_x",
-    "controlled_exit_y",
+    "controlled_exit_distance_mm",
+    "controlled_exit_direction",
     "controlled_exit_timeout_seconds",
 )
+
+#: How far a re-derived waypoint may sit off the axis before the migration logs a
+#: warning. The new model cannot express a lateral offset, so a legacy waypoint
+#: that is mostly sideways loses its sideways component when converted. One robot
+#: body width is the point past which that matters; below it the error is noise.
+CONTROLLED_EXIT_LATERAL_WARN_MM = 1000
+
+
+def resolve_exit_direction(
+    *,
+    dock: tuple[float, float],
+    zone_min: tuple[float, float],
+    zone_max: tuple[float, float],
+    requested: str = "auto",
+) -> str | None:
+    """Return which way the robot leaves the cabinet.
+
+    A manual choice always wins. Otherwise the axis is the dominant component of
+    "danger-zone centre minus charger" -- **not** "the nearest edge". Measured
+    2026-11-08: the dock sits 373mm from the +X edge and 325mm from the +Y edge,
+    while the real exit is -Y at 1316mm, the *farthest* edge. Choosing the nearest
+    edge would drive the robot at the closed door beside the cabinet, which is the
+    2026-10-25 graze this whole feature exists to avoid.
+
+    Returns ``None`` when the geometry cannot answer (the dock sits exactly at the
+    zone centre), so callers refuse rather than guess a direction.
+    """
+    if requested in EXIT_AXES:
+        return requested
+    if requested != "auto":
+        raise GarageConfigError("invalid_controlled_exit_direction", "controlled_exit_direction")
+    dock_x, dock_y = dock
+    vy = (zone_min[1] + zone_max[1]) / 2 - dock_y
+    vx = (zone_min[0] + zone_max[0]) / 2 - dock_x
+    if vx == 0 and vy == 0:
+        return None
+    if abs(vy) >= abs(vx):
+        return "north" if vy < 0 else "south"
+    return "west" if vx < 0 else "east"
+
+
+def resolve_exit_target(
+    *,
+    dock: tuple[float, float],
+    zone_min: tuple[float, float],
+    zone_max: tuple[float, float],
+    direction: str,
+    distance_mm: float,
+) -> tuple[int, int] | None:
+    """Build the waypoint from a direction and a clearance past the zone edge.
+
+    ``distance_mm`` is measured **past the boundary**, not from the dock: that is
+    the only number the safety rule actually constrains, so it is the one worth
+    storing. The dock-relative figure the household thinks in is derived for
+    display (``exit_distance_from_dock``).
+
+    Only the axis component varies. The cross-axis coordinate stays on the dock,
+    which is what "drive straight out" has always meant here.
+    """
+    axis = resolve_exit_direction(
+        dock=dock, zone_min=zone_min, zone_max=zone_max, requested=direction,
+    )
+    if axis is None:
+        return None
+    dock_x, dock_y = dock
+    if axis == "north":
+        return int(round(dock_x)), int(round(zone_min[1] - distance_mm))
+    if axis == "south":
+        return int(round(dock_x)), int(round(zone_max[1] + distance_mm))
+    if axis == "west":
+        return int(round(zone_min[0] - distance_mm)), int(round(dock_y))
+    return int(round(zone_max[0] + distance_mm)), int(round(dock_y))
+
+
+def exit_distance_from_dock(
+    *,
+    dock: tuple[float, float],
+    zone_min: tuple[float, float],
+    zone_max: tuple[float, float],
+    direction: str,
+    distance_mm: float,
+) -> float | None:
+    """Return how far the trip is measured from the dock, for display only.
+
+    ``distance_mm`` plus the dock-to-edge distance along the axis. ``None`` when
+    the direction cannot be resolved, so the form can say "unknown" instead of
+    showing a number computed from a guess.
+    """
+    axis = resolve_exit_direction(
+        dock=dock, zone_min=zone_min, zone_max=zone_max, requested=direction,
+    )
+    if axis is None:
+        return None
+    dock_x, dock_y = dock
+    if axis == "north":
+        to_edge = dock_y - zone_min[1]
+    elif axis == "south":
+        to_edge = zone_max[1] - dock_y
+    elif axis == "west":
+        to_edge = dock_x - zone_min[0]
+    else:
+        to_edge = zone_max[0] - dock_x
+    return float(to_edge) + float(distance_mm)
 
 
 def required_timing_fields(binding: Mapping[str, Any]) -> tuple[str, ...]:
@@ -231,13 +351,76 @@ def validate_binding(binding: Mapping[str, Any], *, supported: bool = True) -> d
     if not result.get("handover_confirmed", False):
         raise GarageConfigError("handover_required", "handover_confirmed")
     if result.get("controlled_exit_enabled", False):
-        # Enabling requires all three numbers stated by the operator. A default
-        # x paired with a custom y is a geometry nobody measured.
-        for key in CONTROLLED_EXIT_FIELDS:
-            if key not in result:
-                raise GarageConfigError("missing_controlled_exit_target", key)
-            _number(result, key, *NUMERIC_RANGES[key])
+        # Enabling requires every number stated by the operator. A default
+        # distance paired with a custom direction is a geometry nobody measured.
+        direction = result.get("controlled_exit_direction", "auto")
+        if direction not in EXIT_DIRECTIONS:
+            raise GarageConfigError(
+                "invalid_controlled_exit_direction", "controlled_exit_direction")
+        if "controlled_exit_distance_mm" not in result:
+            # Migration from a legacy coordinate waypoint needs the danger zone
+            # and the charger, which a pure validator does not have. It is
+            # performed at runtime instead (GarageRuntime._controlled_exit_settings),
+            # where those facts exist. A binding with only the new field is
+            # complete; one with neither is refused.
+            if not (_is_finite_number(result.get("controlled_exit_x"))
+                    and _is_finite_number(result.get("controlled_exit_y"))):
+                raise GarageConfigError(
+                    "missing_controlled_exit_target", "controlled_exit_distance_mm")
+        else:
+            _number(result, "controlled_exit_distance_mm",
+                    *NUMERIC_RANGES["controlled_exit_distance_mm"])
+        if "controlled_exit_timeout_seconds" not in result:
+            raise GarageConfigError("missing_controlled_exit_target",
+                                    "controlled_exit_timeout_seconds")
+        _number(result, "controlled_exit_timeout_seconds",
+                *NUMERIC_RANGES["controlled_exit_timeout_seconds"])
     return result
+
+
+def _is_finite_number(value: Any) -> bool:
+    """Return whether a value is a real, finite number (bools are not numbers)."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def legacy_exit_distance(
+    *,
+    waypoint: tuple[float, float],
+    dock: tuple[float, float],
+    zone_min: tuple[float, float],
+    zone_max: tuple[float, float],
+    direction: str = "auto",
+) -> tuple[int, float] | None:
+    """Convert a legacy coordinate waypoint into (distance past edge, lateral offset).
+
+    ``None`` when the direction cannot be resolved. Raises when the waypoint sits
+    inside the zone, because that waypoint could never have worked and silently
+    inventing a distance would hide it.
+
+    Returns the lateral offset too, so the caller can warn about what the new
+    model cannot express.
+    """
+    axis = resolve_exit_direction(
+        dock=dock, zone_min=zone_min, zone_max=zone_max, requested=direction)
+    if axis is None:
+        return None
+    x, y = waypoint
+    if axis == "north":
+        distance, lateral = zone_min[1] - y, abs(x - dock[0])
+    elif axis == "south":
+        distance, lateral = y - zone_max[1], abs(x - dock[0])
+    elif axis == "west":
+        distance, lateral = zone_min[0] - x, abs(y - dock[1])
+    else:
+        distance, lateral = x - zone_max[0], abs(y - dock[1])
+    if distance <= 0:
+        raise GarageConfigError(
+            "controlled_exit_target_inside_zone", "controlled_exit_distance_mm")
+    return int(round(distance)), float(lateral)
 
 
 def resolve_binding(options: Mapping[str, Any], duid: str) -> dict[str, Any] | None:

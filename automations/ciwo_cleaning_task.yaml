@@ -1,0 +1,36 @@
+# 次卧打扫任务 —— 手工粘进 automations.yaml 的副本。
+#
+# 与 automations.yaml 里已有的条目格式一致：单个对象（不是列表）。
+# 这条和「公区打扫任务」共用同一个蓝图 kaattz/扫地机分区定时清扫.yaml。
+#
+# 柜门不在这条自动化里处理：集成会在下发清扫命令前先受控出库
+# （开门 → goto 到安全点 → 关门），结束后再按位置决定何时开门/关门。
+#
+# id 不能改。它是 HA 的 unique_id，改了等于换一个自动化：历史断掉、
+# 实体注册表的身份丢失，分类绑定也会丢。
+#
+# 分类「扫地机」不在 YAML 里设置：把 categories: 写进 automations.yaml
+# 会让蓝图展开失败（自动化变 unavailable，没有 mode/current 属性），
+# 分类只能通过界面或 .storage/core.entity_registry 指定。
+id: '1794116696310'
+alias: 次卧打扫任务
+description: >-
+  每周一、三、五、日下午 15:00 清扫次卧，仅扫地。次卧有人时不扫，
+  等下一轮重试。与公区打扫任务共用一个蓝图，柜门由集成统一编排。
+use_blueprint:
+  path: kaattz/扫地机分区定时清扫.yaml
+  input:
+    vacuum_entity: vacuum.g20s_ultra
+    areas:
+    - ci_wo
+    cleaning_mode: 仅扫地
+    presence_sensors:
+    - binary_sensor.guest_bedroom_presense_sensor
+    my_trigger:
+    - trigger: time
+      at: '15:00:00'
+      weekday:
+      - mon
+      - wed
+      - fri
+      - sun

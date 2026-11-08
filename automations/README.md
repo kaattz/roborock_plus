@@ -31,6 +31,7 @@ App、厂商定时和机器人实体按键的动作不经过 HA，不能依靠�
 | `vacuum_garage_door_auto_unlock.yaml` | `1788771256556` | `automation.vacuum_garage_door_auto_unlock` |
 | `garage_door_sync_folding_door.yaml` | `1746705574425` | `automation.garage_door_sync_folding_door` |
 | `roborock_garage_issue_notify.yaml` | `1791600000001` | `automation.roborock_garage_issue_notify` |
+| `ciwo_cleaning_task.yaml` | `1794116696310` | `automation.ci_wo_da_sao_ren_wu` |
 
 **`garage_door_sync_folding_door.yaml` 不是新文件，是从 HA 回写的现有自动化。**
 折叠门打开时，它请集成把车库门开到可通行位。曾经直接发 `cover.open_cover`，

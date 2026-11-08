@@ -23,7 +23,15 @@ from types import SimpleNamespace
 from typing import Any, NamedTuple
 
 from .garage_commands import SAFE_DIRECT_COMMANDS
-from .garage_config import resolve_binding, validate_binding_ownership
+from .garage_config import (
+    CONTROLLED_EXIT_LATERAL_WARN_MM,
+    GarageConfigError,
+    legacy_exit_distance,
+    resolve_binding,
+    resolve_exit_direction,
+    resolve_exit_target,
+    validate_binding_ownership,
+)
 from .garage_door import GarageControlError, GarageController
 from .v1_task_state import is_v1_task_active
 
@@ -46,7 +54,16 @@ _DIRECT_COMMANDS = SAFE_DIRECT_COMMANDS
 
 
 class RobotObservation(NamedTuple):
-    """One coherent robot reading. Physical facts only; no task identity."""
+    """One coherent robot reading. Physical facts only; no task identity.
+
+    ``x``/``y`` are the map coordinates the safety decisions are based on, and are
+    present only when ``position_trusted`` is true. They are here because a caller
+    asked for them and the field was missing: ``_run_controlled_exit`` read
+    ``getattr(robot, 'position', None)``, which is always ``None`` on a NamedTuple
+    without that name, so its arrival test could never be satisfied and every
+    controlled exit died on its deadline. A missing coordinate must be an
+    explicit ``None``, never an absent attribute.
+    """
 
     now: float
     utc: float
@@ -62,6 +79,8 @@ class RobotObservation(NamedTuple):
     outside_danger_zone: bool | None = None
     position_sample_id: Any = None
     task_active: bool | None = None
+    x: float | None = None
+    y: float | None = None
 
 
 def _name(value: Any) -> str:
@@ -107,6 +126,9 @@ class GarageRuntime:
         self._closed = False
         self._last_issue: str | None = None
         self.stage_result: str | None = None
+        #: How far the robot stopped from the last exit waypoint, in mm. ``None``
+        #: when no exit has run or the position could not be trusted.
+        self.exit_arrival_offset_mm: float | None = None
         self.stage_reason: str | None = None
         self.controller = GarageController(
             binding=self.binding,
@@ -158,6 +180,10 @@ class GarageRuntime:
         charger marker must itself lie inside the zone for a docked robot's
         substituted position to count, so a parked robot can never be mistaken
         for a departed one.
+
+        The resolved coordinate is carried through as well. It is the same number
+        ``outside_danger_zone`` was derived from, so handing it to callers costs
+        nothing and stops them reading for a field this record does not define.
         """
         c = self.coordinator
         data = getattr(c, 'data', None)
@@ -172,6 +198,8 @@ class GarageRuntime:
         trusted = False
         outside: bool | None = None
         position_sample: float | None = None
+        position_x: float | None = None
+        position_y: float | None = None
         map_stamp = getattr(c, 'last_map_position_update', None)
         if isinstance(map_stamp, datetime) and map_stamp.utcoffset() is not None:
             candidate = map_stamp.timestamp()
@@ -195,11 +223,14 @@ class GarageRuntime:
                            and zone.min_y <= charger.y <= zone.max_y)
             if state in ('charging', 'charging_complete'):
                 trusted = trusted and math.hypot(resolved.x - charger.x, resolved.y - charger.y) <= 1000
+            if trusted:
+                position_x, position_y = resolved.x, resolved.y
             if trusted and fresh and position_sample is not None:
                 outside = not (zone.min_x <= resolved.x <= zone.max_x
                                and zone.min_y <= resolved.y <= zone.max_y)
         except (AttributeError, TypeError, ValueError, OverflowError):
             trusted = False
+            position_x = position_y = None
         return RobotObservation(
             now=self.clock(), utc=self.utc(), state=state,
             in_cleaning=sample.get('in_cleaning'), in_returning=sample.get('in_returning'),
@@ -212,6 +243,7 @@ class GarageRuntime:
                 in_cleaning=sample.get('in_cleaning'),
                 in_returning=sample.get('in_returning'),
             ),
+            x=position_x, y=position_y,
         )
 
     def close_allowed(self) -> bool:
@@ -291,6 +323,11 @@ class GarageRuntime:
         if self.controller.task_in_progress:
             # A sequence owns the phase; it is authoritative about its own progress.
             return
+        if self.controller.return_in_progress and not self.controller.return_completed:
+            # A return is under way. Reporting 'idle' because the door happens to be
+            # shut erases the fact that the robot is still outside waiting to come in,
+            # and the phase is what the departure rule and the household read.
+            return
         if self.controller.closed_confirmed():
             self.controller.phase = 'idle'
         elif self.controller.open_confirmed():
@@ -315,7 +352,20 @@ class GarageRuntime:
         self.publish()
 
     def shutdown(self) -> None:
-        """Stop following any clean in progress. Commands nothing."""
+        """Stop following any clean in progress, and give the door back.
+
+        Releasing ownership is not tidiness. `async_setup_garages` refuses a cover
+        that is already in `owners` with `duplicate_binding`, and that map is
+        process-wide while a reload builds a brand-new runtime. Leaving the entry
+        behind meant any reload -- including a plain `automation.reload`, which
+        restarts the whole config entry -- permanently disabled the garage until
+        Home Assistant itself restarted: the runtime was never attached, so every
+        clean command was refused with `session_recovery_required` and the robot
+        only beeped.
+
+        Only the entry that is still *this* runtime is removed. A late second call
+        to `shutdown()` must not evict the runtime that replaced us.
+        """
         self._closed = True
         if self._sequence_task is not None:
             self._sequence_task.cancel()
@@ -324,6 +374,11 @@ class GarageRuntime:
             unsubscribe()
         self._unsubscribers.clear()
         self._listeners.clear()
+        owners = getattr(self.hass, 'data', {}).get(REGISTRY_KEY)
+        if isinstance(owners, dict):
+            cover = self.binding.get('cover_entity_id')
+            if cover is not None and owners.get(cover) is self:
+                del owners[cover]
 
     # -- the sequence --------------------------------------------------------
 
@@ -381,13 +436,25 @@ class GarageRuntime:
         if self._closed:
             raise GarageControlError('control_unloaded')
 
+        if name == 'app_charge':
+            return await self._send_charge(command, send)
+
         if name not in _NEW_TASK_COMMANDS and name not in _RESUME_COMMANDS:
-            # app_charge and anything else that is not a clean: no sequence to run.
+            # Anything else that is not a clean: no sequence to run.
             return await send()
 
+        exited = False
         if name in _CONTROLLED_EXIT_COMMANDS and self._should_controlled_exit(name):
             await self._run_controlled_exit()
-        await self.controller.open_door()
+            # The exit already opened the door, confirmed it, drove the robot out
+            # and shut it again. Calling `open_door()` next would reopen the door
+            # the trip just closed -- measured against the old entry point, where
+            # `cover.open_cover` was issued twice and the clean then started with
+            # the door open. The robot is past the door now, so it does not need
+            # passage; the spec's REQ-39 says exactly this.
+            exited = True
+        if not exited:
+            await self.controller.open_door()
         self.publish()
         try:
             result = await send()
@@ -402,6 +469,63 @@ class GarageRuntime:
         # clean can run for hours. The sequence continues as one owned task.
         self._sequence_task = asyncio.create_task(self._finish_sequence())
         return result
+
+    async def _send_charge(self, command: Any, send: Callable) -> Any:
+        """Send the robot home with the door already open.
+
+        `app_charge` used to be forwarded untouched. That is right when the robot
+        is on its dock or already inside, and wrong in exactly one case: a clean is
+        running, the robot is beyond the door, and the door has been shut behind it
+        by the departure rule. The household presses "return to base" in Home
+        Assistant, the robot drives at a closed door.
+
+        So when the robot is working and away from the dock, nothing is sent until
+        the door is confirmed open. Pausing first is not about the door: a robot
+        already driving home may be metres away and turn back, so it is stopped
+        before anything else changes, then released once the way is clear.
+
+        Everything else falls through untouched -- a docked robot, an idle robot,
+        a cancelled sequence. Sending the command late would be a different bug
+        from sending it with the door shut.
+        """
+        self.controller.refresh()
+        if not self._needs_passage_for_charge():
+            return await send()
+
+        _LOGGER.info(
+            'Garage: sending %s home from outside; pausing, opening, then releasing',
+            self.coordinator.duid)
+        try:
+            await self._pause_robot()
+            self.controller.refresh()
+            if self.controller.robot_state() != 'paused':
+                # Could not stop it. Opening the door is still the safe move: an
+                # open door cannot be driven into.
+                _LOGGER.warning(
+                    'Garage: could not pause %s before sending it home',
+                    self.coordinator.duid)
+            await self.controller.open_door()
+            self.publish()
+            result = await send()
+        except GarageControlError:
+            self.publish()
+            raise
+        self.publish()
+        return result
+
+    def _needs_passage_for_charge(self) -> bool:
+        """Whether the robot has to come in through the door to reach its dock.
+
+        True when the robot is running a task and is not already on the dock. A
+        robot inside the cabinet needs no passage; one outside does, whether the
+        door is open now or was shut moments ago.
+        """
+        if self.controller.robot_docked():
+            return False
+        if not self.controller.task_running():
+            return False
+        # Outside means the door is between it and the dock.
+        return self.controller.robot_outside()
 
     #: How long a clean gets to prove it started before the sequence gives up on it.
     #: Long enough for a command to reach the robot and for the robot to leave its dock;
@@ -482,10 +606,93 @@ class GarageRuntime:
                 return False
             await self._sequence_sleep(1.0)
 
+    def _exit_geometry(self) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]] | None:
+        """Return (dock, zone_min, zone_max), or None when either is unreadable."""
+        zone = self._zone_provider()
+        if zone is None:
+            return None
+        try:
+            map_data = self.coordinator.properties_api.map_content.map_data
+            charger = getattr(map_data, 'charger', None)
+        except (AttributeError, TypeError):
+            return None
+        if charger is None:
+            return None
+        dock_x, dock_y = getattr(charger, 'x', None), getattr(charger, 'y', None)
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                   for v in (dock_x, dock_y)):
+            return None
+        return (
+            (float(dock_x), float(dock_y)),
+            (float(zone.min_x), float(zone.min_y)),
+            (float(zone.max_x), float(zone.max_y)),
+        )
+
+    def _controlled_exit_distance(self) -> int | None:
+        """Return the distance to drive past the zone edge.
+
+        A binding saved before 0.12.0 stores a coordinate waypoint instead. It is
+        converted here rather than at validation time because the conversion needs
+        the danger zone and the charger, and the validator is a pure function. The
+        legacy coordinates are never read for anything else.
+
+        Returns None when the binding carries neither a distance nor a convertible
+        waypoint, or when the geometry needed to convert is unavailable.
+        """
+        if 'controlled_exit_distance_mm' in self.binding:
+            return int(self.binding['controlled_exit_distance_mm'])
+        geometry = self._exit_geometry()
+        if geometry is None:
+            return None
+        raw_x = self.binding.get('controlled_exit_x')
+        raw_y = self.binding.get('controlled_exit_y')
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                   for v in (raw_x, raw_y)):
+            return None
+        try:
+            converted = legacy_exit_distance(
+                waypoint=(float(raw_x), float(raw_y)), dock=geometry[0],
+                zone_min=geometry[1], zone_max=geometry[2],
+                direction=self.binding.get('controlled_exit_direction', 'auto'),
+            )
+        except GarageConfigError as err:
+            _LOGGER.warning(
+                'Garage exit waypoint for %s cannot be converted: %s',
+                self.coordinator.duid, err.reason)
+            return None
+        if converted is None:
+            return None
+        distance, lateral = converted
+        if lateral > CONTROLLED_EXIT_LATERAL_WARN_MM:
+            _LOGGER.warning(
+                'Garage exit waypoint for %s sits %.0f mm off the exit axis; the '
+                'lateral component cannot be represented and is dropped',
+                self.coordinator.duid, lateral)
+        return distance
+
     def _controlled_exit_settings(self) -> dict[str, Any]:
+        """Resolve the waypoint from direction and distance.
+
+        Raises when it cannot be resolved: driving to an invented point is worse
+        than not driving at all, and a clean must not start with the door shut
+        because the exit silently did nothing.
+        """
+        distance = self._controlled_exit_distance()
+        geometry = self._exit_geometry()
+        if distance is None or geometry is None:
+            raise GarageControlError('exit_target_unavailable')
+        target = resolve_exit_target(
+            dock=geometry[0], zone_min=geometry[1], zone_max=geometry[2],
+            direction=self.binding.get('controlled_exit_direction', 'auto'),
+            distance_mm=distance,
+        )
+        if target is None:
+            raise GarageControlError('exit_target_unavailable')
         return {
-            'x': int(self.binding['controlled_exit_x']),
-            'y': int(self.binding['controlled_exit_y']),
+            'x': target[0],
+            'y': target[1],
+            'direction': self.binding.get('controlled_exit_direction', 'auto'),
+            'distance_mm': distance,
             'timeout': float(self.binding['controlled_exit_timeout_seconds']),
         }
 
@@ -510,6 +717,15 @@ class GarageRuntime:
 
         Failure is terminal for this attempt: a clean must not start inside the
         cabinet with the door shut.
+
+        Every exit ends with the controller in a state somebody can reason about.
+        That is not decoration: on 2026-11-08 the arrival check could not succeed,
+        the deadline raised, and nothing else ran -- the sequence flag still said a
+        clean owned the door, the phase still said ``controlled_exit``,
+        ``last_error`` was empty so ``garage_problem`` read "off", and no event was
+        fired. The door stayed open for hours with no alarm. So the countdown is
+        wrapped: on the way out the door is put in the safest state its evidence
+        supports, and the failure is always announced.
         """
         settings = self._controlled_exit_settings()
         target = (settings['x'], settings['y'])
@@ -517,21 +733,122 @@ class GarageRuntime:
         await self.controller.open_door()
         self.controller.phase = 'controlled_exit'
         self.publish()
-        await self.async_control_command('app_goto_target', list(target))
-        deadline = self.clock() + settings['timeout']
-        while True:
-            self.controller.refresh()
-            position = getattr(self.controller.robot, 'position', None)
-            x = getattr(position, 'x', None)
-            y = getattr(position, 'y', None)
-            if x is not None and y is not None and math.hypot(x - target[0], y - target[1]) <= 400:
-                break
-            if self.clock() >= deadline:
-                raise GarageControlError('controlled_exit_failed')
-            await asyncio.sleep(0.2)
+        try:
+            await self.async_control_command('app_goto_target', list(target))
+            await self._await_controlled_exit_arrival(target, settings['timeout'])
+        except BaseException as err:  # noqa: BLE001 - every exit path must settle
+            await self._abandon_controlled_exit(err)
+            raise
         await self.controller.close_door()
         self.controller.phase = 'closed_outside'
         self.publish()
+
+    #: Distinct status samples that must agree before the door may move.
+    #:
+    #: Counted by sample identity, not by loop iteration and not by elapsed time.
+    #: ``refresh()`` re-reads the last *cached* sample, and this loop wakes several
+    #: times per poll, so an iteration counter would count one reading several
+    #: times. A wall-clock settle has the same hole whenever the loop runs faster
+    #: than the poll -- which it does. Two *different* polls is the claim worth
+    #: making: the robot said "arrived" twice.
+    CONTROLLED_EXIT_SETTLE_SAMPLES = 2
+
+    async def _await_controlled_exit_arrival(
+        self, target: tuple[float, float], timeout: float,
+    ) -> None:
+        """Wait until the trip is over and the robot is clear of the zone.
+
+        The distance the operator configured is honoured by the robot's own
+        ``app_goto_target``; this loop only decides when to stop waiting and lets
+        the caller report where the robot actually ended up. Waiting for the
+        coordinate to fall inside a tolerance instead would make a short distance
+        meaningless: a 100mm waypoint with a 200mm tolerance counted as arrived the
+        moment the robot cleared the zone edge.
+        """
+        deadline = self.clock() + float(timeout)
+        agreeing: set[Any] = set()
+        while True:
+            self.controller.refresh()
+            if self.controller.controlled_exit_arrived(target):
+                agreeing.add(self.controller.robot.sample_id)
+                if len(agreeing) >= self.CONTROLLED_EXIT_SETTLE_SAMPLES:
+                    self._report_arrival_offset(target)
+                    return
+            else:
+                agreeing.clear()
+            if self.clock() >= deadline:
+                raise GarageControlError('controlled_exit_failed')
+            await asyncio.sleep(0.2)
+
+    def _report_arrival_offset(self, target: tuple[float, float]) -> None:
+        """Record how far the robot stopped from the waypoint it was given.
+
+        Not a failure: the trip ended and the robot is outside, so the door can
+        move. But if it stopped well short -- blocked, or the waypoint was
+        unreachable -- saying nothing would let the household believe the
+        configured distance was honoured.
+        """
+        from .garage_config import CONTROLLED_EXIT_TOLERANCE_MM
+
+        offset = self.controller.controlled_exit_arrival_offset(target)
+        self.exit_arrival_offset_mm = None if offset is None else round(offset, 1)
+        if offset is None:
+            _LOGGER.info(
+                'Garage exit for %s finished; position unavailable, so the '
+                'waypoint could not be verified', self.coordinator.duid)
+            return
+        if offset > CONTROLLED_EXIT_TOLERANCE_MM:
+            _LOGGER.warning(
+                'Garage exit for %s finished %.0f mm from the waypoint (tolerance '
+                '%.0f mm); the door is still safe to close because the robot is '
+                'confirmed outside the danger zone',
+                self.coordinator.duid, offset, CONTROLLED_EXIT_TOLERANCE_MM)
+
+    async def _abandon_controlled_exit(self, err: BaseException) -> None:
+        """Leave a failed exit in a state the household can see and act on.
+
+        The door goes shut only when the robot is *confirmed* outside and not on
+        its dock: then the trip it was opened for is over, and an open door has
+        no purpose. When that cannot be shown, the door is left as it is -- open
+        is untidy, closing on a robot that may still be in the doorway is damage.
+        Either way the flag that made this sequence the door's owner is cleared,
+        so a later clean is not refused by work that no longer exists.
+        """
+        reason = getattr(err, 'reason', None) or 'controlled_exit_failed'
+        if not isinstance(err, GarageControlError):
+            _LOGGER.exception('Garage controlled exit for %s failed', self.coordinator.duid)
+        else:
+            _LOGGER.warning(
+                'Garage controlled exit for %s stopped: %s (state=%s, outside=%s)',
+                self.coordinator.duid, reason, self.controller.robot_state(),
+                getattr(self.controller.robot, 'outside_danger_zone', None),
+            )
+        # The reported failure stays the exit's own, even when the tidy-up below
+        # succeeds: `close_door` clears `last_error` on success, which would hide
+        # the reason this sequence died and leave `garage_problem` reading "off".
+        reported = reason
+        try:
+            if self.controller.robot_outside():
+                await self.controller.close_door()
+        except GarageControlError as close_err:
+            _LOGGER.warning(
+                'Garage controlled exit for %s could not close the door: %s',
+                self.coordinator.duid, close_err.reason,
+            )
+            reported = close_err.reason
+        finally:
+            # The flag says "a sequence owns this door". This sequence is over, so
+            # leaving it set would make every later clean look like a second one.
+            self.controller.task_in_progress = False
+            self.controller.last_error = reported
+            # Report where the door actually is rather than inventing a stuck
+            # phase: the fault is carried by `last_error` / `garage_problem`, and
+            # `blocked` is reserved for "the door cannot be read", which is a
+            # different problem with a different remedy.
+            self._sync_phase_with_door()
+            self.notify(reported)
+            self.publish()
+
 
     # -- explicit entries ----------------------------------------------------
 
@@ -648,6 +965,45 @@ class GarageRuntime:
 
     def stage_attributes(self) -> dict[str, Any]:
         return {'stage_result': self.stage_result, 'stage_reason': self.stage_reason}
+
+    def exit_target_attributes(self) -> dict[str, Any]:
+        """Expose the resolved waypoint so a surprise trip can be explained.
+
+        The waypoint is now derived rather than stored, so "where will it go?"
+        cannot be answered by reading the config. These four values answer it
+        without guessing, and the legacy pair stays visible for a binding that was
+        migrated: it is what the old behaviour was, and is no longer read.
+        """
+        if not self.binding.get('controlled_exit_enabled'):
+            return {}
+        attributes: dict[str, Any] = {}
+        geometry = self._exit_geometry()
+        requested = self.binding.get('controlled_exit_direction', 'auto')
+        if geometry is not None:
+            axis = resolve_exit_direction(
+                dock=geometry[0], zone_min=geometry[1], zone_max=geometry[2],
+                requested=requested,
+            )
+            attributes['controlled_exit_direction'] = axis or requested
+        else:
+            attributes['controlled_exit_direction'] = requested
+        try:
+            settings = self._controlled_exit_settings()
+        except GarageControlError as err:
+            attributes['controlled_exit_target_unavailable'] = err.reason
+        else:
+            attributes['controlled_exit_distance_mm'] = settings['distance_mm']
+            attributes['controlled_exit_target'] = [settings['x'], settings['y']]
+        if self.exit_arrival_offset_mm is not None:
+            attributes['controlled_exit_arrival_offset_mm'] = self.exit_arrival_offset_mm
+        legacy = {
+            key: self.binding[key]
+            for key in ('controlled_exit_x', 'controlled_exit_y')
+            if key in self.binding
+        }
+        if legacy:
+            attributes['controlled_exit_legacy_xy'] = legacy
+        return attributes
 
     # -- events and listeners ------------------------------------------------
 

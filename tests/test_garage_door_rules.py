@@ -66,6 +66,18 @@ class Rig:
         return {'ok': True}
 
     def build(self):
+        # A clock that advances on every read. A frozen clock would make the
+        # pause-confirmation loop spin forever, which is a property of the test
+        # double rather than of the code under test.
+        ticks = {'n': 0}
+
+        def clock():
+            ticks['n'] += 1
+            return float(ticks['n']) * 0.5
+
+        async def instant(_delay):
+            return None
+
         return GarageController(
             binding={
                 'open_source': self.open_source,
@@ -83,7 +95,8 @@ class Rig:
             robot_observation=self.robot,
             move_door=self.move,
             close_allowed=lambda: self.permit_close,
-            clock=lambda: 0.0,
+            clock=clock,
+            sleep=instant,
         )
 
 
@@ -239,7 +252,17 @@ def test_returning_pauses_before_opening_and_resumes_only_after():
 
 
 def test_resuming_without_an_observed_pause_is_refused():
-    """Resuming on an unconfirmed pause would drive the robot at a moving door."""
+    """An unconfirmed pause leaves everything where it is.
+
+    No door movement and no resume. The robot may still be driving, so a resume
+    would send it at a door that never opened -- the collision the pause exists to
+    prevent. It waits for a human instead.
+
+    Measured 2026-11-08 15:19:49: the pause command went out and the robot really
+    stopped, but the sample in hand was the one taken before it. Reading that once
+    and giving up is why the wait in `_confirm_pause` exists; this test pins what
+    happens when the wait also times out.
+    """
     rig = Rig(opened=False)
     controller = rig.build()
     rig.state, rig.docked = 'returning_home', False
@@ -254,8 +277,9 @@ def test_resuming_without_an_observed_pause_is_refused():
     with pytest.raises(GarageControlError) as err:
         asyncio.run(controller.update_returning(pause=pause, resume=resume))
     assert err.value.reason == 'pause_not_observed'
-    assert order == ['pause'], 'must not resume'
     assert rig.calls == [], 'must not open before the pause is real'
+    assert order == ['pause'], (
+        'must not resume: the robot may still be moving and the door never opened')
 
 
 def test_an_already_open_door_needs_no_pause_on_return():

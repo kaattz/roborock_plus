@@ -1363,9 +1363,9 @@
           "allow_estimated": "Accept estimated door endpoints",
           "handover_confirmed": "Confirm control handover",
           "controlled_exit_enabled": "Controlled exit before cleaning",
-          "controlled_exit_x": "Exit waypoint X",
-          "controlled_exit_y": "Exit waypoint Y",
-          "controlled_exit_timeout_seconds": "Exit waypoint timeout"
+          "controlled_exit_timeout_seconds": "Exit waypoint timeout",
+          "controlled_exit_direction": "Exit direction",
+          "controlled_exit_distance_mm": "Exit distance past the danger-zone edge"
         },
         "data_description": {
           "open_travel_seconds": "Enter the measured full travel time in seconds (1–600). A timed or estimated source waits the full journey; there is no universal default.",
@@ -1378,9 +1378,12 @@
           "allow_estimated": "Timing cannot detect a jam, motor slip, or obstruction. Accept explicitly to use timed or estimated position evidence; estimates never become confirmed endpoints.",
           "handover_confirmed": "I calibrated endpoints/timing, checked that no task needs resuming and that the robot is safely docked, disabled old active door-control automations, and routed automatic closing through request_garage_close. Other robots sharing the legacy guard must be handled first.",
           "controlled_exit_enabled": "Drive the robot straight out of the cabinet to a waypoint and shut the door before any clean command. Leave off unless the robot grazes a door on its way out.",
-          "controlled_exit_x": "Map coordinate in millimetres. The default is this household's measured geometry; enabling requires all three values.",
-          "controlled_exit_y": "Map coordinate in millimetres.",
-          "controlled_exit_timeout_seconds": "How long to wait for the waypoint before giving up. Reaching it is judged by position, not by this timeout."
+          "controlled_exit_timeout_seconds": "How long to wait for the waypoint before giving up. Reaching it is judged by position, not by this timeout.",
+          "controlled_exit_direction": "Which way the robot leaves the cabinet. \"Auto\" uses the direction from the charger toward the centre of the danger zone; pick an axis by hand if that answer looks wrong.",
+          "controlled_exit_distance_mm": "How far past the danger-zone edge the robot should stop, in millimetres. Displayed as \"how far forward from the dock\" below. Too short and the robot never leaves the zone."
+        },
+        "description_placeholders": {
+          "exit_from_dock": "Distance from the dock"
         }
       }
     },
@@ -1448,6 +1451,15 @@
       "options": {
         "measured": "Measured physical feedback",
         "estimated": "Estimate or target echo"
+      }
+    },
+    "garage_exit_direction": {
+      "options": {
+        "auto": "Auto (uses the danger-zone centre)",
+        "north": "North (-Y)",
+        "south": "South (+Y)",
+        "west": "West (-X)",
+        "east": "East (+X)"
       }
     }
   },

@@ -25,11 +25,8 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-AUTOMATIONS = ROOT / "automations"
 BLUEPRINTS = ROOT / "blueprints"
 
-STUCK = AUTOMATIONS / "roborock_stuck_or_error_stop.yaml"
-NOT_STARTED = AUTOMATIONS / "roborock_clean_command_not_started.yaml"
 
 
 def _blueprint_path() -> Path:
@@ -65,35 +62,6 @@ def _config(path: Path) -> dict:
     return yaml.safe_load(_text(path))
 
 
-class TestStuckAutomationUsesTheIntegrationEvent:
-    def test_it_triggers_on_the_integration_event(self) -> None:
-        config = _config(STUCK)
-        event_types = [
-            t.get("event_type") for t in config["triggers"] if t.get("trigger") == "event"
-        ]
-        assert "roborock_plus_vacuum_stuck" in event_types
-
-    def test_it_stops_the_vacuum(self) -> None:
-        assert "vacuum.stop" in _text(STUCK)
-
-    def test_it_does_not_close_the_door(self) -> None:
-        """The robot may be stuck in the doorway; closing could trap it."""
-        assert "cover.close_cover" not in _text(STUCK)
-
-
-class TestNotStartedAutomationUsesTheIntegrationEvent:
-    def test_it_triggers_on_the_integration_event(self) -> None:
-        config = _config(NOT_STARTED)
-        event_types = [
-            t.get("event_type") for t in config["triggers"] if t.get("trigger") == "event"
-        ]
-        assert "roborock_plus_clean_command_not_started" in event_types
-
-    def test_it_does_not_close_the_door(self) -> None:
-        """A failed command does not prove the robot stayed put."""
-        assert "cover.close_cover" not in _text(NOT_STARTED)
-
-
 class TestBlueprintUsesTheIntegration:
     """The blueprint starts a clean; the integration opens the door for it."""
 
@@ -118,48 +86,43 @@ class TestBlueprintUsesTheIntegration:
 
 
 class TestDocumentedLinksExist:
-    """The README names these; something shipped must actually provide them.
+    """The README names these; the integration must actually provide them.
 
-    Until 2026-11-08 the corpus included the hand-pasted garage-door state
-    machine, which is where `resume_task`, `task_active` and `outside_danger_zone`
-    were used. That automation was retired (the built-in door control does the
-    job), so those three are now checked against the integration itself rather
-    than against a YAML nobody installs.
+    Until 2026-11-08 this also checked a set of automations kept in `automations/`.
+    That directory is household configuration and is no longer published, so what
+    remains are the checks about the integration itself.
     """
 
     COMPONENT = ROOT / "custom_components" / "roborock_plus"
 
-    @pytest.mark.parametrize(
-        "needle",
-        [
-            "resume_task",
-            "task_active",
-            "outside_danger_zone",
-        ],
-    )
-    def test_integration_provides_it(self, needle: str) -> None:
-        corpus = "".join(
+    @property
+    def corpus(self) -> str:
+        return "".join(
             path.read_text(encoding="utf-8") for path in self.COMPONENT.glob("*.py")
         )
-        assert needle in corpus, (
+
+    @pytest.mark.parametrize(
+        "needle", ["resume_task", "task_active", "outside_danger_zone"]
+    )
+    def test_the_service_and_entities_exist(self, needle: str) -> None:
+        assert needle in self.corpus, (
             f"{needle!r} is documented as part of the system but the integration "
             "does not mention it"
         )
 
     @pytest.mark.parametrize(
-        "needle",
+        "constant",
         [
-            "roborock_plus_vacuum_stuck",
-            "roborock_plus_clean_command_not_started",
-            "vacuum.clean_area",
+            # The event names are built as f"{DOMAIN}_x", so the finished strings
+            # never appear in the source; the constants that build them do.
+            "EVENT_VACUUM_STUCK",
+            "EVENT_CLEAN_COMMAND_NOT_STARTED",
         ],
     )
-    def test_shipped_automation_or_blueprint_uses_it(self, needle: str) -> None:
-        corpus = "".join(_text(path) for path in (STUCK, NOT_STARTED, BLUEPRINT))
-        assert needle in corpus, (
-            f"{needle!r} is documented as part of the system but appears in "
-            "none of the shipped automations or the blueprint"
-        )
+    def test_the_events_can_still_be_emitted(self, constant: str) -> None:
+        assert constant in self.corpus, (
+            f"the integration no longer defines {constant}, so the event it names "
+            "can never be emitted and any automation listening for it is dead")
 
 
 class TestReadmeDescribesTheSystem:
@@ -193,39 +156,3 @@ class TestReadmeDescribesTheSystem:
         """The 'why must these work together' section is the point of the doc."""
         readme = _text(ROOT / "README.md")
         assert "这套东西怎么配合" in readme
-
-
-class TestAutomationsReadmeIsAccurate:
-    def test_it_states_they_are_managed_by_hand(self) -> None:
-        text = _text(AUTOMATIONS / "README.md")
-        assert "人工" in text
-
-    def test_it_records_every_unique_id(self) -> None:
-        """Every automation in the directory must appear in the README table.
-
-        Derived from the files rather than hardcoded: the README is the paste
-        instruction the whole deployment depends on, and a new automation it does
-        not mention is one nobody will deploy.
-        """
-        text = _text(AUTOMATIONS / "README.md")
-        files = sorted(AUTOMATIONS.glob("*.yaml"))
-        assert files, "expected automations in the directory"
-
-        missing = []
-        for path in files:
-            config = _config(path)
-            unique_id = str(config.get("id", ""))
-            if not unique_id or unique_id not in text:
-                missing.append(f"{path.name} (id {unique_id or 'missing'})")
-        assert not missing, (
-            "these automations exist but their unique_id is not in the README, so "
-            "the paste instructions do not cover them: " + ", ".join(missing)
-        )
-
-    def test_it_documents_the_blueprint_url(self) -> None:
-        text = _text(AUTOMATIONS / "README.md")
-        # The URL may be percent-encoded or plain; accept either.
-        assert "raw.githubusercontent.com/kaattz/roborock_plus/main/blueprints/" in text
-        assert (
-            "%E6%89%AB%E5%9C%B0%E6%9C%BA" in text or BLUEPRINT.name in text
-        ), "the blueprint import URL is not documented"

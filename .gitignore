@@ -71,3 +71,12 @@ desktop.ini
 AGENTS.md
 lessons.md
 specs/
+
+# Automations that talk to this deployment's own entities.
+#
+# `automations/` holds the copies that get pasted into Home Assistant by hand:
+# the three area cleaning tasks, the two alert automations, the garage-door
+# helpers. They name local entities (`vacuum.g20s_ultra`, `cover.vacuum_garage_door`,
+# `sensor.sao_di_ji_v2_5`) and are part of this household's configuration rather
+# than of the integration. Kept locally, not published.
+automations/

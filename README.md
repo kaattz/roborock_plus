@@ -404,8 +404,8 @@ GitHub 账号（`kaattz`）。这个名字不影响使用，蓝图按文件名�
   use_blueprint:
     path: kaattz/扫地机分区定时清扫.yaml
     input:
-      vacuum_entity: vacuum.g20s_ultra
-      areas: [zhu_wo]
+      vacuum_entity: vacuum.your_robot
+      areas: [master_bedroom]
       cleaning_mode: 仅扫地
       presence_sensors: []
       door_sensors: [binary_sensor.master_bedroom_door]
@@ -415,8 +415,6 @@ GitHub 账号（`kaattz`）。这个名字不影响使用，蓝图按文件名�
         at: '10:00:00'
         weekday: [tue, thu, sat]
 ```
-
-更多见 `automations/` 目录。
 
 #### 通知脚本接口
 

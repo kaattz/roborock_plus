@@ -236,6 +236,87 @@ def test_a_normal_finish_is_not_followed_by_a_never_ran_notice() -> None:
     )
 
 
+async def _replay_twice() -> tuple[list[dict], list[dict]]:
+    """Run the same Script object twice: a finished clean, then one that never starts."""
+    original = _ScriptRun._async_futures_with_timeout
+
+    def capped(run, timeout):
+        return original(run, min(timeout, 2.0))
+
+    _ScriptRun._async_futures_with_timeout = capped
+    try:
+        with TemporaryDirectory() as directory:
+            hass = HomeAssistant(directory)
+            alerts: list[dict] = []
+            behaviour = {"start": True}
+
+            hass.states.async_set("vacuum.memory_robot", "docked")
+            hass.states.async_set("binary_sensor.memory_task_active", "off")
+            hass.states.async_set(
+                "select.memory_intensity",
+                "medium",
+                {"options": ["off", "medium", "extreme"]},
+            )
+
+            async def setting(call) -> None:
+                return None
+
+            async def clean(call) -> None:
+                if not behaviour["start"]:
+                    return
+
+                async def run_clean() -> None:
+                    hass.states.async_set("binary_sensor.memory_task_active", "on")
+                    hass.states.async_set("vacuum.memory_robot", "cleaning")
+                    await asyncio.sleep(0.5)
+                    hass.states.async_set("vacuum.memory_robot", "docked")
+                    hass.states.async_set("binary_sensor.memory_task_active", "off")
+
+                hass.async_create_task(run_clean())
+
+            async def alert(call) -> None:
+                alerts.append(dict(call.data))
+
+            hass.services.async_register("select", "select_option", setting)
+            hass.services.async_register("vacuum", "set_fan_speed", setting)
+            hass.services.async_register("vacuum", "clean_area", clean)
+            hass.services.async_register("script", "memory_alert", alert)
+
+            config = yaml.load(
+                _blueprint_path().read_text(encoding="utf-8"),
+                Loader=_loader_for(0),
+            )
+            sequence = await async_validate_actions_config(
+                hass, cv.SCRIPT_SCHEMA(config["actions"])
+            )
+            script = Script(
+                hass,
+                sequence,
+                "reuse",
+                "automation",
+                variables=ScriptVariables(cv.template_complex(config["variables"])),
+                log_exceptions=False,
+            )
+            run_vars = {
+                "device_entities_list": [],
+                "task_active_entity": "binary_sensor.memory_task_active",
+                "mop_intensity_entity": "select.memory_intensity",
+                "mop_route_entity": "",
+            }
+
+            await asyncio.wait_for(script.async_run(run_vars, context=Context()), timeout=30)
+            await hass.async_block_till_done()
+            first = list(alerts)
+
+            alerts.clear()
+            behaviour["start"] = False
+            await asyncio.wait_for(script.async_run(run_vars, context=Context()), timeout=30)
+            await hass.async_block_till_done()
+            return first, list(alerts)
+    finally:
+        _ScriptRun._async_futures_with_timeout = original
+
+
 def test_a_round_that_never_started_still_reports_never_ran() -> None:
     """The fix must not silence the case the notice exists for."""
     alerts = asyncio.run(_replay("never_started", retry_window=0))
@@ -243,3 +324,24 @@ def test_a_round_that_never_started_still_reports_never_ran() -> None:
     assert len(_matching(alerts, NEVER_RAN)) == 1
     assert not _matching(alerts, STARTED)
     assert not _matching(alerts, FINISHED)
+
+
+def test_the_round_record_does_not_survive_into_the_next_round() -> None:
+    """`clean_started` is a script-level variable. If HA rendered it once and
+    reused it, the day's *second* round would inherit "already started" from the
+    first -- and 未执行 would never fire again, silently losing the alarm this
+    release exists to make honest.
+
+    One Script object, two runs: a clean that completes, then a round that never
+    starts. The second must still announce 未执行.
+    """
+    alerts = asyncio.run(_replay_twice())
+
+    first, second = alerts
+    assert _matching(first, STARTED), "round one really ran"
+    assert _matching(first, FINISHED)
+    assert not _matching(first, NEVER_RAN), "round one did start"
+
+    assert _matching(second, NEVER_RAN), (
+        "the flag must reset per run; otherwise a real 'never ran' goes unreported")
+    assert not _matching(second, STARTED)

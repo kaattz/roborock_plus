@@ -275,6 +275,11 @@ variables:
     | int(5), 1] | max %} {% set rounds = ((window / interval) | round(0, ''ceil'')
     | int) + 1 %} {{ [rounds, 1] | max }}'
   deadline: '{{ as_timestamp(now()) + (retry_window | int(0)) * 60 }}'
+  # 本轮到底有没有真的开始过一次清扫。只在下发命令后确认 task_active 变 on 时才置真，
+  # 所以「命令被接受但从没动起来」仍然是 false，最后的「未执行」照发。
+  # 不能用 task_active 的当下值代替它：一次正常扫完，task_active 也是 off，
+  # 于是每一轮成功都会再收到一条「30 分钟内未能启动清扫」（2026-11-10 实测）。
+  clean_started: false
 triggers: !input my_trigger
 actions:
 - if:
@@ -357,6 +362,14 @@ actions:
           continue_on_timeout: true
         - if:
           - condition: template
+            value_template: '{{ is_state(task_active_entity, ''on'') }}'
+          then:
+          # 任务真的起来了，才记下「本轮扫过」。这一步必须在下发命令之后、
+          # 以 task_active 为证据：服务调用被接受只说明命令送到了，不代表机器人动了。
+          - variables:
+              clean_started: true
+        - if:
+          - condition: template
             value_template: >-
               {{ is_state(task_active_entity, 'on')
                  and notify_on_start and notify_script != '' }}
@@ -415,6 +428,17 @@ actions:
     timeout:
       hours: 8
     continue_on_timeout: true
+  # 任务结束不等于已经回基站。2026-11-10 15:09:21 task_active 变 off 时机器人还在
+  # returning，15:09:26 才 docked；只采一次就把这一轮正常结束报成了「异常结束」。
+  # 所以再给一小段时间等它真的靠上基站，然后才判定；等不到就照旧走异常分支。
+  - wait_template: >-
+      {{ is_state(vacuum_entity, 'docked')
+         or is_state(vacuum_entity, 'charging')
+         or is_state(vacuum_entity, 'unavailable')
+         or is_state(vacuum_entity, 'error') }}
+    timeout:
+      seconds: 120
+    continue_on_timeout: true
   - variables:
       clean_minutes: >-
         {{ ((as_timestamp(now()) - clean_started_at) / 60) | round(0) | int }}
@@ -463,7 +487,7 @@ actions:
               已运行约 {{ clean_minutes }} 分钟。可能被卡住或中途取消，请检查。
 - if:
   - condition: template
-    value_template: '{{ not is_state(task_active_entity, ''on'') }}'
+    value_template: '{{ not clean_started }}'
   then:
   - action: '{{ notify_script }}'
     data:

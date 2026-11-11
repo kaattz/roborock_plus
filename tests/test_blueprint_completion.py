@@ -93,7 +93,7 @@ def test_completion_waits_for_the_clean_to_end() -> None:
     """
     body = completion_block()["then"]
     waits = [step for step in body if isinstance(step, dict) and "wait_template" in step]
-    assert len(waits) == 1, "exactly one wait governs the completion notice"
+    assert waits, "the completion block waits for the task to end"
     wait = waits[0]
     assert "not is_state(task_active_entity, 'on')" in flat(wait["wait_template"]), (
         "it must wait for the task to stop, not sample it once")
@@ -101,6 +101,34 @@ def test_completion_waits_for_the_clean_to_end() -> None:
         "a clean can run for hours; a short timeout would announce a false"
         " 'still running'")
     assert wait.get("continue_on_timeout") is True
+
+
+def test_the_verdict_waits_for_the_robot_to_reach_the_dock() -> None:
+    """Measured 2026-11-10 15:09:21: `task_active` went off while `vacuum` was
+    still `returning`, and only at 15:09:26 did it read `docked`.
+
+    The verdict used to be a single sample taken in that gap, so a finished
+    clean was announced as "清扫异常结束". A second, bounded wait has to give
+    the robot the seconds it needs to reach the dock before the outcome is
+    decided -- while still ending in the failure branch when it never arrives.
+    """
+    body = completion_block()["then"]
+    waits = [step for step in body if isinstance(step, dict) and "wait_template" in step]
+    assert len(waits) >= 2, (
+        "after the task ends the block must wait for the robot to dock before "
+        "deciding the outcome")
+
+    settle = waits[1]
+    text = flat(settle["wait_template"])
+    assert "docked" in text and "charging" in text, (
+        "docking is what makes a clean a success")
+    timeout = settle["timeout"]
+    seconds = timeout.get("seconds", 0) if isinstance(timeout, dict) else 0
+    assert 10 <= seconds <= 300, (
+        "long enough to cover the measured 4-11 s gap, short enough that a robot "
+        f"that stopped in the room is still reported promptly; got {timeout}")
+    assert settle.get("continue_on_timeout") is True, (
+        "a timeout is 'it did not come home', which the else branch must still see")
 
 
 def test_the_four_outcomes_are_all_present() -> None:

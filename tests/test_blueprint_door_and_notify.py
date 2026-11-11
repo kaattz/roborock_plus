@@ -165,3 +165,24 @@ def test_the_final_failure_notice_mentions_a_shut_door():
     last = flat(actions[-1])
     assert "未执行" in last
     assert "门未开" in last
+
+
+# --- 未执行 must mean "never ran", not "not running right now" ---------------
+
+def test_the_never_ran_notice_is_gated_on_whether_this_round_started():
+    """Measured 2026-11-10: every completed clean was followed by 未执行.
+
+    The gate used to be `not is_state(task_active_entity, 'on')`, which is true
+    of *any* finished clean. The template should ask whether a clean was ever
+    dispatched in this run, and nothing else.
+
+    That the flag is only set once a task has actually been *confirmed* is
+    covered behaviourally: `tests/test_blueprint_replay.py` replays an accepted
+    command that never starts a task and still requires the notice.
+    """
+    last = load()["actions"][-1]
+    condition = flat(last["if"][0]["value_template"])
+    assert "clean_started" in condition, (
+        f"the notice must be gated on the round's own record; got {condition!r}")
+    assert "task_active_entity" not in condition, (
+        "reading task_active here is exactly the bug: it is off after every clean")

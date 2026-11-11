@@ -12,6 +12,15 @@ _TASK_ACTIVE_STATE_NAMES = {
     "paused",
     "spot_cleaning",
     "docking",
+    # `returning_home` is the outbound leg of the same drive home that `docking`
+    # covers the end of. Leaving it out made `task_active` fall off several
+    # seconds before the robot reached the dock -- measured 2026-11-10
+    # 15:09:21 (`task_active` off, still `returning`) -> 15:09:26 (`docked`),
+    # and the same 4 s and 11 s gaps on 2026-11-08. `in_returning` covers the
+    # usual case, but it is a separate reading and can clear first; a consumer
+    # that samples once in that window sees "task over, robot not home" and has
+    # no way to tell it apart from a robot that stopped in the room.
+    "returning_home",
     "going_to_target",
     "zoned_cleaning",
     "segment_cleaning",

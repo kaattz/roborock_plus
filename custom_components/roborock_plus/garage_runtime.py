@@ -403,7 +403,21 @@ class GarageRuntime:
         try:
             await self.controller.update_returning(pause=pause, resume=resume)
         except GarageControlError as err:
-            _LOGGER.info('Garage held on return for %s: %s', self.coordinator.duid, err.reason)
+            # Held, not swallowed. The robot is stopped in front of a door that is
+            # not confirmed open -- the safe outcome, and one a human has to
+            # resolve. Measured 2026-11-12: this branch logged at `info` and the
+            # loop carried on for 81 minutes. The robot sat `paused` outside a
+            # closed door; `garage_problem` read "off" because `last_error` had
+            # been dropped; no event fired; and the blueprint could not notice
+            # either, because it waits for the task to END and a paused robot's
+            # task never ends.
+            #
+            # So the hold is announced. `notify` deduplicates on the reason, so a
+            # loop that keeps retrying the same failure does not spam.
+            _LOGGER.warning(
+                'Garage held on return for %s: %s (the robot is stopped and waits '
+                'for a human)', self.coordinator.duid, err.reason)
+            self.notify(err.reason)
         self.publish()
         return True
 
@@ -574,8 +588,21 @@ class GarageRuntime:
             raise
         except GarageControlError as err:
             _LOGGER.info('Garage sequence for %s stopped: %s', self.coordinator.duid, err.reason)
+            # A sequence that dies must say so. Measured 2026-11-12: the return
+            # pause was confirmed, the door would not open, the robot was left
+            # paused in front of a closed door, and the only record anywhere was
+            # this log line -- no event, so `garage_problem` stayed "off" and the
+            # household found the robot by accident 81 minutes later.
+            #
+            # The blueprint's own completion notice could not help either: it
+            # waits for the task to end, and the task never ended because the
+            # robot was still paused.
+            self.notify(err.reason)
+            self.publish()
         except Exception:  # noqa: BLE001 - one bad sequence must not escape silently
             _LOGGER.exception('Garage sequence for %s failed', self.coordinator.duid)
+            self.notify('sequence_failed')
+            self.publish()
         finally:
             self.publish()
 

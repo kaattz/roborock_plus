@@ -1,5 +1,59 @@
 # 更新记录
 
+## v0.12.3 — 2026-11-12
+
+**机器人在门口停了 81 分钟，没有一个地方说得出话。**
+
+2026-11-12 下午次卧那一轮：15:06:44 扫完回基站，15:06:45 开门、15:06:46 暂停、
+15:07:31 恢复继续走。15:07:50 门磁读数不再是「全开」（门被停/被挡），15:07:53
+机器人第二次暂停，15:09:22 集成想重新开门——然后什么都没有。直到 16:29:14 用户
+手动按回基站，机器人才动。**站了 81 分钟。**
+
+安全行为是对的：门没确认全开，就不 resume，机器人停在原地等人。这是 AGENTS.md
+里写死的规矩，也是唯一不可接受的失败（撞门）的对立面。**错的是没人知道。**
+
+三个缺陷叠在一起，让这次「停在原地」变成「静默停在原地」：
+
+### 一、`open_door()` 把失败原因丢了
+
+`except GarageControlError: raise` —— 原样重新抛出，不写 `last_error`。于是
+`_wait_for` 抛出的 `open_not_confirmed` 消失，`last_error` 停在 `None`，
+而 `garage_problem` 的判据正是 `last_error or phase == 'blocked'`。
+**一次开门失败看起来像什么都没发生。**
+
+修法：`except GarageControlError as err:` 先把 `err.reason` 写进 `last_error` 再抛。
+
+### 二、失败后 `phase` 停在 `opening`
+
+`opening` 读起来像「正在开门」，不像「卡住了」。现场证据正是
+`phase=opening, reason=None, problem=off` —— 三个值一起指向「一切正常」。
+
+修法：回程开门失败时置 `phase = 'blocked'`，让 `garage_problem` 亮起。
+
+### 三、回程失败只写 info 日志
+
+`_handle_return` 的 `except GarageControlError` 记一条 `_LOGGER.info` 就继续
+循环；`notify()` 存在、事件也接好了，但**只有受控出库那条路径调过它**。所以
+`roborock_plus_garage_issue` 从不发出，「车库控制接管告警」自动化收不到任何东西。
+
+修法：`_handle_return` 与 `_finish_sequence` 失败时都 `notify(reason)`，日志升到
+warning。`notify` 按 reason 去重，循环每秒重试也只报一次。
+
+### 没有改的部分
+
+**不 resume。** 我第一版修复写成了「开门失败也 resume」，理由是「机器人停着没人管
+更糟」——那是错的，和 AGENTS.md「门没确认打开就不要 resume」直接冲突。门没开就
+把机器人放过去，等于让它朝一扇没开的门走。已撤销。
+
+机器人停在原地是正确结果。这个版本只让它**说出来**。
+
+### 验证
+
+- 全量 918 passed / 1 skipped
+- 新增 `tests/test_garage_return_open_failure.py` 4 个测试：不 resume、`phase=blocked`、
+  `last_error` 保留、事件只发一次
+- 变异验证：撤掉修复后 2 个测试变红，恢复后全绿
+
 ## v0.12.2 — 2026-11-11
 
 **一次卡住暴露了三个误报，全部是「状态快照回答不了过程」的同一个形状。**

@@ -351,7 +351,20 @@ class GarageController:
             self.task_in_progress = True
             self.phase = 'outside'
             self.last_error = None
-        except GarageControlError:
+        except GarageControlError as err:
+            # Keep the reason. Measured 2026-11-12: `_wait_for` raised
+            # `open_not_confirmed`, this branch re-raised it untouched, and the
+            # result was `phase='opening'`, `last_error=None` and
+            # `garage_problem='off'` -- an open failure that looked like nothing
+            # was wrong, while the robot sat paused in front of a closed door for
+            # 81 minutes.
+            #
+            # The robot is deliberately NOT resumed: the door is not confirmed
+            # open, and driving at it is the one failure this project will not
+            # accept. Stopping is inconvenient; a collision is damage. What it
+            # must do instead is say so, which is what a set `last_error` (and
+            # the event raised by the caller) is for.
+            self.last_error = err.reason
             raise
         except Exception as err:  # noqa: BLE001 - reported, never latched
             self.phase = 'blocked'
@@ -598,7 +611,21 @@ class GarageController:
             self.last_error = 'pause_not_observed'
             raise GarageControlError('pause_not_observed')
         self.phase = 'opening'
-        await self.open_door()
+        try:
+            await self.open_door()
+        except GarageControlError:
+            # The pause above was confirmed, so the robot is provably stopped --
+            # but the door is NOT confirmed open, so it is deliberately not
+            # resumed (see AGENTS.md: an unconfirmed door stops the sequence and
+            # raises a warning). What must not happen is the state this left on
+            # 2026-11-12: phase stayed `opening` with `last_error=None`, so
+            # `garage_problem` read "off" and nothing anywhere said the robot was
+            # stranded. `blocked` is the honest phase for "the door cannot be
+            # acted on", and it makes the problem sensor light up.
+            self.phase = 'blocked'
+            if self.last_error is None:
+                self.last_error = 'open_not_confirmed'
+            raise
         self.phase = 'resuming_return'
         await resume()
         # Deliberately not 'outside'. That value means "a clean is running beyond
